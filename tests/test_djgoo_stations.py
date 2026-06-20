@@ -30,6 +30,13 @@ class DjGooStationsTests(unittest.TestCase):
 
             self.assertEqual(station["name"], "Sandstorm radio")
 
+    def test_station_preserves_cleaned_original_seed_casing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            stations = DjGooStations(Path(temp_dir) / "stations.json")
+
+            self.assertEqual(stations.get_or_create("  deadmau5  ")["seed"], "deadmau5")
+            self.assertEqual(stations.get_or_create(" AC/DC ")["seed"], "AC/DC")
+
     def test_get_station_missing_does_not_create_storage(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "stations.json"
@@ -37,6 +44,14 @@ class DjGooStationsTests(unittest.TestCase):
 
             self.assertIsNone(stations.get_station("missing"))
             self.assertFalse(path.exists())
+
+    def test_malformed_json_reads_as_empty_store(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "stations.json"
+            path.write_text("{not-json", encoding="utf-8")
+            stations = DjGooStations(path)
+
+            self.assertIsNone(stations.get_station("missing"))
 
     def test_station_memories_are_isolated(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -116,6 +131,13 @@ class DjGooStationsTests(unittest.TestCase):
             station = stations.add_feedback("Sandstorm", "liked", {"title": "Song again", "uri": "u:song"})
 
             self.assertEqual(len(station["liked"]), 1)
+
+    def test_feedback_rejects_unknown_bucket_names(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            stations = DjGooStations(Path(temp_dir) / "stations.json")
+
+            with self.assertRaises(ValueError):
+                stations.add_feedback("Sandstorm", "favorite", {"title": "Song", "uri": "u:song"})
 
     def test_track_key_prefers_uri_and_falls_back_to_title(self):
         self.assertEqual(track_key({"title": "Song", "uri": "https://x"}), "uri:https://x")

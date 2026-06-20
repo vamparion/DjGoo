@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 
 RECENT_LIMIT = 50
+FEEDBACK_BUCKETS = {"liked", "banned", "more_like", "less_like", "skipped"}
 
 
 def normalize_station_seed(seed: str) -> str:
@@ -38,20 +39,25 @@ class DjGooStations:
 
     def _read(self) -> Dict[str, Any]:
         if not self.path.exists():
-            return {"active": {}, "stations": {}}
+            return self._empty_store()
         with self.path.open(encoding="utf-8") as fp:
-            data = json.load(fp)
+            try:
+                data = json.load(fp)
+            except json.JSONDecodeError:
+                return self._empty_store()
         if not isinstance(data, dict) or not isinstance(data.get("stations"), dict):
-            return {"active": {}, "stations": {}}
+            return self._empty_store()
         if not isinstance(data.get("active"), dict):
             data["active"] = {}
         return data
 
     def _write(self, data: Dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("w", encoding="utf-8") as fp:
+        temp_path = self.path.with_name(f"{self.path.name}.tmp")
+        with temp_path.open("w", encoding="utf-8") as fp:
             json.dump(data, fp, indent=2, ensure_ascii=True)
             fp.write("\n")
+        temp_path.replace(self.path)
 
     def get_or_create(self, seed: str) -> Dict[str, Any]:
         data = self._read()
@@ -63,7 +69,7 @@ class DjGooStations:
             station = {
                 "id": identifier,
                 "name": display_station_name(seed),
-                "seed": normalize_station_seed(seed).title(),
+                "seed": self._clean_seed(seed),
                 "created_at": now,
                 "updated_at": now,
                 "played": [],
@@ -98,6 +104,8 @@ class DjGooStations:
         return station if isinstance(station, dict) else None
 
     def add_feedback(self, seed: str, feedback_type: str, track: Dict[str, Any]) -> Dict[str, Any]:
+        if feedback_type not in FEEDBACK_BUCKETS:
+            raise ValueError(f"Unknown feedback bucket: {feedback_type}")
         station = self.get_or_create(seed)
         data = self._read()
         station = data["stations"][station["id"]]
@@ -151,3 +159,9 @@ class DjGooStations:
 
     def _now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
+
+    def _clean_seed(self, seed: str) -> str:
+        return re.sub(r"\s+", " ", seed.strip())
+
+    def _empty_store(self) -> Dict[str, Any]:
+        return {"active": {}, "stations": {}}
