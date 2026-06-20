@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import random
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -19,7 +20,7 @@ def station_id(seed: str) -> str:
 
 
 def display_station_name(seed: str) -> str:
-    cleaned = re.sub(r"\s+", " ", seed.strip())
+    cleaned = normalize_station_seed(seed).title()
     return f"{cleaned} radio"
 
 
@@ -27,7 +28,7 @@ def track_key(track: Dict[str, Any]) -> str:
     uri = str(track.get("uri", "")).strip()
     if uri:
         return f"uri:{uri}"
-    title = str(track.get("title", "")).strip().lower()
+    title = re.sub(r"\s+", " ", str(track.get("title", "")).strip().lower())
     return f"title:{title}"
 
 
@@ -37,12 +38,13 @@ class DjGooStations:
 
     def _read(self) -> Dict[str, Any]:
         if not self.path.exists():
-            return {"active": "", "stations": {}}
+            return {"active": {}, "stations": {}}
         with self.path.open(encoding="utf-8") as fp:
             data = json.load(fp)
         if not isinstance(data, dict) or not isinstance(data.get("stations"), dict):
-            return {"active": "", "stations": {}}
-        data.setdefault("active", "")
+            return {"active": {}, "stations": {}}
+        if not isinstance(data.get("active"), dict):
+            data["active"] = {}
         return data
 
     def _write(self, data: Dict[str, Any]) -> None:
@@ -57,13 +59,21 @@ class DjGooStations:
         identifier = station_id(seed)
         station = stations.get(identifier)
         if station is None:
+            now = self._now()
             station = {
                 "id": identifier,
-                "seed": re.sub(r"\s+", " ", seed.strip()),
                 "name": display_station_name(seed),
+                "seed": normalize_station_seed(seed).title(),
+                "created_at": now,
+                "updated_at": now,
+                "played": [],
+                "recent": [],
                 "liked": [],
                 "banned": [],
-                "recent": [],
+                "more_like": [],
+                "less_like": [],
+                "skipped": [],
+                "last_track": None,
             }
             stations[identifier] = station
             self._write(data)
@@ -72,16 +82,16 @@ class DjGooStations:
     def get_station(self, seed: str) -> Dict[str, Any]:
         return self.get_or_create(seed)
 
-    def set_active(self, seed: str) -> Dict[str, Any]:
+    def set_active(self, guild_id: int, seed: str) -> Dict[str, Any]:
         station = self.get_or_create(seed)
         data = self._read()
-        data["active"] = station["id"]
+        data["active"][str(guild_id)] = station["id"]
         self._write(data)
         return station
 
-    def get_active(self) -> Optional[Dict[str, Any]]:
+    def get_active(self, guild_id: int) -> Optional[Dict[str, Any]]:
         data = self._read()
-        active = str(data.get("active", ""))
+        active = str(data.get("active", {}).get(str(guild_id), ""))
         station = data["stations"].get(active)
         return station if isinstance(station, dict) else None
 
@@ -90,7 +100,10 @@ class DjGooStations:
         data = self._read()
         station = data["stations"][station["id"]]
         tracks = station.setdefault(feedback_type, [])
-        tracks.append(self._clean_track(track))
+        cleaned = self._clean_track(track)
+        if track_key(cleaned) not in {track_key(existing) for existing in tracks if isinstance(existing, dict)}:
+            tracks.append(cleaned)
+            station["updated_at"] = self._now()
         self._write(data)
         return station
 
@@ -98,9 +111,14 @@ class DjGooStations:
         station = self.get_or_create(seed)
         data = self._read()
         station = data["stations"][station["id"]]
+        cleaned = self._clean_track(track)
+        played = station.setdefault("played", [])
         recent = station.setdefault("recent", [])
-        recent.append(self._clean_track(track))
+        played.append(cleaned)
+        recent.append(cleaned)
         del recent[:-RECENT_LIMIT]
+        station["last_track"] = cleaned
+        station["updated_at"] = self._now()
         self._write(data)
         return station
 
@@ -128,3 +146,6 @@ class DjGooStations:
             "title": str(track.get("title", "")).strip(),
             "uri": str(track.get("uri", "")).strip(),
         }
+
+    def _now(self) -> str:
+        return datetime.now(timezone.utc).isoformat()
