@@ -58,6 +58,23 @@ class VoiceCommandParserTests(unittest.TestCase):
         self.assertEqual(play.intent, "shuffle_playlist")
         self.assertEqual(play.playlist, "80s")
 
+    def test_parses_radio_station_commands(self):
+        radio = parse_command("DjGoo radio Sandstorm")
+        self.assertEqual(radio.intent, "start_radio")
+        self.assertEqual(radio.query, "Sandstorm")
+
+        examples = {
+            "DjGoo like this": "station_like_current",
+            "DjGoo more like this": "station_more_like_current",
+            "DjGoo less like this": "station_less_like_current",
+            "DjGoo don't play this again": "station_ban_current",
+            "DjGoo do not play this again": "station_ban_current",
+            "DjGoo station status": "station_status",
+        }
+        for transcript, intent in examples.items():
+            with self.subTest(transcript=transcript):
+                self.assertEqual(parse_command(transcript).intent, intent)
+
     def test_parses_pending_choice_naturally(self):
         pending = PendingChoice(kind="search", options=["a", "b", "c", "d"], created_at=100.0)
 
