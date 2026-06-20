@@ -101,3 +101,32 @@ def build_voice_command_payload(item: Dict[str, Any]) -> Dict[str, Any]:
             }
         ],
     }
+
+
+def build_station_track_payload(
+    *,
+    station_name: str,
+    track: Dict[str, Any],
+    reason: str,
+) -> Dict[str, Any]:
+    title = str(track.get("title", "")).strip() or "Radio pick"
+    uri = str(track.get("uri", "")).strip()
+    description_lines = [
+        f"Station: **{station_name}**",
+        f"Why: {reason}",
+    ]
+    if uri:
+        description_lines.append(f"[Open track]({uri})")
+    return {
+        "username": "DjGoo",
+        "embeds": [
+            {
+                "title": title[:256],
+                "description": "\n".join(description_lines)[:4096],
+                "color": 0x9B51E0,
+                "footer": {
+                    "text": "DjGoo like this | more like this | less like this | don't play this again"
+                },
+            }
+        ],
+    }

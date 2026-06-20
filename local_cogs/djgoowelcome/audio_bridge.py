@@ -3,13 +3,16 @@ from __future__ import annotations
 import contextlib
 import random
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Optional
 
 import discord
 import lavalink
 from lavalink import NodeNotFound, PlayerNotFound
 
 from voice.djgoo_playlists import DjGooPlaylists
+from voice.djgoo_stations import DjGooStations
+
+from .helpers import build_station_track_payload
 
 
 class _NoopTyping:
@@ -91,6 +94,7 @@ class DjGooAudioBridge:
         self.bot = bot
         self.project_root = project_root
         self.playlists = DjGooPlaylists(project_root / "data" / "djgoo-playlists.json")
+        self.stations = DjGooStations(project_root / "data" / "djgoo-stations.json")
         self._send_payload = send_payload
 
     async def handle(self, item: Dict[str, Any]) -> str:
@@ -110,6 +114,32 @@ class DjGooAudioBridge:
 
         intent = str(item.get("intent", "unknown"))
         try:
+            if intent == "start_radio":
+                return await self._start_radio(audio, ctx, str(item.get("query", "")))
+            if intent == "station_like_current":
+                return await self._station_feedback(ctx, "liked", "Liked this for the active station.")
+            if intent == "station_more_like_current":
+                return await self._station_feedback(
+                    ctx,
+                    "more_like",
+                    "Steering this station closer to this song.",
+                )
+            if intent == "station_less_like_current":
+                return await self._station_feedback(
+                    ctx,
+                    "less_like",
+                    "Steering this station away from this song.",
+                )
+            if intent == "station_ban_current":
+                result = await self._station_feedback(
+                    ctx,
+                    "banned",
+                    "This song will not play again on this station.",
+                )
+                await self._invoke(audio.command_skip, ctx)
+                return result
+            if intent == "station_status":
+                return await self._station_status(ctx)
             if intent == "play":
                 query = str(item.get("query", "")).strip()
                 if not query:
@@ -124,6 +154,7 @@ class DjGooAudioBridge:
             if intent in {"save_current_to_playlist", "save_last_to_playlist"}:
                 return await self._save_track(ctx, str(item.get("playlist", "")), last=intent == "save_last_to_playlist")
             if intent == "skip":
+                await self._mark_station_skip(ctx)
                 await self._invoke(audio.command_skip, ctx)
                 return "Skipped"
             if intent in {"pause", "resume"}:
@@ -230,6 +261,42 @@ class DjGooAudioBridge:
         await self._notice(f"Queued {len(tracks)} track(s) from `{playlist_name}`.")
         return f"Queued playlist {playlist_name}"
 
+    async def _start_radio(self, audio, ctx, seed: str) -> str:
+        seed = seed.strip()
+        if not seed:
+            await self._notice("Tell me what to seed the station with, like `DjGoo radio Sandstorm`.")
+            return "Missing radio seed"
+        station = self.stations.set_active(ctx.guild.id, seed)
+        await self._invoke(audio.command_play, ctx, query=seed)
+        await self._notice(f"Started `{station['name']}`. I will keep this station's taste separate.")
+        return f"Started {station['name']}"
+
+    async def _station_feedback(self, ctx, bucket: str, message: str) -> str:
+        station = self.stations.get_active(ctx.guild.id)
+        if station is None:
+            await self._notice("No active radio station yet. Start one with `DjGoo radio <song>`.")
+            return "No active station"
+        track = self._selected_track(ctx.guild.id, last=False)
+        if track is None:
+            await self._notice("I could not read the current track.")
+            return "No current track"
+        self.stations.add_feedback(station["seed"], bucket, self._track_data(track))
+        await self._notice(message)
+        return message
+
+    async def _station_status(self, ctx) -> str:
+        station = self.stations.get_active(ctx.guild.id)
+        if station is None:
+            await self._notice("No active radio station yet.")
+            return "No active station"
+        await self._notice(
+            f"`{station['name']}`\n"
+            f"Played: `{len(station['played'])}` | "
+            f"Liked: `{len(station['liked'])}` | "
+            f"Banned: `{len(station['banned'])}`"
+        )
+        return "Station status"
+
     async def _save_track(self, ctx, playlist_name: str, *, last: bool) -> str:
         track = self._selected_track(ctx.guild.id, last=last)
         if track is None:
@@ -274,6 +341,58 @@ class DjGooAudioBridge:
     async def _relative_volume(self, audio, ctx, delta: int) -> None:
         current = await audio.config.guild(ctx.guild).volume()
         await self._invoke(audio.command_volume, ctx, vol=max(0, min(150, int(current) + delta)))
+
+    async def _mark_station_skip(self, ctx) -> None:
+        station = self.stations.get_active(ctx.guild.id)
+        if station is None:
+            return
+        track = self._selected_track(ctx.guild.id, last=False)
+        if track is not None:
+            self.stations.add_feedback(station["seed"], "skipped", self._track_data(track))
+
+    async def handle_station_track_start(self, guild, track) -> None:
+        station = self.stations.get_active(guild.id)
+        if station is None:
+            return
+        data = self._track_data(track)
+        self.stations.mark_played(station["seed"], data)
+        await self._send_payload(
+            build_station_track_payload(
+                station_name=station["name"],
+                track=data,
+                reason=self._station_reason(station),
+            )
+        )
+        await self._top_up_station_queue(guild.id)
+
+    def _station_reason(self, station: Dict[str, Any]) -> str:
+        if station.get("liked"):
+            return "Because you liked tracks on this station"
+        if station.get("more_like"):
+            return "Steered by more-like-this"
+        return "Fresh similar pick"
+
+    async def _top_up_station_queue(self, guild_id: int) -> None:
+        station = self.stations.get_active(guild_id)
+        if station is None:
+            return
+        audio = self.bot.get_cog("Audio")
+        ctx = self._context()
+        if audio is None or ctx is None:
+            return
+        try:
+            player = lavalink.get_player(guild_id)
+        except (NodeNotFound, PlayerNotFound):
+            return
+        if len(player.queue) >= 2:
+            return
+        seeds = [station["seed"]]
+        if station.get("liked"):
+            seeds.append(station["liked"][-1]["title"])
+        if station.get("more_like"):
+            seeds.append(station["more_like"][-1]["title"])
+        query = f"{random.choice(seeds)} similar music"
+        await self._invoke(audio.command_play, ctx, query=query)
 
     async def _send_queue_summary(self, ctx) -> None:
         try:

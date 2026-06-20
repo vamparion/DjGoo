@@ -30,7 +30,7 @@
 - Create: `voice/djgoo_stations.py`
 - Test: `tests/test_djgoo_stations.py`
 
-- [ ] **Step 1: Write failing station store tests**
+- [x] **Step 1: Write failing station store tests**
 
 Create `tests/test_djgoo_stations.py`:
 
@@ -89,7 +89,7 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run:
 
@@ -100,7 +100,7 @@ $env:PYTHONPATH='C:\Users\VERA\Documents\DiscordBot'
 
 Expected: fails with `ModuleNotFoundError: No module named 'voice.djgoo_stations'`.
 
-- [ ] **Step 3: Implement station store**
+- [x] **Step 3: Implement station store**
 
 Create `voice/djgoo_stations.py` with:
 
@@ -252,7 +252,7 @@ class DjGooStations:
         return eligible[0]
 ```
 
-- [ ] **Step 4: Run station tests**
+- [x] **Step 4: Run station tests**
 
 Run:
 
@@ -263,7 +263,7 @@ $env:PYTHONPATH='C:\Users\VERA\Documents\DiscordBot'
 
 Expected: `Ran 4 tests ... OK`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add voice/djgoo_stations.py tests/test_djgoo_stations.py
@@ -278,7 +278,7 @@ git commit -m "feat: add DjGoo station store"
 - Modify: `voice/command_parser.py`
 - Modify: `tests/test_voice_command_parser.py`
 
-- [ ] **Step 1: Write failing parser tests**
+- [x] **Step 1: Write failing parser tests**
 
 Add to `VoiceCommandParserTests` in `tests/test_voice_command_parser.py`:
 
@@ -301,7 +301,7 @@ Add to `VoiceCommandParserTests` in `tests/test_voice_command_parser.py`:
                 self.assertEqual(parse_command(transcript).intent, intent)
 ```
 
-- [ ] **Step 2: Run parser tests to verify failure**
+- [x] **Step 2: Run parser tests to verify failure**
 
 Run:
 
@@ -312,7 +312,7 @@ $env:PYTHONPATH='C:\Users\VERA\Documents\DiscordBot'
 
 Expected: fails because `radio` and station curation commands parse as `unknown` or existing unrelated intents.
 
-- [ ] **Step 3: Implement parser intents**
+- [x] **Step 3: Implement parser intents**
 
 Modify `voice/command_parser.py` inside `parse_command` after `lowered = command.lower()` and before playlist handling:
 
@@ -334,7 +334,7 @@ Add these entries near the start of `phrase_intents`:
 
 Place `more like this` and `less like this` before `like this` so they do not get swallowed by the shorter phrase.
 
-- [ ] **Step 4: Run parser tests**
+- [x] **Step 4: Run parser tests**
 
 Run:
 
@@ -345,7 +345,7 @@ $env:PYTHONPATH='C:\Users\VERA\Documents\DiscordBot'
 
 Expected: parser tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add voice/command_parser.py tests/test_voice_command_parser.py
@@ -360,7 +360,7 @@ git commit -m "feat: parse DjGoo radio commands"
 - Modify: `local_cogs/djgoowelcome/helpers.py`
 - Modify: `tests/test_djgoowelcome_helpers.py`
 
-- [ ] **Step 1: Write failing overlay test**
+- [x] **Step 1: Write failing overlay test**
 
 Add to `DjGooWelcomeHelperTests`:
 
@@ -383,7 +383,7 @@ Add to `DjGooWelcomeHelperTests`:
         self.assertIn("like this", embed["footer"]["text"])
 ```
 
-- [ ] **Step 2: Run helper tests to verify failure**
+- [x] **Step 2: Run helper tests to verify failure**
 
 Run:
 
@@ -393,7 +393,7 @@ Run:
 
 Expected: fails with `AttributeError: module 'djgoowelcome_helpers' has no attribute 'build_station_track_payload'`.
 
-- [ ] **Step 3: Implement station overlay builder**
+- [x] **Step 3: Implement station overlay builder**
 
 Add to `local_cogs/djgoowelcome/helpers.py`:
 
@@ -427,7 +427,7 @@ def build_station_track_payload(
     }
 ```
 
-- [ ] **Step 4: Run helper tests**
+- [x] **Step 4: Run helper tests**
 
 Run:
 
@@ -437,7 +437,7 @@ Run:
 
 Expected: helper tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add local_cogs/djgoowelcome/helpers.py tests/test_djgoowelcome_helpers.py
@@ -453,7 +453,7 @@ git commit -m "feat: add station track overlay"
 - Modify: `local_cogs/djgoowelcome/djgoowelcome.py` only if imports need updating.
 - Test manually through queue because Red/Lavalink runtime objects are hard to unit test safely.
 
-- [ ] **Step 1: Add imports and station store**
+- [x] **Step 1: Add imports and station store**
 
 Modify imports in `local_cogs/djgoowelcome/audio_bridge.py`:
 
@@ -468,7 +468,7 @@ In `DjGooAudioBridge.__init__`, add:
         self.stations = DjGooStations(project_root / "data" / "djgoo-stations.json")
 ```
 
-- [ ] **Step 2: Add radio intent branches**
+- [x] **Step 2: Add radio intent branches**
 
 Inside `handle`, before the `play` branch, add:
 
@@ -489,7 +489,7 @@ Inside `handle`, before the `play` branch, add:
                 return await self._station_status(ctx)
 ```
 
-- [ ] **Step 3: Add radio helper methods**
+- [x] **Step 3: Add radio helper methods**
 
 Add methods to `DjGooAudioBridge`:
 
@@ -531,7 +531,7 @@ Add methods to `DjGooAudioBridge`:
         return "Station status"
 ```
 
-- [ ] **Step 4: Add lightweight station marking to existing play/skip flow**
+- [x] **Step 4: Add lightweight station marking to existing play/skip flow**
 
 In the existing `skip` branch, before invoking skip, add:
 
@@ -592,7 +592,7 @@ if (Test-Path 'C:\Users\VERA\Documents\DiscordBot\data\voice-command-queue.jsonl
 
 Expected: `QUEUE_DRAINED`. If no one is in voice, Discord overlay should say to join voice; if someone is in voice, Red should attempt to play `Sandstorm` and `data/djgoo-stations.json` should contain `Sandstorm radio`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add local_cogs/djgoowelcome/audio_bridge.py local_cogs/djgoowelcome/djgoowelcome.py
@@ -607,7 +607,7 @@ git commit -m "feat: wire radio station commands"
 - Modify: `local_cogs/djgoowelcome/djgoowelcome.py`
 - Modify: `local_cogs/djgoowelcome/audio_bridge.py`
 
-- [ ] **Step 1: Add event listener for track starts**
+- [x] **Step 1: Add event listener for track starts**
 
 In `local_cogs/djgoowelcome/djgoowelcome.py`, add:
 
@@ -617,7 +617,7 @@ In `local_cogs/djgoowelcome/djgoowelcome.py`, add:
         await self._audio_bridge.handle_station_track_start(player, track)
 ```
 
-- [ ] **Step 2: Add bridge method to mark played and post station card**
+- [x] **Step 2: Add bridge method to mark played and post station card**
 
 Add to `DjGooAudioBridge`:
 
@@ -644,7 +644,7 @@ Add to `DjGooAudioBridge`:
         return "Fresh similar pick"
 ```
 
-- [ ] **Step 3: Add simple top-up after track start**
+- [x] **Step 3: Add simple top-up after track start**
 
 At the end of `handle_station_track_start`, after the overlay call, add:
 
@@ -690,7 +690,7 @@ Select-String -Path 'C:\Users\VERA\Documents\DiscordBot\data\discordbot\core\log
 
 Expected: no matching current errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add local_cogs/djgoowelcome/audio_bridge.py local_cogs/djgoowelcome/djgoowelcome.py
@@ -704,7 +704,7 @@ git commit -m "feat: add station track overlay and queue top-up"
 **Files:**
 - Modify: `README.md`
 
-- [ ] **Step 1: Document radio commands**
+- [x] **Step 1: Document radio commands**
 
 Add to `README.md`:
 
@@ -740,7 +740,7 @@ data\djgoo-stations.json
 Radio overlays are visual-only Discord embeds.
 ```
 
-- [ ] **Step 2: Run all tests**
+- [x] **Step 2: Run all tests**
 
 Run:
 

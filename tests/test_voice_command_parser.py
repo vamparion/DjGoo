@@ -58,6 +58,36 @@ class VoiceCommandParserTests(unittest.TestCase):
         self.assertEqual(play.intent, "shuffle_playlist")
         self.assertEqual(play.playlist, "80s")
 
+    def test_parses_radio_station_commands(self):
+        radio = parse_command("DjGoo radio Sandstorm")
+        self.assertEqual(radio.intent, "start_radio")
+        self.assertEqual(radio.query, "Sandstorm")
+
+        examples = {
+            "DjGoo like this": "station_like_current",
+            "DjGoo more like this": "station_more_like_current",
+            "DjGoo less like this": "station_less_like_current",
+            "DjGoo don't play this again": "station_ban_current",
+            "DjGoo do not play this again": "station_ban_current",
+            "DjGoo station status": "station_status",
+            "DjGoo radio status": "station_status",
+        }
+        for transcript, intent in examples.items():
+            with self.subTest(transcript=transcript):
+                self.assertEqual(parse_command(transcript).intent, intent)
+
+    def test_negative_like_phrases_do_not_parse_as_likes(self):
+        for transcript in (
+            "DjGoo I don't like this",
+            "DjGoo don't like this",
+            "DjGoo I do not like this",
+            "DjGoo do not like this",
+        ):
+            with self.subTest(transcript=transcript):
+                parsed = parse_command(transcript)
+                self.assertEqual(parsed.intent, "unknown")
+                self.assertNotEqual(parsed.intent, "station_like_current")
+
     def test_parses_pending_choice_naturally(self):
         pending = PendingChoice(kind="search", options=["a", "b", "c", "d"], created_at=100.0)
 

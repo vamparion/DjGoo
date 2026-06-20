@@ -118,3 +118,7 @@ class DjGooWelcome(commands.Cog):
 
         payload = build_welcome_payload(member.display_name, channel.name)
         await self._send_webhook_payload(payload)
+
+    @commands.Cog.listener()
+    async def on_red_audio_track_start(self, guild, track, requester):
+        await self._audio_bridge.handle_station_track_start(guild, track)
