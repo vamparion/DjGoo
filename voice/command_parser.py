@@ -71,6 +71,9 @@ def parse_command(transcript: str) -> ParsedCommand:
 
     lowered = command.lower()
 
+    if lowered in ("radio status", "station status"):
+        return ParsedCommand(intent="station_status", raw=raw)
+
     if lowered.startswith("radio "):
         query = _normalize(command[len("radio ") :])
         return ParsedCommand(intent="start_radio", query=query, confidence=0.95, raw=raw)
@@ -105,6 +108,7 @@ def parse_command(transcript: str) -> ParsedCommand:
         (("don't play this again", "do not play this again", "ban this", "never play this"), "station_ban_current"),
         (("more like this",), "station_more_like_current"),
         (("less like this",), "station_less_like_current"),
+        (("i don't like this", "don't like this"), "unknown"),
         (("like this", "i like this"), "station_like_current"),
         (("station status", "radio status"), "station_status"),
         (("skip", "next"), "skip"),
