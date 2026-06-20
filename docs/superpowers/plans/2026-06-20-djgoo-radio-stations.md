@@ -453,7 +453,7 @@ git commit -m "feat: add station track overlay"
 - Modify: `local_cogs/djgoowelcome/djgoowelcome.py` only if imports need updating.
 - Test manually through queue because Red/Lavalink runtime objects are hard to unit test safely.
 
-- [ ] **Step 1: Add imports and station store**
+- [x] **Step 1: Add imports and station store**
 
 Modify imports in `local_cogs/djgoowelcome/audio_bridge.py`:
 
@@ -468,7 +468,7 @@ In `DjGooAudioBridge.__init__`, add:
         self.stations = DjGooStations(project_root / "data" / "djgoo-stations.json")
 ```
 
-- [ ] **Step 2: Add radio intent branches**
+- [x] **Step 2: Add radio intent branches**
 
 Inside `handle`, before the `play` branch, add:
 
@@ -489,7 +489,7 @@ Inside `handle`, before the `play` branch, add:
                 return await self._station_status(ctx)
 ```
 
-- [ ] **Step 3: Add radio helper methods**
+- [x] **Step 3: Add radio helper methods**
 
 Add methods to `DjGooAudioBridge`:
 
@@ -531,7 +531,7 @@ Add methods to `DjGooAudioBridge`:
         return "Station status"
 ```
 
-- [ ] **Step 4: Add lightweight station marking to existing play/skip flow**
+- [x] **Step 4: Add lightweight station marking to existing play/skip flow**
 
 In the existing `skip` branch, before invoking skip, add:
 
@@ -592,7 +592,7 @@ if (Test-Path 'C:\Users\VERA\Documents\DiscordBot\data\voice-command-queue.jsonl
 
 Expected: `QUEUE_DRAINED`. If no one is in voice, Discord overlay should say to join voice; if someone is in voice, Red should attempt to play `Sandstorm` and `data/djgoo-stations.json` should contain `Sandstorm radio`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add local_cogs/djgoowelcome/audio_bridge.py local_cogs/djgoowelcome/djgoowelcome.py
