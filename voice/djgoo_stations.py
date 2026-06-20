@@ -1,0 +1,130 @@
+from __future__ import annotations
+
+import json
+import random
+import re
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+
+RECENT_LIMIT = 50
+
+
+def normalize_station_seed(seed: str) -> str:
+    return re.sub(r"\s+", " ", seed.strip().lower())[:64]
+
+
+def station_id(seed: str) -> str:
+    return normalize_station_seed(seed)
+
+
+def display_station_name(seed: str) -> str:
+    cleaned = re.sub(r"\s+", " ", seed.strip())
+    return f"{cleaned} radio"
+
+
+def track_key(track: Dict[str, Any]) -> str:
+    uri = str(track.get("uri", "")).strip()
+    if uri:
+        return f"uri:{uri}"
+    title = str(track.get("title", "")).strip().lower()
+    return f"title:{title}"
+
+
+class DjGooStations:
+    def __init__(self, path: Path):
+        self.path = path
+
+    def _read(self) -> Dict[str, Any]:
+        if not self.path.exists():
+            return {"active": "", "stations": {}}
+        with self.path.open(encoding="utf-8") as fp:
+            data = json.load(fp)
+        if not isinstance(data, dict) or not isinstance(data.get("stations"), dict):
+            return {"active": "", "stations": {}}
+        data.setdefault("active", "")
+        return data
+
+    def _write(self, data: Dict[str, Any]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("w", encoding="utf-8") as fp:
+            json.dump(data, fp, indent=2, ensure_ascii=True)
+            fp.write("\n")
+
+    def get_or_create(self, seed: str) -> Dict[str, Any]:
+        data = self._read()
+        stations = data["stations"]
+        identifier = station_id(seed)
+        station = stations.get(identifier)
+        if station is None:
+            station = {
+                "id": identifier,
+                "seed": re.sub(r"\s+", " ", seed.strip()),
+                "name": display_station_name(seed),
+                "liked": [],
+                "banned": [],
+                "recent": [],
+            }
+            stations[identifier] = station
+            self._write(data)
+        return station
+
+    def get_station(self, seed: str) -> Dict[str, Any]:
+        return self.get_or_create(seed)
+
+    def set_active(self, seed: str) -> Dict[str, Any]:
+        station = self.get_or_create(seed)
+        data = self._read()
+        data["active"] = station["id"]
+        self._write(data)
+        return station
+
+    def get_active(self) -> Optional[Dict[str, Any]]:
+        data = self._read()
+        active = str(data.get("active", ""))
+        station = data["stations"].get(active)
+        return station if isinstance(station, dict) else None
+
+    def add_feedback(self, seed: str, feedback_type: str, track: Dict[str, Any]) -> Dict[str, Any]:
+        station = self.get_or_create(seed)
+        data = self._read()
+        station = data["stations"][station["id"]]
+        tracks = station.setdefault(feedback_type, [])
+        tracks.append(self._clean_track(track))
+        self._write(data)
+        return station
+
+    def mark_played(self, seed: str, track: Dict[str, Any]) -> Dict[str, Any]:
+        station = self.get_or_create(seed)
+        data = self._read()
+        station = data["stations"][station["id"]]
+        recent = station.setdefault("recent", [])
+        recent.append(self._clean_track(track))
+        del recent[:-RECENT_LIMIT]
+        self._write(data)
+        return station
+
+    def pick_candidate(
+        self,
+        seed: str,
+        candidates: List[Dict[str, Any]],
+        rng_seed: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        station = self.get_or_create(seed)
+        banned = {track_key(track) for track in station.get("banned", []) if isinstance(track, dict)}
+        recent = {track_key(track) for track in station.get("recent", []) if isinstance(track, dict)}
+        available = [
+            track
+            for track in candidates
+            if isinstance(track, dict) and track_key(track) not in banned and track_key(track) not in recent
+        ]
+        if not available:
+            return None
+        rng = random.Random(rng_seed)
+        return rng.choice(available)
+
+    def _clean_track(self, track: Dict[str, Any]) -> Dict[str, str]:
+        return {
+            "title": str(track.get("title", "")).strip(),
+            "uri": str(track.get("uri", "")).strip(),
+        }
