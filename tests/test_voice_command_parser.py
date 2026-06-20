@@ -1,0 +1,79 @@
+import unittest
+
+from voice.command_parser import (
+    PendingChoice,
+    parse_command,
+    parse_followup,
+)
+
+
+class VoiceCommandParserTests(unittest.TestCase):
+    def test_ignores_speech_without_wake_phrase(self):
+        parsed = parse_command("play sandstorm")
+
+        self.assertEqual(parsed.intent, "ignore")
+        self.assertEqual(parsed.confidence, 0.0)
+
+    def test_parses_play_command_after_djgoo_wake_phrase(self):
+        for wake_phrase in ["DjGoo", "DJ Goo", "DJ", "Dj", "DeeJay", "dee jay", "D J"]:
+            with self.subTest(wake_phrase=wake_phrase):
+                parsed = parse_command(f"{wake_phrase} play Sandstorm")
+
+                self.assertEqual(parsed.intent, "play")
+                self.assertEqual(parsed.query, "Sandstorm")
+                self.assertGreaterEqual(parsed.confidence, 0.9)
+
+    def test_does_not_wake_on_casual_mentions_of_dj(self):
+        parsed = parse_command("that DJ was great play sandstorm")
+
+        self.assertEqual(parsed.intent, "ignore")
+
+    def test_parses_fast_music_controls(self):
+        examples = {
+            "DJ Goo skip this": "skip",
+            "djgoo pause": "pause",
+            "DjGoo resume music": "resume",
+            "DjGoo stop": "stop",
+            "DjGoo what is playing": "now",
+            "DjGoo clear queue": "clear_queue",
+            "DjGoo replay this": "replay",
+        }
+
+        for transcript, intent in examples.items():
+            with self.subTest(transcript=transcript):
+                self.assertEqual(parse_command(transcript).intent, intent)
+
+    def test_parses_volume_and_relative_volume(self):
+        self.assertEqual(parse_command("DjGoo volume 40").intent, "volume")
+        self.assertEqual(parse_command("DjGoo volume 40").value, 40)
+        self.assertEqual(parse_command("DjGoo louder").intent, "volume_up")
+        self.assertEqual(parse_command("DjGoo quieter").intent, "volume_down")
+
+    def test_parses_playlist_save_and_play(self):
+        save = parse_command("DjGoo save the last song to white girl music")
+        play = parse_command("DjGoo shuffle 80s")
+
+        self.assertEqual(save.intent, "save_last_to_playlist")
+        self.assertEqual(save.playlist, "white girl music")
+        self.assertEqual(play.intent, "shuffle_playlist")
+        self.assertEqual(play.playlist, "80s")
+
+    def test_parses_pending_choice_naturally(self):
+        pending = PendingChoice(kind="search", options=["a", "b", "c", "d"], created_at=100.0)
+
+        for transcript in ["number 2", "pick two", "second one", "play option 2", "that second one"]:
+            with self.subTest(transcript=transcript):
+                followup = parse_followup(transcript, pending, now=110.0)
+                self.assertEqual(followup.action, "choose")
+                self.assertEqual(followup.index, 1)
+
+    def test_parses_neither_cancel_and_expiration(self):
+        pending = PendingChoice(kind="search", options=["a", "b"], created_at=100.0)
+
+        self.assertEqual(parse_followup("neither", pending, now=110.0).action, "neither")
+        self.assertEqual(parse_followup("never mind", pending, now=110.0).action, "cancel")
+        self.assertEqual(parse_followup("number 1", pending, now=116.0).action, "expired")
+
+
+if __name__ == "__main__":
+    unittest.main()
