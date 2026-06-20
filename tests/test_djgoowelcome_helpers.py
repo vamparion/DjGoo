@@ -129,6 +129,23 @@ class DjGooWelcomeHelperTests(unittest.TestCase):
         self.assertIn("DjGoo play Sandstorm", description)
         self.assertNotIn("listening", description.lower())
 
+    def test_build_station_track_payload_is_visual_only_and_glanceable(self):
+        helpers = load_helpers()
+
+        payload = helpers.build_station_track_payload(
+            station_name="Sandstorm radio",
+            track={"title": "Kernkraft 400", "uri": "https://example.test/kernkraft"},
+            reason="Fresh similar pick",
+        )
+
+        self.assertEqual(payload["username"], "DjGoo")
+        self.assertNotIn("content", payload)
+        embed = payload["embeds"][0]
+        self.assertIn("Kernkraft 400", embed["title"])
+        self.assertIn("Sandstorm radio", embed["description"])
+        self.assertIn("Fresh similar pick", embed["description"])
+        self.assertIn("like this", embed["footer"]["text"])
+
 
 if __name__ == "__main__":
     unittest.main()
