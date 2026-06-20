@@ -12,7 +12,7 @@ RECENT_LIMIT = 50
 
 
 def normalize_station_seed(seed: str) -> str:
-    return re.sub(r"\s+", " ", seed.strip().lower())[:64]
+    return re.sub(r"\s+", " ", seed.strip().lower())
 
 
 def station_id(seed: str) -> str:
@@ -79,8 +79,10 @@ class DjGooStations:
             self._write(data)
         return station
 
-    def get_station(self, seed: str) -> Dict[str, Any]:
-        return self.get_or_create(seed)
+    def get_station(self, seed: str) -> Optional[Dict[str, Any]]:
+        data = self._read()
+        station = data["stations"].get(station_id(seed))
+        return station if isinstance(station, dict) else None
 
     def set_active(self, guild_id: int, seed: str) -> Dict[str, Any]:
         station = self.get_or_create(seed)

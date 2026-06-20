@@ -18,12 +18,25 @@ class DjGooStationsTests(unittest.TestCase):
             self.assertEqual(resumed["id"], station["id"])
             self.assertEqual(resumed["seed"], "Sandstorm")
 
+    def test_normalize_station_seed_does_not_truncate_long_seeds(self):
+        seed = "A" * 65
+
+        self.assertEqual(normalize_station_seed(seed), "a" * 65)
+
     def test_lowercase_seed_creates_title_cased_station_name(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             stations = DjGooStations(Path(temp_dir) / "stations.json")
             station = stations.get_or_create("sandstorm")
 
             self.assertEqual(station["name"], "Sandstorm radio")
+
+    def test_get_station_missing_does_not_create_storage(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "stations.json"
+            stations = DjGooStations(path)
+
+            self.assertIsNone(stations.get_station("missing"))
+            self.assertFalse(path.exists())
 
     def test_station_memories_are_isolated(self):
         with tempfile.TemporaryDirectory() as temp_dir:
