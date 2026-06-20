@@ -360,7 +360,7 @@ git commit -m "feat: parse DjGoo radio commands"
 - Modify: `local_cogs/djgoowelcome/helpers.py`
 - Modify: `tests/test_djgoowelcome_helpers.py`
 
-- [ ] **Step 1: Write failing overlay test**
+- [x] **Step 1: Write failing overlay test**
 
 Add to `DjGooWelcomeHelperTests`:
 
@@ -383,7 +383,7 @@ Add to `DjGooWelcomeHelperTests`:
         self.assertIn("like this", embed["footer"]["text"])
 ```
 
-- [ ] **Step 2: Run helper tests to verify failure**
+- [x] **Step 2: Run helper tests to verify failure**
 
 Run:
 
@@ -393,7 +393,7 @@ Run:
 
 Expected: fails with `AttributeError: module 'djgoowelcome_helpers' has no attribute 'build_station_track_payload'`.
 
-- [ ] **Step 3: Implement station overlay builder**
+- [x] **Step 3: Implement station overlay builder**
 
 Add to `local_cogs/djgoowelcome/helpers.py`:
 
@@ -427,7 +427,7 @@ def build_station_track_payload(
     }
 ```
 
-- [ ] **Step 4: Run helper tests**
+- [x] **Step 4: Run helper tests**
 
 Run:
 
@@ -437,7 +437,7 @@ Run:
 
 Expected: helper tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add local_cogs/djgoowelcome/helpers.py tests/test_djgoowelcome_helpers.py
