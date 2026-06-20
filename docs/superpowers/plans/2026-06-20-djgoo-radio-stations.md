@@ -278,7 +278,7 @@ git commit -m "feat: add DjGoo station store"
 - Modify: `voice/command_parser.py`
 - Modify: `tests/test_voice_command_parser.py`
 
-- [ ] **Step 1: Write failing parser tests**
+- [x] **Step 1: Write failing parser tests**
 
 Add to `VoiceCommandParserTests` in `tests/test_voice_command_parser.py`:
 
@@ -301,7 +301,7 @@ Add to `VoiceCommandParserTests` in `tests/test_voice_command_parser.py`:
                 self.assertEqual(parse_command(transcript).intent, intent)
 ```
 
-- [ ] **Step 2: Run parser tests to verify failure**
+- [x] **Step 2: Run parser tests to verify failure**
 
 Run:
 
@@ -312,7 +312,7 @@ $env:PYTHONPATH='C:\Users\VERA\Documents\DiscordBot'
 
 Expected: fails because `radio` and station curation commands parse as `unknown` or existing unrelated intents.
 
-- [ ] **Step 3: Implement parser intents**
+- [x] **Step 3: Implement parser intents**
 
 Modify `voice/command_parser.py` inside `parse_command` after `lowered = command.lower()` and before playlist handling:
 
@@ -334,7 +334,7 @@ Add these entries near the start of `phrase_intents`:
 
 Place `more like this` and `less like this` before `like this` so they do not get swallowed by the shorter phrase.
 
-- [ ] **Step 4: Run parser tests**
+- [x] **Step 4: Run parser tests**
 
 Run:
 
@@ -345,7 +345,7 @@ $env:PYTHONPATH='C:\Users\VERA\Documents\DiscordBot'
 
 Expected: parser tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add voice/command_parser.py tests/test_voice_command_parser.py
