@@ -108,7 +108,10 @@ def parse_command(transcript: str) -> ParsedCommand:
         (("don't play this again", "do not play this again", "ban this", "never play this"), "station_ban_current"),
         (("more like this",), "station_more_like_current"),
         (("less like this",), "station_less_like_current"),
-        (("i don't like this", "don't like this"), "unknown"),
+        (
+            ("i don't like this", "don't like this", "i do not like this", "do not like this"),
+            "unknown",
+        ),
         (("like this", "i like this"), "station_like_current"),
         (("station status", "radio status"), "station_status"),
         (("skip", "next"), "skip"),
