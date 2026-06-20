@@ -30,7 +30,7 @@
 - Create: `voice/djgoo_stations.py`
 - Test: `tests/test_djgoo_stations.py`
 
-- [ ] **Step 1: Write failing station store tests**
+- [x] **Step 1: Write failing station store tests**
 
 Create `tests/test_djgoo_stations.py`:
 
@@ -89,7 +89,7 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run:
 
@@ -100,7 +100,7 @@ $env:PYTHONPATH='C:\Users\VERA\Documents\DiscordBot'
 
 Expected: fails with `ModuleNotFoundError: No module named 'voice.djgoo_stations'`.
 
-- [ ] **Step 3: Implement station store**
+- [x] **Step 3: Implement station store**
 
 Create `voice/djgoo_stations.py` with:
 
@@ -252,7 +252,7 @@ class DjGooStations:
         return eligible[0]
 ```
 
-- [ ] **Step 4: Run station tests**
+- [x] **Step 4: Run station tests**
 
 Run:
 
@@ -263,7 +263,7 @@ $env:PYTHONPATH='C:\Users\VERA\Documents\DiscordBot'
 
 Expected: `Ran 4 tests ... OK`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add voice/djgoo_stations.py tests/test_djgoo_stations.py
