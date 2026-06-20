@@ -12,6 +12,8 @@ from lavalink import NodeNotFound, PlayerNotFound
 from voice.djgoo_playlists import DjGooPlaylists
 from voice.djgoo_stations import DjGooStations
 
+from .helpers import build_station_track_payload
+
 
 class _NoopTyping:
     async def __aenter__(self):
@@ -347,6 +349,50 @@ class DjGooAudioBridge:
         track = self._selected_track(ctx.guild.id, last=False)
         if track is not None:
             self.stations.add_feedback(station["seed"], "skipped", self._track_data(track))
+
+    async def handle_station_track_start(self, guild, track) -> None:
+        station = self.stations.get_active(guild.id)
+        if station is None:
+            return
+        data = self._track_data(track)
+        self.stations.mark_played(station["seed"], data)
+        await self._send_payload(
+            build_station_track_payload(
+                station_name=station["name"],
+                track=data,
+                reason=self._station_reason(station),
+            )
+        )
+        await self._top_up_station_queue(guild.id)
+
+    def _station_reason(self, station: Dict[str, Any]) -> str:
+        if station.get("liked"):
+            return "Because you liked tracks on this station"
+        if station.get("more_like"):
+            return "Steered by more-like-this"
+        return "Fresh similar pick"
+
+    async def _top_up_station_queue(self, guild_id: int) -> None:
+        station = self.stations.get_active(guild_id)
+        if station is None:
+            return
+        audio = self.bot.get_cog("Audio")
+        ctx = self._context()
+        if audio is None or ctx is None:
+            return
+        try:
+            player = lavalink.get_player(guild_id)
+        except (NodeNotFound, PlayerNotFound):
+            return
+        if len(player.queue) >= 2:
+            return
+        seeds = [station["seed"]]
+        if station.get("liked"):
+            seeds.append(station["liked"][-1]["title"])
+        if station.get("more_like"):
+            seeds.append(station["more_like"][-1]["title"])
+        query = f"{random.choice(seeds)} similar music"
+        await self._invoke(audio.command_play, ctx, query=query)
 
     async def _send_queue_summary(self, ctx) -> None:
         try:
