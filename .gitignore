@@ -4,5 +4,6 @@ data/
 .localappdata/
 .venv/
 .voice-venv/
+.worktrees/
 __pycache__/
 *.pyc
