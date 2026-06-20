@@ -80,4 +80,34 @@ logs\voice-listener.log
 
 The listener uses the default Windows microphone and only reacts to commands with `DjGoo` or `DJ Goo`.
 
-The current voice listener milestone posts what it understood to the Discord webhook overlay. Music actions will be wired in a later pass after the listener proves reliable while playing.
+The voice listener writes local commands into DjGoo's command queue. The Red cog reads that queue and runs the supported Audio actions.
+
+## Radio Stations
+
+Playlists and stations are separate.
+
+Start or resume a station:
+
+```text
+DjGoo radio Sandstorm
+```
+
+This creates or resumes `Sandstorm radio`.
+
+Curate the active station:
+
+```text
+DjGoo like this
+DjGoo more like this
+DjGoo less like this
+DjGoo don't play this again
+DjGoo station status
+```
+
+Station memory is stored in:
+
+```text
+data\djgoo-stations.json
+```
+
+Radio overlays are visual-only Discord embeds.

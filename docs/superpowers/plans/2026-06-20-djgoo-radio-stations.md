@@ -704,7 +704,7 @@ git commit -m "feat: add station track overlay and queue top-up"
 **Files:**
 - Modify: `README.md`
 
-- [ ] **Step 1: Document radio commands**
+- [x] **Step 1: Document radio commands**
 
 Add to `README.md`:
 
@@ -740,7 +740,7 @@ data\djgoo-stations.json
 Radio overlays are visual-only Discord embeds.
 ```
 
-- [ ] **Step 2: Run all tests**
+- [x] **Step 2: Run all tests**
 
 Run:
 
