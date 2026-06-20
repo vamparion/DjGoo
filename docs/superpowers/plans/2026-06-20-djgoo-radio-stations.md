@@ -607,7 +607,7 @@ git commit -m "feat: wire radio station commands"
 - Modify: `local_cogs/djgoowelcome/djgoowelcome.py`
 - Modify: `local_cogs/djgoowelcome/audio_bridge.py`
 
-- [ ] **Step 1: Add event listener for track starts**
+- [x] **Step 1: Add event listener for track starts**
 
 In `local_cogs/djgoowelcome/djgoowelcome.py`, add:
 
@@ -617,7 +617,7 @@ In `local_cogs/djgoowelcome/djgoowelcome.py`, add:
         await self._audio_bridge.handle_station_track_start(player, track)
 ```
 
-- [ ] **Step 2: Add bridge method to mark played and post station card**
+- [x] **Step 2: Add bridge method to mark played and post station card**
 
 Add to `DjGooAudioBridge`:
 
@@ -644,7 +644,7 @@ Add to `DjGooAudioBridge`:
         return "Fresh similar pick"
 ```
 
-- [ ] **Step 3: Add simple top-up after track start**
+- [x] **Step 3: Add simple top-up after track start**
 
 At the end of `handle_station_track_start`, after the overlay call, add:
 
@@ -690,7 +690,7 @@ Select-String -Path 'C:\Users\VERA\Documents\DiscordBot\data\discordbot\core\log
 
 Expected: no matching current errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add local_cogs/djgoowelcome/audio_bridge.py local_cogs/djgoowelcome/djgoowelcome.py
