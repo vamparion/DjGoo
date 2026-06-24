@@ -124,7 +124,13 @@ class DjGooWelcome(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
-        if getattr(message.author, "bot", False) or message.guild is None:
+        if message.guild is None:
+            return
+        if message.author == self.bot.user:
+            if self._is_red_track_enqueue_message(message):
+                await self._audio_bridge.handle_red_track_enqueue_message(message)
+            return
+        if getattr(message.author, "bot", False):
             return
 
         command_text = parse_djgoo_chat_command(message.content)
@@ -168,3 +174,9 @@ class DjGooWelcome(commands.Cog):
     @commands.Cog.listener()
     async def on_red_audio_track_enqueue(self, guild, track, requester):
         await self._audio_bridge.handle_track_enqueue(guild, track)
+
+    def _is_red_track_enqueue_message(self, message) -> bool:
+        for embed in getattr(message, "embeds", []):
+            if (getattr(embed, "title", "") or "").strip().lower() == "track enqueued":
+                return True
+        return False

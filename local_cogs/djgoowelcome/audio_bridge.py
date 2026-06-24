@@ -424,22 +424,32 @@ class DjGooAudioBridge:
         log.info("DjGoo saw track enqueue in guild %s: %s", guild.id, getattr(track, "title", track))
         await self._send_playback_controls(guild, track)
 
-    async def _send_controls_for_player(self, ctx: DjGooAudioContext) -> None:
-        try:
-            player = lavalink.get_player(ctx.guild.id)
-        except (NodeNotFound, PlayerNotFound):
-            log.warning("DjGoo could not find a player after play command in guild %s.", ctx.guild.id)
+    async def handle_red_track_enqueue_message(self, message) -> None:
+        track = self._track_from_player_for_controls(message.guild.id)
+        if track is None:
+            log.warning("DjGoo saw Track Enqueued in #%s but could not find a current or queued track.", message.channel)
             return
-        track = player.current
-        if player.queue:
-            track = player.queue[0]
+        log.info("DjGoo saw visible Track Enqueued message in #%s.", message.channel)
+        await self._send_playback_controls(message.guild, track, preferred_channel=message.channel, force=True)
+
+    async def _send_controls_for_player(self, ctx: DjGooAudioContext) -> None:
+        track = self._track_from_player_for_controls(ctx.guild.id)
         if track is None:
             log.warning("DjGoo found no current or queued track after play command in guild %s.", ctx.guild.id)
             return
         await self._send_playback_controls(ctx.guild, track, preferred_channel=ctx.channel)
 
-    async def _send_playback_controls(self, guild, track, *, preferred_channel=None) -> None:
-        if not self._should_post_playback_controls(guild.id, track):
+    def _track_from_player_for_controls(self, guild_id: int):
+        try:
+            player = lavalink.get_player(guild_id)
+        except (NodeNotFound, PlayerNotFound):
+            return None
+        if player.queue:
+            return player.queue[0]
+        return player.current
+
+    async def _send_playback_controls(self, guild, track, *, preferred_channel=None, force: bool = False) -> None:
+        if not force and not self._should_post_playback_controls(guild.id, track):
             return
         channel = preferred_channel or self._best_text_channel(guild)
         if channel is None:
