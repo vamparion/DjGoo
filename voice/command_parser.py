@@ -65,9 +65,11 @@ def _clean_playlist_name(text: str) -> str:
     return _normalize(text).lower()
 
 
-def parse_command(transcript: str) -> ParsedCommand:
+def parse_command(transcript: str, *, require_wake: bool = True) -> ParsedCommand:
     raw = _normalize(transcript)
-    command = _after_wake(raw)
+    command = _after_wake(raw) if require_wake else _normalize(raw)
+    if not require_wake:
+        command = re.sub(r"^[\s\W_]+|[\s\W_]+$", "", command)
     if not command:
         return ParsedCommand(intent="ignore", confidence=0.0, raw=raw)
 

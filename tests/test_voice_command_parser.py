@@ -14,6 +14,20 @@ class VoiceCommandParserTests(unittest.TestCase):
         self.assertEqual(parsed.intent, "ignore")
         self.assertEqual(parsed.confidence, 0.0)
 
+    def test_push_to_talk_mode_does_not_require_wake_phrase(self):
+        examples = {
+            "play Sandstorm": ("play", "Sandstorm"),
+            "skip": ("skip", ""),
+            "radio Sandstorm": ("start_radio", "Sandstorm"),
+        }
+
+        for transcript, expected in examples.items():
+            with self.subTest(transcript=transcript):
+                parsed = parse_command(transcript, require_wake=False)
+
+                self.assertEqual(parsed.intent, expected[0])
+                self.assertEqual(parsed.query, expected[1])
+
     def test_parses_play_command_after_djgoo_wake_phrase(self):
         for wake_phrase in ["DjGoo", "DJ Goo", "DJ Koo", "DJ Goon", "DJ", "Dj", "DeeJay", "dee jay", "D J"]:
             with self.subTest(wake_phrase=wake_phrase):

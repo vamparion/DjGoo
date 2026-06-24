@@ -78,7 +78,19 @@ The first run may download the local Whisper model. Voice logs go to:
 logs\voice-listener.log
 ```
 
-The listener uses the default Windows microphone and only reacts to commands with `DjGoo` or `DJ Goo`.
+The listener uses the default Windows microphone. Hold `F12`, speak a short command, then release it:
+
+```text
+play Sandstorm
+skip
+pause
+resume
+radio Sandstorm
+like this
+don't play this again
+```
+
+Because `F12` is push-to-talk, you do not need to say `DjGoo` first. Saying `DjGoo play Sandstorm` still works if you do it out of habit.
 
 The voice listener writes local commands into DjGoo's command queue. The Red cog reads that queue and runs the supported Audio actions.
 
