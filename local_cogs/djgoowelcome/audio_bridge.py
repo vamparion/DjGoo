@@ -14,7 +14,12 @@ from lavalink import NodeNotFound, PlayerNotFound
 from voice.djgoo_playlists import DjGooPlaylists
 from voice.djgoo_stations import DjGooStations
 
-from .helpers import PLAYBACK_CONTROL_BUTTONS, build_playback_control_embed, build_station_track_payload
+from .helpers import (
+    PLAYBACK_CONTROL_BUTTONS,
+    build_playback_control_embed,
+    build_station_track_payload,
+    load_secrets,
+)
 
 
 log = logging.getLogger("red.djgoowelcome.audio_bridge")
@@ -264,19 +269,51 @@ class DjGooAudioBridge:
                     return guild, members[0]
         return None, None
 
+    def _active_voice_channel(self, guild):
+        for channel in getattr(guild, "voice_channels", []):
+            members = [member for member in channel.members if not member.bot]
+            if members:
+                return channel
+        return None
+
+    def _can_send_to(self, guild, channel) -> bool:
+        if channel is None:
+            return False
+        with contextlib.suppress(Exception):
+            perms = channel.permissions_for(guild.me)
+            return bool(perms.view_channel and perms.send_messages)
+        return False
+
+    def _configured_controls_channel(self, guild):
+        secrets = load_secrets(self.project_root / "config" / "secrets.json")
+        channel_id = str(secrets.get("voice", {}).get("controls_channel_id", "")).strip()
+        if not channel_id:
+            return None
+        with contextlib.suppress(Exception):
+            return guild.get_channel_or_thread(int(channel_id))
+        return None
+
     def _best_text_channel(self, guild):
+        configured_channel = self._configured_controls_channel(guild)
+        if self._can_send_to(guild, configured_channel):
+            return configured_channel
+        active_voice_channel = self._active_voice_channel(guild)
+        if self._can_send_to(guild, active_voice_channel):
+            return active_voice_channel
         with contextlib.suppress(Exception):
             player = lavalink.get_player(guild.id)
+            player_channel = getattr(player, "channel", None)
+            if self._can_send_to(guild, player_channel):
+                return player_channel
             notify_channel_id = player.fetch("notify_channel")
             if notify_channel_id:
                 channel = guild.get_channel(int(notify_channel_id))
-                if channel is not None:
+                if self._can_send_to(guild, channel):
                     return channel
-        if guild.system_channel is not None:
+        if self._can_send_to(guild, guild.system_channel):
             return guild.system_channel
         for channel in guild.text_channels:
-            perms = channel.permissions_for(guild.me)
-            if perms.send_messages:
+            if self._can_send_to(guild, channel):
                 return channel
         return None
 
