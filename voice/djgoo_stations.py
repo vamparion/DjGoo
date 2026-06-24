@@ -103,6 +103,16 @@ class DjGooStations:
         station = data["stations"].get(active)
         return station if isinstance(station, dict) else None
 
+    def clear_active(self, guild_id: int) -> None:
+        data = self._read()
+        data["active"].pop(str(guild_id), None)
+        self._write(data)
+
+    def clear_all_active(self) -> None:
+        data = self._read()
+        data["active"] = {}
+        self._write(data)
+
     def add_feedback(self, seed: str, feedback_type: str, track: Dict[str, Any]) -> Dict[str, Any]:
         if feedback_type not in FEEDBACK_BUCKETS:
             raise ValueError(f"Unknown feedback bucket: {feedback_type}")

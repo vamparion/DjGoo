@@ -99,6 +99,9 @@ class VoiceCommandParserTests(unittest.TestCase):
             "DjGoo do not play this again": "station_ban_current",
             "DjGoo station status": "station_status",
             "DjGoo radio status": "station_status",
+            "DjGoo stop radio": "stop_radio",
+            "DjGoo radio off": "stop_radio",
+            "DjGoo end radio": "stop_radio",
         }
         for transcript, intent in examples.items():
             with self.subTest(transcript=transcript):

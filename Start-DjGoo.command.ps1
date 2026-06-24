@@ -23,7 +23,11 @@ function Show-StatusMessage {
 $alreadyRunning = Get-CimInstance Win32_Process | Where-Object {
     ($_.Name -in @("redbot.exe", "python.exe", "java.exe", "powershell.exe")) -and
     ($_.ProcessId -ne $PID) -and
-    ($_.CommandLine -like "*Documents\DiscordBot*" -or $_.CommandLine -like "*data\discordbot\cogs\Audio\Lavalink.jar*")
+    (
+        $_.CommandLine -like "*redbot.exe*discordbot*" -or
+        $_.CommandLine -like "*start-djgoo.ps1*" -or
+        $_.CommandLine -like "*data\discordbot\cogs\Audio\Lavalink.jar*"
+    )
 }
 
 if ($alreadyRunning) {

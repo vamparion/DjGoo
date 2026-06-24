@@ -146,6 +146,7 @@ class DjGooWelcome(commands.Cog):
             "station_less_like_current",
             "station_ban_current",
             "station_status",
+            "stop_radio",
             "save_current_to_playlist",
             "save_last_to_playlist",
             "play_playlist",

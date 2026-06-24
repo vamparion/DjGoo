@@ -91,6 +91,34 @@ class DjGooStationsTests(unittest.TestCase):
             self.assertNotEqual(stations.get_active(10)["id"], stations.get_active(20)["id"])
             self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["active"]["10"], "sandstorm")
 
+    def test_clear_active_station_only_removes_requested_guild(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "stations.json"
+            stations = DjGooStations(path)
+            stations.set_active(10, "Sandstorm")
+            other_station = stations.set_active(20, "Chill")
+
+            stations.clear_active(10)
+
+            self.assertIsNone(stations.get_active(10))
+            self.assertEqual(stations.get_active(20)["id"], other_station["id"])
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["active"], {"20": "chill"})
+
+    def test_clear_all_active_stations_keeps_station_memories(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "stations.json"
+            stations = DjGooStations(path)
+            stations.set_active(10, "Sandstorm")
+            stations.set_active(20, "Chill")
+            stations.add_feedback("Sandstorm", "liked", {"title": "A", "uri": "u:a"})
+
+            stations.clear_all_active()
+
+            self.assertIsNone(stations.get_active(10))
+            self.assertIsNone(stations.get_active(20))
+            self.assertEqual(stations.get_station("Sandstorm")["liked"][0]["title"], "A")
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["active"], {})
+
     def test_station_contains_planned_storage_fields(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             stations = DjGooStations(Path(temp_dir) / "stations.json")

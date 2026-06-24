@@ -2,7 +2,12 @@ $ErrorActionPreference = "Stop"
 
 $targets = Get-CimInstance Win32_Process | Where-Object {
     ($_.Name -in @("redbot.exe", "python.exe", "java.exe", "powershell.exe")) -and
-    ($_.CommandLine -like "*Documents\DiscordBot*" -or $_.CommandLine -like "*data\discordbot\cogs\Audio\Lavalink.jar*")
+    (
+        $_.CommandLine -like "*redbot.exe*discordbot*" -or
+        $_.CommandLine -like "*start-djgoo.ps1*" -or
+        $_.CommandLine -like "*voice.djgoo_voice_listener*" -or
+        $_.CommandLine -like "*data\discordbot\cogs\Audio\Lavalink.jar*"
+    )
 }
 
 foreach ($proc in ($targets | Where-Object { $_.ProcessId -ne $PID } | Sort-Object ProcessId -Descending)) {

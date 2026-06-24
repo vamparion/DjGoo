@@ -78,8 +78,13 @@ def parse_command(transcript: str, *, require_wake: bool = True) -> ParsedComman
     if lowered in ("radio status", "station status"):
         return ParsedCommand(intent="station_status", raw=raw)
 
+    if lowered in ("stop radio", "radio off", "end radio", "turn off radio", "quit radio"):
+        return ParsedCommand(intent="stop_radio", raw=raw)
+
     if lowered.startswith("radio "):
         query = _normalize(command[len("radio ") :])
+        if query.lower() in ("off", "stop", "end"):
+            return ParsedCommand(intent="stop_radio", raw=raw)
         return ParsedCommand(intent="start_radio", query=query, confidence=0.95, raw=raw)
 
     if lowered.startswith("play playlist "):
@@ -119,6 +124,7 @@ def parse_command(transcript: str, *, require_wake: bool = True) -> ParsedComman
         ),
         (("like this", "i like this"), "station_like_current"),
         (("station status", "radio status"), "station_status"),
+        (("stop radio", "radio off", "end radio", "turn off radio", "quit radio"), "stop_radio"),
         (("skip", "next"), "skip"),
         (("pause",), "pause"),
         (("resume", "unpause"), "resume"),

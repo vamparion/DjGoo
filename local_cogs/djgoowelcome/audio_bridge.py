@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import asyncio
 import logging
 import random
 import time
@@ -136,6 +137,7 @@ class DjGooAudioBridge:
         self.project_root = project_root
         self.playlists = DjGooPlaylists(project_root / "data" / "djgoo-playlists.json")
         self.stations = DjGooStations(project_root / "data" / "djgoo-stations.json")
+        self.stations.clear_all_active()
         self._send_payload = send_payload
         self._recent_control_posts: Dict[int, tuple[str, float]] = {}
 
@@ -182,12 +184,19 @@ class DjGooAudioBridge:
                 return result
             if intent == "station_status":
                 return await self._station_status(ctx)
+            if intent == "stop_radio":
+                return await self._stop_radio(audio, ctx)
             if intent == "play":
                 query = str(item.get("query", "")).strip()
                 if not query:
                     await self._notice("I need a song name or URL.")
                     return "Missing query"
-                await self._invoke(audio.command_play, ctx, query=query)
+                if not await self._play_query_when_ready(audio, ctx, query):
+                    await self._notice(
+                        "DjGoo is still warming up the music engine. I did not start playback yet, "
+                        "so try that command again in a few seconds if nothing starts."
+                    )
+                    return "Playback startup failed"
                 await self._send_controls_for_player(ctx)
                 return f"Playing {query}"
             if intent == "play_playlist":
@@ -344,10 +353,53 @@ class DjGooAudioBridge:
         if not seed:
             await self._notice("Tell me what to seed the station with, like `DjGoo radio Sandstorm`.")
             return "Missing radio seed"
+        if not await self._play_query_when_ready(audio, ctx, seed):
+            await self._notice(
+                "DjGoo is still warming up the music engine. I did not start the radio station yet, "
+                "so it will not pretend music is playing."
+            )
+            return "Radio startup failed"
         station = self.stations.set_active(ctx.guild.id, seed)
-        await self._invoke(audio.command_play, ctx, query=seed)
         await self._notice(f"Started `{station['name']}`. I will keep this station's taste separate.")
+        await self._send_controls_for_player(ctx)
         return f"Started {station['name']}"
+
+    async def _play_query_when_ready(self, audio, ctx, query: str) -> bool:
+        if not self._lavalink_node_ready(ctx.guild.id):
+            await self._notice("DjGoo is warming up the music engine. I will start this as soon as it is ready.")
+        if not await self._wait_for_lavalink_node(ctx.guild.id):
+            log.warning("Lavalink was not ready after waiting for guild %s.", ctx.guild.id)
+            return False
+        await self._invoke(audio.command_play, ctx, query=query)
+        return await self._wait_for_track_after_play(ctx.guild.id)
+
+    async def _wait_for_lavalink_node(self, guild_id: int, *, timeout: float = 35.0) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self._lavalink_node_ready(guild_id):
+                return True
+            await asyncio.sleep(1)
+        return self._lavalink_node_ready(guild_id)
+
+    def _lavalink_node_ready(self, guild_id: int) -> bool:
+        try:
+            lavalink.get_player(guild_id)
+        except PlayerNotFound:
+            return True
+        except NodeNotFound:
+            return False
+        except Exception:
+            log.debug("Could not check Lavalink readiness for guild %s.", guild_id, exc_info=True)
+            return False
+        return True
+
+    async def _wait_for_track_after_play(self, guild_id: int, *, timeout: float = 10.0) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self._track_from_player_for_controls(guild_id) is not None:
+                return True
+            await asyncio.sleep(0.5)
+        return self._track_from_player_for_controls(guild_id) is not None
 
     async def _station_feedback(self, ctx, bucket: str, message: str) -> str:
         station = self.stations.get_active(ctx.guild.id)
@@ -374,6 +426,16 @@ class DjGooAudioBridge:
             f"Banned: `{len(station['banned'])}`"
         )
         return "Station status"
+
+    async def _stop_radio(self, audio, ctx) -> str:
+        station = self.stations.get_active(ctx.guild.id)
+        self.stations.clear_active(ctx.guild.id)
+        await self._invoke(audio.command_stop, ctx)
+        if station is None:
+            await self._notice("Radio mode is already off.")
+            return "Radio already off"
+        await self._notice(f"Stopped `{station['name']}`. DjGoo will not keep topping up that station.")
+        return f"Stopped {station['name']}"
 
     async def _save_track(self, ctx, playlist_name: str, *, last: bool) -> str:
         track = self._selected_track(ctx.guild.id, last=last)
@@ -467,7 +529,7 @@ class DjGooAudioBridge:
             log.warning("DjGoo saw Track Enqueued in #%s but could not find a current or queued track.", message.channel)
             return
         log.info("DjGoo saw visible Track Enqueued message in #%s.", message.channel)
-        await self._send_playback_controls(message.guild, track, preferred_channel=message.channel, force=True)
+        await self._send_playback_controls(message.guild, track, preferred_channel=message.channel)
 
     async def _send_controls_for_player(self, ctx: DjGooAudioContext) -> None:
         track = self._track_from_player_for_controls(ctx.guild.id)
