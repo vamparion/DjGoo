@@ -129,6 +129,51 @@ class DjGooWelcomeHelperTests(unittest.TestCase):
         self.assertIn("DjGoo play Sandstorm", description)
         self.assertNotIn("listening", description.lower())
 
+    def test_parse_djgoo_chat_command_translates_wake_phrase_to_red_command(self):
+        helpers = load_helpers()
+
+        examples = {
+            "DjGoo play Sandstorm": "play Sandstorm",
+            "DjGoo, skip": "skip",
+            "DJ stop": "stop",
+            "DeeJay queue": "queue",
+            "hey DjGoo volume 50": "volume 50",
+        }
+
+        for content, command in examples.items():
+            with self.subTest(content=content):
+                self.assertEqual(helpers.parse_djgoo_chat_command(content), command)
+
+    def test_parse_djgoo_chat_command_ignores_casual_messages(self):
+        helpers = load_helpers()
+
+        self.assertIsNone(helpers.parse_djgoo_chat_command("that DJ was great"))
+        self.assertIsNone(helpers.parse_djgoo_chat_command("play Sandstorm"))
+
+    def test_playback_control_labels_are_available_for_button_views(self):
+        helpers = load_helpers()
+
+        labels = [button["label"] for button in helpers.PLAYBACK_CONTROL_BUTTONS]
+
+        self.assertIn("Skip", labels)
+        self.assertIn("Pause", labels)
+        self.assertIn("Stop", labels)
+        self.assertIn("Like", labels)
+        self.assertIn("Ban", labels)
+
+    def test_build_playback_control_embed_mentions_buttons_without_audio_noise(self):
+        helpers = load_helpers()
+
+        embed = helpers.build_playback_control_embed(
+            {"title": "Darude - Sandstorm", "uri": "https://example.test/sandstorm"},
+            station_name="Sandstorm radio",
+        )
+
+        self.assertIn("Darude - Sandstorm", embed["title"])
+        self.assertIn("Sandstorm radio", embed["description"])
+        self.assertIn("buttons", embed["footer"]["text"].lower())
+        self.assertNotIn("listen", embed["description"].lower())
+
     def test_build_station_track_payload_is_visual_only_and_glanceable(self):
         helpers = load_helpers()
 

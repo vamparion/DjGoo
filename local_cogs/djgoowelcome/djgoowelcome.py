@@ -15,6 +15,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from voice.command_parser import parse_command
+from voice.command_queue import command_to_queue_item
 from voice.command_queue import drain_queue
 
 from .audio_bridge import DjGooAudioBridge
@@ -22,6 +24,7 @@ from .helpers import (
     build_voice_command_payload,
     build_welcome_payload,
     load_secrets,
+    parse_djgoo_chat_command,
     should_send_welcome,
 )
 
@@ -120,5 +123,43 @@ class DjGooWelcome(commands.Cog):
         await self._send_webhook_payload(payload)
 
     @commands.Cog.listener()
+    async def on_message(self, message):
+        if getattr(message.author, "bot", False) or message.guild is None:
+            return
+
+        command_text = parse_djgoo_chat_command(message.content)
+        if not command_text:
+            return
+
+        parsed = parse_command(message.content)
+        bridge_intents = {
+            "start_radio",
+            "station_like_current",
+            "station_more_like_current",
+            "station_less_like_current",
+            "station_ban_current",
+            "station_status",
+            "save_current_to_playlist",
+            "save_last_to_playlist",
+            "play_playlist",
+            "shuffle_playlist",
+            "volume_up",
+            "volume_down",
+            "remove_current",
+        }
+        if parsed.intent in bridge_intents:
+            await self._audio_bridge.handle(
+                command_to_queue_item(parsed, transcript=message.content, source="chat")
+            )
+            return
+
+        original_content = message.content
+        message.content = f"!{command_text}"
+        try:
+            await self.bot.process_commands(message)
+        finally:
+            message.content = original_content
+
+    @commands.Cog.listener()
     async def on_red_audio_track_start(self, guild, track, requester):
-        await self._audio_bridge.handle_station_track_start(guild, track)
+        await self._audio_bridge.handle_track_start(guild, track)

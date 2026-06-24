@@ -12,7 +12,7 @@ from lavalink import NodeNotFound, PlayerNotFound
 from voice.djgoo_playlists import DjGooPlaylists
 from voice.djgoo_stations import DjGooStations
 
-from .helpers import build_station_track_payload
+from .helpers import PLAYBACK_CONTROL_BUTTONS, build_playback_control_embed, build_station_track_payload
 
 
 class _NoopTyping:
@@ -87,6 +87,34 @@ class DjGooAudioContext:
             return await callback(self, *args, **kwargs)
         cog = self.bot.get_cog("Audio")
         return await callback(cog, self, *args, **kwargs)
+
+
+class PlaybackControlsView(discord.ui.View):
+    def __init__(self, bridge: "DjGooAudioBridge", guild_id: int):
+        super().__init__(timeout=1800)
+        self.bridge = bridge
+        self.guild_id = guild_id
+        for button in PLAYBACK_CONTROL_BUTTONS:
+            self.add_item(_PlaybackControlButton(button))
+
+
+class _PlaybackControlButton(discord.ui.Button):
+    def __init__(self, config: Dict[str, str]):
+        style_name = config.get("style", "secondary")
+        style = {
+            "primary": discord.ButtonStyle.primary,
+            "secondary": discord.ButtonStyle.secondary,
+            "success": discord.ButtonStyle.success,
+            "danger": discord.ButtonStyle.danger,
+        }.get(style_name, discord.ButtonStyle.secondary)
+        super().__init__(label=config["label"], style=style)
+        self.intent = config["intent"]
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        if not isinstance(view, PlaybackControlsView):
+            return
+        await view.bridge.handle_button_interaction(interaction, self.intent)
 
 
 class DjGooAudioBridge:
@@ -207,6 +235,9 @@ class DjGooAudioBridge:
         channel = self._best_text_channel(guild)
         if channel is None:
             return None
+        return self._context_for(guild, author, channel)
+
+    def _context_for(self, guild, author, channel) -> DjGooAudioContext:
         return DjGooAudioContext(
             bot=self.bot,
             guild=guild,
@@ -364,6 +395,78 @@ class DjGooAudioBridge:
             )
         )
         await self._top_up_station_queue(guild.id)
+
+    async def handle_track_start(self, guild, track) -> None:
+        await self._send_playback_controls(guild, track)
+        await self.handle_station_track_start(guild, track)
+
+    async def _send_playback_controls(self, guild, track) -> None:
+        channel = self._best_text_channel(guild)
+        if channel is None:
+            return
+        permissions = channel.permissions_for(guild.me)
+        if not permissions.send_messages:
+            return
+        data = self._track_data(track)
+        station = self.stations.get_active(guild.id)
+        embed = discord.Embed.from_dict(
+            build_playback_control_embed(
+                data,
+                station_name=station["name"] if station else None,
+            )
+        )
+        view = PlaybackControlsView(self, guild.id)
+        with contextlib.suppress(discord.HTTPException, discord.Forbidden):
+            await channel.send(embed=embed, view=view)
+
+    async def handle_button_interaction(self, interaction: discord.Interaction, intent: str) -> None:
+        if interaction.guild is None or interaction.channel is None or interaction.user is None:
+            return
+        await interaction.response.defer(ephemeral=True)
+        ctx = self._context_for(interaction.guild, interaction.user, interaction.channel)
+        audio = self.bot.get_cog("Audio")
+        if audio is None:
+            await interaction.followup.send("Audio is not loaded yet.", ephemeral=True)
+            return
+        item = {"type": "command", "intent": intent, "raw": f"button:{intent}", "source": "button"}
+        try:
+            if intent == "skip":
+                await self._mark_station_skip(ctx)
+                await self._invoke(audio.command_skip, ctx)
+                message = "Skipped."
+            elif intent == "pause":
+                await self._pause_or_resume(audio, ctx, want_pause=True)
+                message = "Paused."
+            elif intent == "stop":
+                await self._invoke(audio.command_stop, ctx)
+                message = "Stopped."
+            elif intent == "station_like_current":
+                message = await self._station_feedback(ctx, "liked", "Liked this for the active station.")
+            elif intent == "station_more_like_current":
+                message = await self._station_feedback(
+                    ctx,
+                    "more_like",
+                    "Steering this station closer to this song.",
+                )
+            elif intent == "station_less_like_current":
+                message = await self._station_feedback(
+                    ctx,
+                    "less_like",
+                    "Steering this station away from this song.",
+                )
+            elif intent == "station_ban_current":
+                message = await self._station_feedback(
+                    ctx,
+                    "banned",
+                    "This song will not play again on this station.",
+                )
+                await self._invoke(audio.command_skip, ctx)
+            else:
+                message = await self.handle(item)
+            await interaction.followup.send(message[:2000], ephemeral=True)
+        except Exception as exc:
+            await interaction.followup.send(f"DjGoo hit an error: {type(exc).__name__}: {exc}", ephemeral=True)
+            raise
 
     def _station_reason(self, station: Dict[str, Any]) -> str:
         if station.get("liked"):

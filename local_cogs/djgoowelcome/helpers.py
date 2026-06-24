@@ -1,11 +1,25 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 PLACEHOLDER_WEBHOOK = "PASTE_NEW_WEBHOOK_URL_HERE"
+CHAT_WAKE_RE = re.compile(
+    r"^\s*(?:(?:hey|yo|okay|ok)\s+)?(?:dj\s*goo|djgoo|dee\s*jay|d\s*j|dj)\b[:,]?\s*",
+    re.IGNORECASE,
+)
+PLAYBACK_CONTROL_BUTTONS = [
+    {"label": "Skip", "style": "primary", "intent": "skip"},
+    {"label": "Pause", "style": "secondary", "intent": "pause"},
+    {"label": "Stop", "style": "danger", "intent": "stop"},
+    {"label": "Like", "style": "success", "intent": "station_like_current"},
+    {"label": "More Like", "style": "secondary", "intent": "station_more_like_current"},
+    {"label": "Less Like", "style": "secondary", "intent": "station_less_like_current"},
+    {"label": "Ban", "style": "danger", "intent": "station_ban_current"},
+]
 
 
 def should_send_welcome(member: Any, before: Any, after: Any) -> bool:
@@ -14,6 +28,18 @@ def should_send_welcome(member: Any, before: Any, after: Any) -> bool:
     before_channel = getattr(before, "channel", None)
     after_channel = getattr(after, "channel", None)
     return before_channel is None and after_channel is not None
+
+
+def _normalize(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip())
+
+
+def parse_djgoo_chat_command(content: str) -> Optional[str]:
+    match = CHAT_WAKE_RE.search(content)
+    if not match:
+        return None
+    command = _normalize(content[match.end() :])
+    return command or None
 
 
 def load_secrets(path: Path) -> Dict[str, Any]:
@@ -129,4 +155,25 @@ def build_station_track_payload(
                 },
             }
         ],
+    }
+
+
+def build_playback_control_embed(
+    track: Dict[str, Any],
+    *,
+    station_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    title = str(track.get("title", "")).strip() or "Now playing"
+    uri = str(track.get("uri", "")).strip()
+    description_lines = []
+    if station_name:
+        description_lines.append(f"Station: **{station_name}**")
+    if uri:
+        description_lines.append(f"[Open track]({uri})")
+    description_lines.append("Use the buttons below to control DjGoo.")
+    return {
+        "title": title[:256],
+        "description": "\n".join(description_lines)[:4096],
+        "color": 0x2F80ED,
+        "footer": {"text": "Playback buttons are available for everyone in chat."},
     }
