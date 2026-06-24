@@ -116,7 +116,7 @@ def build_voice_command_payload(item: Dict[str, Any]) -> Dict[str, Any]:
         if raw:
             description_parts.append(f"Heard: `{raw}`")
 
-    description_parts.append("Discord control bridge received it. Music action wiring is next.")
+    description_parts.append("Discord control bridge received it.")
     return {
         "username": "DjGoo",
         "embeds": [

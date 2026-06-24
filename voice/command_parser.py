@@ -6,7 +6,7 @@ from typing import List, Optional
 
 
 WAKE_RE = re.compile(
-    r"^\s*(?:(?:hey|yo|okay|ok)\s+)?(?:dj\s*goo|djgoo|dee\s*jay|d\s*j|dj)\b[:,]?\s*",
+    r"^\s*(?:(?:hey|yo|okay|ok)\s+)?(?:dj\s*(?:goo|koo|goon)|djgoo|dee\s*jay|d\s*j|dj)\b[:,]?\s*",
     re.IGNORECASE,
 )
 NUMBER_WORDS = [
@@ -54,7 +54,9 @@ def _after_wake(transcript: str) -> Optional[str]:
     match = WAKE_RE.search(transcript)
     if not match:
         return None
-    return _normalize(transcript[match.end() :])
+    command = _normalize(transcript[match.end() :])
+    command = re.sub(r"^[\s\W_]+|[\s\W_]+$", "", command)
+    return command
 
 
 def _clean_playlist_name(text: str) -> str:
@@ -84,8 +86,9 @@ def parse_command(transcript: str) -> ParsedCommand:
     if lowered.startswith("shuffle "):
         playlist = _clean_playlist_name(command[len("shuffle ") :])
         return ParsedCommand(intent="shuffle_playlist", playlist=playlist, raw=raw)
-    if lowered.startswith("play "):
-        query = _normalize(command[len("play ") :])
+    play_alias = re.match(r"^(?:play|ice)\s+(.+)$", command, flags=re.IGNORECASE)
+    if play_alias:
+        query = _normalize(play_alias.group(1))
         return ParsedCommand(intent="play", query=query, confidence=0.95, raw=raw)
 
     save_match = re.match(

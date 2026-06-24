@@ -128,6 +128,7 @@ class DjGooWelcomeHelperTests(unittest.TestCase):
         self.assertIn("Sandstorm", description)
         self.assertIn("DjGoo play Sandstorm", description)
         self.assertNotIn("listening", description.lower())
+        self.assertNotIn("wiring is next", description.lower())
 
     def test_parse_djgoo_chat_command_translates_wake_phrase_to_red_command(self):
         helpers = load_helpers()

@@ -15,13 +15,27 @@ class VoiceCommandParserTests(unittest.TestCase):
         self.assertEqual(parsed.confidence, 0.0)
 
     def test_parses_play_command_after_djgoo_wake_phrase(self):
-        for wake_phrase in ["DjGoo", "DJ Goo", "DJ", "Dj", "DeeJay", "dee jay", "D J"]:
+        for wake_phrase in ["DjGoo", "DJ Goo", "DJ Koo", "DJ Goon", "DJ", "Dj", "DeeJay", "dee jay", "D J"]:
             with self.subTest(wake_phrase=wake_phrase):
                 parsed = parse_command(f"{wake_phrase} play Sandstorm")
 
                 self.assertEqual(parsed.intent, "play")
                 self.assertEqual(parsed.query, "Sandstorm")
                 self.assertGreaterEqual(parsed.confidence, 0.9)
+
+    def test_ignores_wake_phrase_with_only_punctuation(self):
+        for transcript in ["DJ Goo.", "DJ Koo.", "DJ Goon.", "DjGoo,", "DJ!", "DeeJay ..."]:
+            with self.subTest(transcript=transcript):
+                parsed = parse_command(transcript)
+
+                self.assertEqual(parsed.intent, "ignore")
+                self.assertEqual(parsed.confidence, 0.0)
+
+    def test_parses_common_whisper_mishearing_of_play_command(self):
+        parsed = parse_command("DJ Goon, ice Sandstorm")
+
+        self.assertEqual(parsed.intent, "play")
+        self.assertEqual(parsed.query, "Sandstorm")
 
     def test_does_not_wake_on_casual_mentions_of_dj(self):
         parsed = parse_command("that DJ was great play sandstorm")
