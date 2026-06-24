@@ -157,9 +157,14 @@ class DjGooWelcomeHelperTests(unittest.TestCase):
         labels = [button["label"] for button in helpers.PLAYBACK_CONTROL_BUTTONS]
 
         self.assertIn("Skip", labels)
-        self.assertIn("Pause", labels)
+        self.assertIn("Pause/Resume", labels)
         self.assertIn("Stop", labels)
+        self.assertIn("Queue", labels)
+        self.assertIn("Vol -", labels)
+        self.assertIn("Vol +", labels)
         self.assertIn("Like", labels)
+        self.assertIn("More Like", labels)
+        self.assertIn("Less Like", labels)
         self.assertIn("Ban", labels)
 
     def test_build_playback_control_embed_mentions_buttons_without_audio_noise(self):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import random
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -13,6 +14,9 @@ from voice.djgoo_playlists import DjGooPlaylists
 from voice.djgoo_stations import DjGooStations
 
 from .helpers import PLAYBACK_CONTROL_BUTTONS, build_playback_control_embed, build_station_track_payload
+
+
+log = logging.getLogger("red.djgoowelcome.audio_bridge")
 
 
 class _NoopTyping:
@@ -107,7 +111,7 @@ class _PlaybackControlButton(discord.ui.Button):
             "success": discord.ButtonStyle.success,
             "danger": discord.ButtonStyle.danger,
         }.get(style_name, discord.ButtonStyle.secondary)
-        super().__init__(label=config["label"], style=style)
+        super().__init__(label=config["label"], style=style, row=int(config.get("row", 0)))
         self.intent = config["intent"]
 
     async def callback(self, interaction: discord.Interaction):
@@ -369,6 +373,16 @@ class DjGooAudioBridge:
             return
         await self._invoke(audio.command_pause, ctx)
 
+    async def _toggle_pause(self, audio, ctx) -> str:
+        try:
+            player = lavalink.get_player(ctx.guild.id)
+        except (NodeNotFound, PlayerNotFound):
+            await self._invoke(audio.command_pause, ctx)
+            return "Toggled pause."
+        was_paused = player.paused
+        await self._invoke(audio.command_pause, ctx)
+        return "Resumed." if was_paused else "Paused."
+
     async def _relative_volume(self, audio, ctx, delta: int) -> None:
         current = await audio.config.guild(ctx.guild).volume()
         await self._invoke(audio.command_volume, ctx, vol=max(0, min(150, int(current) + delta)))
@@ -403,9 +417,11 @@ class DjGooAudioBridge:
     async def _send_playback_controls(self, guild, track) -> None:
         channel = self._best_text_channel(guild)
         if channel is None:
+            log.warning("DjGoo could not find a text channel for playback controls in guild %s.", guild.id)
             return
         permissions = channel.permissions_for(guild.me)
         if not permissions.send_messages:
+            log.warning("DjGoo cannot send playback controls in #%s: missing send_messages.", channel)
             return
         data = self._track_data(track)
         station = self.stations.get_active(guild.id)
@@ -416,8 +432,10 @@ class DjGooAudioBridge:
             )
         )
         view = PlaybackControlsView(self, guild.id)
-        with contextlib.suppress(discord.HTTPException, discord.Forbidden):
+        try:
             await channel.send(embed=embed, view=view)
+        except (discord.HTTPException, discord.Forbidden):
+            log.exception("DjGoo failed to send playback controls in #%s.", channel)
 
     async def handle_button_interaction(self, interaction: discord.Interaction, intent: str) -> None:
         if interaction.guild is None or interaction.channel is None or interaction.user is None:
@@ -434,12 +452,22 @@ class DjGooAudioBridge:
                 await self._mark_station_skip(ctx)
                 await self._invoke(audio.command_skip, ctx)
                 message = "Skipped."
-            elif intent == "pause":
-                await self._pause_or_resume(audio, ctx, want_pause=True)
-                message = "Paused."
+            elif intent == "toggle_pause":
+                message = await self._toggle_pause(audio, ctx)
             elif intent == "stop":
                 await self._invoke(audio.command_stop, ctx)
                 message = "Stopped."
+            elif intent == "replay":
+                await self._invoke(audio.command_prev, ctx)
+                message = "Replaying."
+            elif intent == "queue":
+                message = self._queue_summary_text(ctx.guild.id)
+            elif intent == "volume_up":
+                await self._relative_volume(audio, ctx, 10)
+                message = "Volume up."
+            elif intent == "volume_down":
+                await self._relative_volume(audio, ctx, -10)
+                message = "Volume down."
             elif intent == "station_like_current":
                 message = await self._station_feedback(ctx, "liked", "Liked this for the active station.")
             elif intent == "station_more_like_current":
@@ -498,17 +526,19 @@ class DjGooAudioBridge:
         await self._invoke(audio.command_play, ctx, query=query)
 
     async def _send_queue_summary(self, ctx) -> None:
+        await self._notice(self._queue_summary_text(ctx.guild.id))
+
+    def _queue_summary_text(self, guild_id: int) -> str:
         try:
-            player = lavalink.get_player(ctx.guild.id)
+            player = lavalink.get_player(guild_id)
         except (NodeNotFound, PlayerNotFound):
-            await self._notice("There is nothing in the queue.")
-            return
+            return "There is nothing in the queue."
         lines = []
         if player.current:
             lines.append(f"Now: `{player.current.title}`")
         for index, track in enumerate(player.queue[:5], start=1):
             lines.append(f"{index}. `{track.title}`")
-        await self._notice("\n".join(lines) if lines else "There is nothing in the queue.")
+        return "\n".join(lines) if lines else "There is nothing in the queue."
 
     async def _notice(self, description: str) -> None:
         await self._send_payload(

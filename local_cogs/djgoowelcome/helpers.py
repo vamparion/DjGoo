@@ -12,13 +12,17 @@ CHAT_WAKE_RE = re.compile(
     re.IGNORECASE,
 )
 PLAYBACK_CONTROL_BUTTONS = [
-    {"label": "Skip", "style": "primary", "intent": "skip"},
-    {"label": "Pause", "style": "secondary", "intent": "pause"},
-    {"label": "Stop", "style": "danger", "intent": "stop"},
-    {"label": "Like", "style": "success", "intent": "station_like_current"},
-    {"label": "More Like", "style": "secondary", "intent": "station_more_like_current"},
-    {"label": "Less Like", "style": "secondary", "intent": "station_less_like_current"},
-    {"label": "Ban", "style": "danger", "intent": "station_ban_current"},
+    {"label": "Pause/Resume", "style": "secondary", "intent": "toggle_pause", "row": 0},
+    {"label": "Skip", "style": "primary", "intent": "skip", "row": 0},
+    {"label": "Replay", "style": "secondary", "intent": "replay", "row": 0},
+    {"label": "Stop", "style": "danger", "intent": "stop", "row": 0},
+    {"label": "Queue", "style": "secondary", "intent": "queue", "row": 0},
+    {"label": "Vol -", "style": "secondary", "intent": "volume_down", "row": 1},
+    {"label": "Vol +", "style": "secondary", "intent": "volume_up", "row": 1},
+    {"label": "Like", "style": "success", "intent": "station_like_current", "row": 1},
+    {"label": "More Like", "style": "secondary", "intent": "station_more_like_current", "row": 1},
+    {"label": "Less Like", "style": "secondary", "intent": "station_less_like_current", "row": 1},
+    {"label": "Ban", "style": "danger", "intent": "station_ban_current", "row": 2},
 ]
 
 
