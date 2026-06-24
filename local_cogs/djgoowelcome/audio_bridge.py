@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import random
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -33,6 +34,9 @@ class _FakeCommand:
 
 
 class _FakeMessage:
+    id = 0
+    attachments = []
+
     async def add_reaction(self, reaction):
         return None
 
@@ -128,6 +132,7 @@ class DjGooAudioBridge:
         self.playlists = DjGooPlaylists(project_root / "data" / "djgoo-playlists.json")
         self.stations = DjGooStations(project_root / "data" / "djgoo-stations.json")
         self._send_payload = send_payload
+        self._recent_control_posts: Dict[int, tuple[str, float]] = {}
 
     async def handle(self, item: Dict[str, Any]) -> str:
         audio = self.bot.get_cog("Audio")
@@ -414,7 +419,12 @@ class DjGooAudioBridge:
         await self._send_playback_controls(guild, track)
         await self.handle_station_track_start(guild, track)
 
+    async def handle_track_enqueue(self, guild, track) -> None:
+        await self._send_playback_controls(guild, track)
+
     async def _send_playback_controls(self, guild, track) -> None:
+        if not self._should_post_playback_controls(guild.id, track):
+            return
         channel = self._best_text_channel(guild)
         if channel is None:
             log.warning("DjGoo could not find a text channel for playback controls in guild %s.", guild.id)
@@ -436,6 +446,24 @@ class DjGooAudioBridge:
             await channel.send(embed=embed, view=view)
         except (discord.HTTPException, discord.Forbidden):
             log.exception("DjGoo failed to send playback controls in #%s.", channel)
+
+    def _should_post_playback_controls(self, guild_id: int, track) -> bool:
+        key = self._track_key(track)
+        now = time.monotonic()
+        previous = self._recent_control_posts.get(guild_id)
+        if previous is not None:
+            previous_key, previous_time = previous
+            if previous_key == key and now - previous_time < 30:
+                return False
+        self._recent_control_posts[guild_id] = (key, now)
+        return True
+
+    def _track_key(self, track) -> str:
+        identifier = getattr(track, "track_identifier", "")
+        if identifier:
+            return str(identifier)
+        data = self._track_data(track)
+        return data.get("uri") or data.get("title") or repr(track)
 
     async def handle_button_interaction(self, interaction: discord.Interaction, intent: str) -> None:
         if interaction.guild is None or interaction.channel is None or interaction.user is None:

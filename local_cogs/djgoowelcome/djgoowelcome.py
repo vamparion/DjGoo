@@ -163,3 +163,7 @@ class DjGooWelcome(commands.Cog):
     @commands.Cog.listener()
     async def on_red_audio_track_start(self, guild, track, requester):
         await self._audio_bridge.handle_track_start(guild, track)
+
+    @commands.Cog.listener()
+    async def on_red_audio_track_enqueue(self, guild, track, requester):
+        await self._audio_bridge.handle_track_enqueue(guild, track)
