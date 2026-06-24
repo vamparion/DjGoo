@@ -183,6 +183,7 @@ class DjGooAudioBridge:
                     await self._notice("I need a song name or URL.")
                     return "Missing query"
                 await self._invoke(audio.command_play, ctx, query=query)
+                await self._send_controls_for_player(ctx)
                 return f"Playing {query}"
             if intent == "play_playlist":
                 return await self._play_playlist(audio, ctx, str(item.get("playlist", "")), shuffle=False)
@@ -420,12 +421,27 @@ class DjGooAudioBridge:
         await self.handle_station_track_start(guild, track)
 
     async def handle_track_enqueue(self, guild, track) -> None:
+        log.info("DjGoo saw track enqueue in guild %s: %s", guild.id, getattr(track, "title", track))
         await self._send_playback_controls(guild, track)
 
-    async def _send_playback_controls(self, guild, track) -> None:
+    async def _send_controls_for_player(self, ctx: DjGooAudioContext) -> None:
+        try:
+            player = lavalink.get_player(ctx.guild.id)
+        except (NodeNotFound, PlayerNotFound):
+            log.warning("DjGoo could not find a player after play command in guild %s.", ctx.guild.id)
+            return
+        track = player.current
+        if player.queue:
+            track = player.queue[0]
+        if track is None:
+            log.warning("DjGoo found no current or queued track after play command in guild %s.", ctx.guild.id)
+            return
+        await self._send_playback_controls(ctx.guild, track, preferred_channel=ctx.channel)
+
+    async def _send_playback_controls(self, guild, track, *, preferred_channel=None) -> None:
         if not self._should_post_playback_controls(guild.id, track):
             return
-        channel = self._best_text_channel(guild)
+        channel = preferred_channel or self._best_text_channel(guild)
         if channel is None:
             log.warning("DjGoo could not find a text channel for playback controls in guild %s.", guild.id)
             return
@@ -444,6 +460,11 @@ class DjGooAudioBridge:
         view = PlaybackControlsView(self, guild.id)
         try:
             await channel.send(embed=embed, view=view)
+            log.info(
+                "DjGoo posted playback controls in #%s for %s.",
+                channel,
+                data.get("title", "unknown track"),
+            )
         except (discord.HTTPException, discord.Forbidden):
             log.exception("DjGoo failed to send playback controls in #%s.", channel)
 

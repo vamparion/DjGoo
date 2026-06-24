@@ -133,6 +133,7 @@ class DjGooWelcome(commands.Cog):
 
         parsed = parse_command(message.content)
         bridge_intents = {
+            "play",
             "start_radio",
             "station_like_current",
             "station_more_like_current",
