@@ -13,7 +13,7 @@ import lavalink
 from lavalink import NodeNotFound, PlayerNotFound
 
 from voice.djgoo_playlists import DjGooPlaylists
-from voice.djgoo_stations import DjGooStations
+from voice.djgoo_stations import DjGooStations, track_key
 
 from .helpers import (
     PLAYBACK_CONTROL_BUTTONS,
@@ -510,13 +510,20 @@ class DjGooAudioBridge:
             return
         track = self._selected_track(ctx.guild.id, last=False)
         if track is not None:
-            self.stations.add_feedback(station["seed"], "skipped", self._track_data(track))
+            data = self._track_data(track)
+            self.stations.add_feedback(station["seed"], "skipped", data)
+            self.stations.add_feedback(station["seed"], "banned", data)
+            self.stations.mark_played(station["seed"], data)
 
     async def handle_station_track_start(self, guild, track) -> None:
         station = self.stations.get_active(guild.id)
         if station is None:
             return
         data = self._track_data(track)
+        if self._station_rejects_track(station, data):
+            log.info("DjGoo auto-skipping repeated radio track in %s: %s", station["name"], data.get("title", ""))
+            await self._skip_rejected_station_track(guild.id)
+            return
         self.stations.mark_played(station["seed"], data)
         await self._send_payload(
             build_station_track_payload(
@@ -526,6 +533,21 @@ class DjGooAudioBridge:
             )
         )
         await self._top_up_station_queue(guild.id)
+
+    def _station_rejects_track(self, station: Dict[str, Any], data: Dict[str, str]) -> bool:
+        key = track_key(data)
+        blocked = []
+        for bucket in ("banned", "skipped"):
+            blocked.extend(track for track in station.get(bucket, []) if isinstance(track, dict))
+        return key in {track_key(track) for track in blocked}
+
+    async def _skip_rejected_station_track(self, guild_id: int) -> None:
+        audio = self.bot.get_cog("Audio")
+        ctx = self._context()
+        if audio is None or ctx is None:
+            return
+        await self._invoke(audio.command_skip, ctx)
+        await self._top_up_station_queue(guild_id)
 
     async def handle_track_start(self, guild, track) -> None:
         await self._send_playback_controls(guild, track)

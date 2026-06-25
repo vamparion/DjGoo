@@ -20,6 +20,7 @@ class FakeContext:
 class FakeAudio:
     command_play = object()
     command_stop = object()
+    command_skip = object()
 
 
 class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
@@ -87,6 +88,43 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(view.timeout)
         self.assertTrue(all(getattr(child, "custom_id", "").startswith("djgoo:") for child in view.children))
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_station_skip_bans_track_from_radio(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        class Track:
+            title = "Same Song"
+            uri = "u:same"
+            info = {}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+            bridge.stations = DjGooStations(Path(temp_dir) / "stations.json")
+            bridge.stations.set_active(FakeGuild.id, "Sandstorm")
+            bridge._selected_track = lambda guild_id, last=False: Track()
+
+            await bridge._mark_station_skip(FakeContext())
+
+            station = bridge.stations.get_active(FakeGuild.id)
+
+        self.assertEqual(station["skipped"][0]["title"], "Same Song")
+        self.assertEqual(station["banned"][0]["title"], "Same Song")
+        self.assertEqual(station["recent"][0]["title"], "Same Song")
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    def test_station_rejects_skipped_or_banned_track(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        station = {
+            "banned": [{"title": "Blocked", "uri": "u:block"}],
+            "skipped": [{"title": "Skipped", "uri": "u:skip"}],
+        }
+
+        self.assertTrue(bridge._station_rejects_track(station, {"title": "Blocked", "uri": "u:block"}))
+        self.assertTrue(bridge._station_rejects_track(station, {"title": "Skipped", "uri": "u:skip"}))
+        self.assertFalse(bridge._station_rejects_track(station, {"title": "Fresh", "uri": "u:fresh"}))
 
 
 if __name__ == "__main__":
