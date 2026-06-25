@@ -3,6 +3,7 @@ import tempfile
 import unittest
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -120,11 +121,114 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         station = {
             "banned": [{"title": "Blocked", "uri": "u:block"}],
             "skipped": [{"title": "Skipped", "uri": "u:skip"}],
+            "recent": [{"title": "Recent", "uri": "u:recent"}],
         }
 
         self.assertTrue(bridge._station_rejects_track(station, {"title": "Blocked", "uri": "u:block"}))
         self.assertTrue(bridge._station_rejects_track(station, {"title": "Skipped", "uri": "u:skip"}))
+        self.assertTrue(bridge._station_rejects_track(station, {"title": "Recent", "uri": "u:recent"}))
         self.assertFalse(bridge._station_rejects_track(station, {"title": "Fresh", "uri": "u:fresh"}))
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    def test_station_rejects_obvious_non_song_titles(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        station = {"banned": [], "skipped": [], "recent": []}
+        bad_titles = [
+            "Metallica and Megadeth - Song Similarities",
+            "Some Song instrumental",
+            "Band interview clip",
+            "90s greatest hits playlist",
+            "Guitar lesson tutorial",
+        ]
+
+        for title in bad_titles:
+            with self.subTest(title=title):
+                self.assertTrue(bridge._station_rejects_track(station, {"title": title, "uri": f"u:{title}"}))
+
+        self.assertFalse(
+            bridge._station_rejects_track(
+                station,
+                {"title": "Metallica: Nothing Else Matters (Official Music Video)", "uri": "u:ok"},
+            )
+        )
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    def test_radio_search_query_avoids_similarity_wording_and_excludes_junk(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+
+        query = bridge._radio_search_query("Metallica")
+
+        self.assertIn("Metallica official music video", query)
+        self.assertNotIn("similar music", query)
+        self.assertIn("-instrumental", query)
+        self.assertIn("-clip", query)
+        self.assertIn("-playlist", query)
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    def test_radio_recommendation_picks_clean_song_candidate(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        station = {
+            "banned": [],
+            "skipped": [],
+            "recent": [{"title": "Metallica - Nothing Else Matters", "uri": "https://www.youtube.com/watch?v=tAGnKpE4NCI"}],
+        }
+        tracks = [
+            {"videoId": "tAGnKpE4NCI", "title": "Nothing Else Matters", "length": "6:26", "artists": [{"name": "Metallica"}]},
+            {"videoId": "AAAAAAAAAAA", "title": "Metallica Song Similarities", "length": "5:00", "artists": [{"name": "Uploader"}]},
+            {"videoId": "BBBBBBBBBBB", "title": "Four Hour Metal Mix", "length": "4:00:00", "artists": [{"name": "Uploader"}]},
+            {"videoId": "DDGhKS6bSAE", "title": "The Unforgiven", "length": "6:24", "artists": [{"name": "Metallica"}]},
+        ]
+
+        picked = bridge._pick_recommended_track(station, tracks)
+
+        self.assertEqual(picked["title"], "Metallica - The Unforgiven")
+        self.assertEqual(picked["uri"], "https://www.youtube.com/watch?v=DDGhKS6bSAE")
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    def test_youtube_video_id_and_length_helpers(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+
+        self.assertEqual(bridge._youtube_video_id("https://www.youtube.com/watch?v=tAGnKpE4NCI"), "tAGnKpE4NCI")
+        self.assertEqual(bridge._youtube_video_id("https://youtu.be/tAGnKpE4NCI"), "tAGnKpE4NCI")
+        self.assertEqual(bridge._track_length_seconds("6:24"), 384)
+        self.assertEqual(bridge._track_length_seconds("1:02:03"), 3723)
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    def test_controls_track_lookup_prefers_current_song_over_queue(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        class Player:
+            current = "current song"
+            queue = ["queued song"]
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+
+        with patch("local_cogs.djgoowelcome.audio_bridge.lavalink.get_player", return_value=Player()):
+            self.assertEqual(bridge._track_from_player_for_controls(FakeGuild.id), "current song")
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_enqueue_event_does_not_post_now_playing_controls(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge.sent = []
+
+        async def send_playback_controls(*args, **kwargs):
+            bridge.sent.append((args, kwargs))
+
+        bridge._send_playback_controls = send_playback_controls
+
+        await bridge.handle_track_enqueue(FakeGuild(), object())
+
+        self.assertEqual(bridge.sent, [])
 
 
 if __name__ == "__main__":

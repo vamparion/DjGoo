@@ -4,6 +4,7 @@ import contextlib
 import asyncio
 import logging
 import random
+import re
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -24,6 +25,54 @@ from .helpers import (
 
 
 log = logging.getLogger("red.djgoowelcome.audio_bridge")
+
+RADIO_REJECT_TITLE_PHRASES = (
+    "instrumental",
+    "karaoke",
+    "cover",
+    "reaction",
+    "reacts",
+    "interview",
+    "lesson",
+    "tutorial",
+    "how to",
+    "similarities",
+    "similarity",
+    "documentary",
+    "behind the scenes",
+    "making of",
+    "shorts",
+    "#shorts",
+    "clip",
+    "compilation",
+    "playlist",
+    "full album",
+    "greatest hits",
+    "mix",
+    " dj set",
+    "hour of",
+    "hours of",
+    "live at",
+    "live from",
+    "live in",
+)
+
+RADIO_SEARCH_EXCLUSIONS = (
+    "instrumental",
+    "karaoke",
+    "cover",
+    "reaction",
+    "similarities",
+    "interview",
+    "lesson",
+    "tutorial",
+    "clip",
+    "shorts",
+    "playlist",
+    "mix",
+    "full album",
+    "live",
+)
 
 
 class _NoopTyping:
@@ -145,6 +194,7 @@ class DjGooAudioBridge:
         self.stations.clear_all_active()
         self._send_payload = send_payload
         self._recent_control_posts: Dict[int, tuple[str, float]] = {}
+        self._ytmusic = None
 
     async def handle(self, item: Dict[str, Any]) -> str:
         audio = self.bot.get_cog("Audio")
@@ -535,11 +585,17 @@ class DjGooAudioBridge:
         await self._top_up_station_queue(guild.id)
 
     def _station_rejects_track(self, station: Dict[str, Any], data: Dict[str, str]) -> bool:
+        if self._is_bad_radio_title(data.get("title", "")):
+            return True
         key = track_key(data)
         blocked = []
-        for bucket in ("banned", "skipped"):
+        for bucket in ("banned", "skipped", "recent"):
             blocked.extend(track for track in station.get(bucket, []) if isinstance(track, dict))
         return key in {track_key(track) for track in blocked}
+
+    def _is_bad_radio_title(self, title: str) -> bool:
+        lowered = f" {re.sub(r'[^a-z0-9]+', ' ', title.lower()).strip()} "
+        return any(phrase in lowered for phrase in RADIO_REJECT_TITLE_PHRASES)
 
     async def _skip_rejected_station_track(self, guild_id: int) -> None:
         audio = self.bot.get_cog("Audio")
@@ -550,17 +606,17 @@ class DjGooAudioBridge:
         await self._top_up_station_queue(guild_id)
 
     async def handle_track_start(self, guild, track) -> None:
-        await self._send_playback_controls(guild, track)
+        log.info("DjGoo saw track start in guild %s: %s", guild.id, getattr(track, "title", track))
+        await self._send_playback_controls(guild, track, force=True)
         await self.handle_station_track_start(guild, track)
 
     async def handle_track_enqueue(self, guild, track) -> None:
         log.info("DjGoo saw track enqueue in guild %s: %s", guild.id, getattr(track, "title", track))
-        await self._send_playback_controls(guild, track)
 
     async def handle_red_track_enqueue_message(self, message) -> None:
-        track = self._track_from_player_for_controls(message.guild.id)
+        track = self._current_track_for_controls(message.guild.id)
         if track is None:
-            log.warning("DjGoo saw Track Enqueued in #%s but could not find a current or queued track.", message.channel)
+            log.info("DjGoo saw Track Enqueued in #%s before playback started.", message.channel)
             return
         log.info("DjGoo saw visible Track Enqueued message in #%s.", message.channel)
         await self._send_playback_controls(message.guild, track, preferred_channel=message.channel)
@@ -577,8 +633,17 @@ class DjGooAudioBridge:
             player = lavalink.get_player(guild_id)
         except (NodeNotFound, PlayerNotFound):
             return None
+        if player.current:
+            return player.current
         if player.queue:
             return player.queue[0]
+        return None
+
+    def _current_track_for_controls(self, guild_id: int):
+        try:
+            player = lavalink.get_player(guild_id)
+        except (NodeNotFound, PlayerNotFound):
+            return None
         return player.current
 
     async def _send_playback_controls(self, guild, track, *, preferred_channel=None, force: bool = False) -> None:
@@ -713,8 +778,68 @@ class DjGooAudioBridge:
             seeds.append(station["liked"][-1]["title"])
         if station.get("more_like"):
             seeds.append(station["more_like"][-1]["title"])
-        query = f"{random.choice(seeds)} similar music"
+        recommended = await self._recommended_radio_track(station)
+        query = recommended["uri"] if recommended else self._radio_search_query(random.choice(seeds))
         await self._invoke(audio.command_play, ctx, query=query)
+
+    async def _recommended_radio_track(self, station: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        last_track = station.get("last_track") if isinstance(station.get("last_track"), dict) else None
+        video_id = self._youtube_video_id((last_track or {}).get("uri", ""))
+        if not video_id:
+            return None
+        try:
+            tracks = await asyncio.to_thread(self._ytmusic_watch_tracks, video_id)
+        except Exception:
+            log.exception("DjGoo could not fetch YouTube Music radio recommendations.")
+            return None
+        return self._pick_recommended_track(station, tracks)
+
+    def _ytmusic_watch_tracks(self, video_id: str):
+        if self._ytmusic is None:
+            from ytmusicapi import YTMusic
+
+            self._ytmusic = YTMusic()
+        return self._ytmusic.get_watch_playlist(videoId=video_id, limit=25).get("tracks", [])
+
+    def _pick_recommended_track(self, station: Dict[str, Any], tracks) -> Optional[Dict[str, str]]:
+        candidates = []
+        for item in tracks or []:
+            if not isinstance(item, dict):
+                continue
+            video_id = str(item.get("videoId") or "").strip()
+            title = str(item.get("title") or "").strip()
+            if not video_id or not title:
+                continue
+            if self._track_length_seconds(str(item.get("length") or "")) > 600:
+                continue
+            artists = [
+                str(artist.get("name", "")).strip()
+                for artist in item.get("artists", [])
+                if isinstance(artist, dict) and str(artist.get("name", "")).strip()
+            ]
+            display_title = f"{', '.join(artists)} - {title}" if artists else title
+            candidate = {"title": display_title, "uri": f"https://www.youtube.com/watch?v={video_id}"}
+            if self._station_rejects_track(station, candidate):
+                continue
+            candidates.append(candidate)
+        return random.choice(candidates) if candidates else None
+
+    def _youtube_video_id(self, uri: str) -> str:
+        match = re.search(r"(?:v=|youtu\.be/|embed/|shorts/)([A-Za-z0-9_-]{11})", uri)
+        return match.group(1) if match else ""
+
+    def _track_length_seconds(self, length: str) -> int:
+        if not length:
+            return 0
+        parts = [int(part) for part in length.split(":") if part.isdigit()]
+        total = 0
+        for part in parts:
+            total = total * 60 + part
+        return total
+
+    def _radio_search_query(self, seed: str) -> str:
+        exclusions = " ".join(f"-{term}" for term in RADIO_SEARCH_EXCLUSIONS)
+        return f"{seed} official music video {exclusions}"
 
     async def _send_queue_summary(self, ctx) -> None:
         await self._notice(self._queue_summary_text(ctx.guild.id))
