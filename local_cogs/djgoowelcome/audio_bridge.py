@@ -26,6 +26,8 @@ from .helpers import (
 
 log = logging.getLogger("red.djgoowelcome.audio_bridge")
 
+MAX_TRACK_SECONDS = 10 * 60
+
 RADIO_REJECT_TITLE_PHRASES = (
     "instrumental",
     "karaoke",
@@ -524,10 +526,14 @@ class DjGooAudioBridge:
 
     def _track_data(self, track) -> Dict[str, str]:
         info = getattr(track, "info", {}) or {}
-        return {
+        data = {
             "title": getattr(track, "title", "") or info.get("title", ""),
             "uri": getattr(track, "uri", "") or info.get("uri", ""),
         }
+        duration = self._track_duration_seconds(track)
+        if duration:
+            data["duration_seconds"] = str(duration)
+        return data
 
     async def _pause_or_resume(self, audio, ctx, *, want_pause: bool) -> None:
         try:
@@ -567,9 +573,15 @@ class DjGooAudioBridge:
 
     async def handle_station_track_start(self, guild, track) -> None:
         station = self.stations.get_active(guild.id)
+        data = self._track_data(track)
+        if self._should_reject_playing_track(data):
+            log.info("DjGoo auto-skipping overlong or non-song track: %s", data.get("title", ""))
+            if station is not None:
+                self.stations.add_feedback(station["seed"], "banned", data)
+            await self._skip_rejected_station_track(guild.id)
+            return
         if station is None:
             return
-        data = self._track_data(track)
         if self._station_rejects_track(station, data):
             log.info("DjGoo auto-skipping repeated radio track in %s: %s", station["name"], data.get("title", ""))
             await self._skip_rejected_station_track(guild.id)
@@ -585,7 +597,7 @@ class DjGooAudioBridge:
         await self._top_up_station_queue(guild.id)
 
     def _station_rejects_track(self, station: Dict[str, Any], data: Dict[str, str]) -> bool:
-        if self._is_bad_radio_title(data.get("title", "")):
+        if self._should_reject_playing_track(data):
             return True
         key = track_key(data)
         blocked = []
@@ -593,9 +605,43 @@ class DjGooAudioBridge:
             blocked.extend(track for track in station.get(bucket, []) if isinstance(track, dict))
         return key in {track_key(track) for track in blocked}
 
+    def _should_reject_playing_track(self, data: Dict[str, Any]) -> bool:
+        if self._is_bad_radio_title(str(data.get("title", ""))):
+            return True
+        with contextlib.suppress(TypeError, ValueError):
+            return int(data.get("duration_seconds") or 0) > MAX_TRACK_SECONDS
+        return False
+
     def _is_bad_radio_title(self, title: str) -> bool:
         lowered = f" {re.sub(r'[^a-z0-9]+', ' ', title.lower()).strip()} "
         return any(phrase in lowered for phrase in RADIO_REJECT_TITLE_PHRASES)
+
+    def _track_duration_seconds(self, track) -> int:
+        info = getattr(track, "info", {}) or {}
+        for value in (
+            getattr(track, "length", None),
+            getattr(track, "duration", None),
+            info.get("length"),
+            info.get("duration"),
+        ):
+            seconds = self._duration_value_seconds(value)
+            if seconds:
+                return seconds
+        return 0
+
+    def _duration_value_seconds(self, value) -> int:
+        if value is None:
+            return 0
+        if isinstance(value, str):
+            if ":" in value:
+                return self._track_length_seconds(value)
+            with contextlib.suppress(ValueError):
+                value = float(value)
+        if isinstance(value, (int, float)):
+            if value > 10_000:
+                return int(value / 1000)
+            return int(value)
+        return 0
 
     async def _skip_rejected_station_track(self, guild_id: int) -> None:
         audio = self.bot.get_cog("Audio")

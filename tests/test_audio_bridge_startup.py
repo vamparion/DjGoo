@@ -200,6 +200,44 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bridge._youtube_video_id("https://youtu.be/tAGnKpE4NCI"), "tAGnKpE4NCI")
         self.assertEqual(bridge._track_length_seconds("6:24"), 384)
         self.assertEqual(bridge._track_length_seconds("1:02:03"), 3723)
+        self.assertEqual(bridge._duration_value_seconds(384000), 384)
+        self.assertEqual(bridge._duration_value_seconds(384), 384)
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    def test_overlong_tracks_are_rejected(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+
+        self.assertTrue(
+            bridge._should_reject_playing_track(
+                {"title": "System Of A Down full album", "uri": "u:album", "duration_seconds": "3600"}
+            )
+        )
+        self.assertTrue(
+            bridge._should_reject_playing_track(
+                {"title": "Normal looking title", "uri": "u:long", "duration_seconds": "1200"}
+            )
+        )
+        self.assertFalse(
+            bridge._should_reject_playing_track(
+                {"title": "Metallica - One", "uri": "u:song", "duration_seconds": "447"}
+            )
+        )
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    def test_track_data_includes_duration_when_available(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        class Track:
+            title = "Song"
+            uri = "u:song"
+            length = 245000
+            info = {}
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+
+        self.assertEqual(bridge._track_data(Track())["duration_seconds"], "245")
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     def test_controls_track_lookup_prefers_current_song_over_queue(self):
