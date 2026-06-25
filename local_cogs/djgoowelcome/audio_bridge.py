@@ -105,7 +105,7 @@ class DjGooAudioContext:
 
 class PlaybackControlsView(discord.ui.View):
     def __init__(self, bridge: "DjGooAudioBridge", guild_id: int):
-        super().__init__(timeout=1800)
+        super().__init__(timeout=None)
         self.bridge = bridge
         self.guild_id = guild_id
         for button in PLAYBACK_CONTROL_BUTTONS:
@@ -121,7 +121,12 @@ class _PlaybackControlButton(discord.ui.Button):
             "success": discord.ButtonStyle.success,
             "danger": discord.ButtonStyle.danger,
         }.get(style_name, discord.ButtonStyle.secondary)
-        super().__init__(label=config["label"], style=style, row=int(config.get("row", 0)))
+        super().__init__(
+            label=config["label"],
+            style=style,
+            row=int(config.get("row", 0)),
+            custom_id=f"djgoo:{config['intent']}",
+        )
         self.intent = config["intent"]
 
     async def callback(self, interaction: discord.Interaction):
@@ -213,8 +218,7 @@ class DjGooAudioBridge:
                 await self._pause_or_resume(audio, ctx, want_pause=intent == "pause")
                 return intent.title()
             if intent == "stop":
-                await self._invoke(audio.command_stop, ctx)
-                return "Stopped"
+                return await self._stop_playback(audio, ctx)
             if intent == "clear_queue":
                 await self._invoke(audio.command_queue_clear, ctx)
                 return "Queue cleared"
@@ -437,6 +441,14 @@ class DjGooAudioBridge:
         await self._notice(f"Stopped `{station['name']}`. DjGoo will not keep topping up that station.")
         return f"Stopped {station['name']}"
 
+    async def _stop_playback(self, audio, ctx) -> str:
+        station = self.stations.get_active(ctx.guild.id)
+        self.stations.clear_active(ctx.guild.id)
+        await self._invoke(audio.command_stop, ctx)
+        if station is not None:
+            await self._notice(f"Stopped playback and turned off `{station['name']}`.")
+        return "Stopped"
+
     async def _save_track(self, ctx, playlist_name: str, *, last: bool) -> str:
         track = self._selected_track(ctx.guild.id, last=last)
         if track is None:
@@ -613,8 +625,7 @@ class DjGooAudioBridge:
             elif intent == "toggle_pause":
                 message = await self._toggle_pause(audio, ctx)
             elif intent == "stop":
-                await self._invoke(audio.command_stop, ctx)
-                message = "Stopped."
+                message = await self._stop_playback(audio, ctx)
             elif intent == "replay":
                 await self._invoke(audio.command_prev, ctx)
                 message = "Replaying."

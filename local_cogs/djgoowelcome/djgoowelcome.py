@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import sys
@@ -19,7 +20,7 @@ from voice.command_parser import parse_command
 from voice.command_queue import command_to_queue_item
 from voice.command_queue import drain_queue
 
-from .audio_bridge import DjGooAudioBridge
+from .audio_bridge import DjGooAudioBridge, PlaybackControlsView
 from .helpers import (
     build_voice_command_payload,
     build_welcome_payload,
@@ -44,6 +45,8 @@ class DjGooWelcome(commands.Cog):
             project_root=PROJECT_ROOT,
             send_payload=self._send_webhook_payload,
         )
+        with contextlib.suppress(Exception):
+            self.bot.add_view(PlaybackControlsView(self._audio_bridge, 0))
         self._queue_task = self.bot.loop.create_task(self._command_queue_loop())
 
     def cog_unload(self):
