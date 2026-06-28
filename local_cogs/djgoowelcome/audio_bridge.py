@@ -48,6 +48,7 @@ RADIO_REJECT_TITLE_PHRASES = (
     "#shorts",
     "clip",
     "compilation",
+    "collection",
     "playlist",
     "full album",
     "greatest hits",
@@ -268,8 +269,7 @@ class DjGooAudioBridge:
             if intent in {"save_current_to_playlist", "save_last_to_playlist"}:
                 return await self._save_track(ctx, str(item.get("playlist", "")), last=intent == "save_last_to_playlist")
             if intent == "skip":
-                await self._mark_station_skip(ctx)
-                await self._invoke(audio.command_skip, ctx)
+                await self._skip_playback(audio, ctx)
                 return "Skipped"
             if intent in {"pause", "resume"}:
                 await self._pause_or_resume(audio, ctx, want_pause=intent == "pause")
@@ -413,6 +413,14 @@ class DjGooAudioBridge:
         resolved = await asyncio.to_thread(self.nuclear.resolve_track_query, query)
         return resolved or query
 
+    async def _resolve_radio_seed_query(self, seed: str) -> str:
+        return await self._radio_fallback_query(seed)
+
+    async def _radio_fallback_query(self, seed: str) -> str:
+        resolver = getattr(self, "nuclear", None)
+        resolved = await asyncio.to_thread(resolver.resolve_track_query, seed) if resolver is not None else None
+        return resolved or self._radio_search_query(seed)
+
     async def _play_album(self, audio, ctx, query: str) -> str:
         query = query.strip()
         if not query:
@@ -432,7 +440,8 @@ class DjGooAudioBridge:
         if not seed:
             await self._notice("Tell me what to seed the station with, like `DjGoo radio Sandstorm`.")
             return "Missing radio seed"
-        if not await self._play_query_when_ready(audio, ctx, seed):
+        play_query = await self._resolve_radio_seed_query(seed)
+        if not await self._play_query_when_ready(audio, ctx, play_query):
             await self._notice(
                 "DjGoo is still warming up the music engine. I did not start the radio station yet, "
                 "so it will not pretend music is playing."
@@ -593,6 +602,13 @@ class DjGooAudioBridge:
             self.stations.add_feedback(station["seed"], "skipped", data)
             self.stations.add_feedback(station["seed"], "banned", data)
             self.stations.mark_played(station["seed"], data)
+
+    async def _skip_playback(self, audio, ctx) -> None:
+        station = self.stations.get_active(ctx.guild.id)
+        await self._mark_station_skip(ctx)
+        await self._invoke(audio.command_skip, ctx)
+        if station is not None:
+            await self._top_up_station_queue(ctx.guild.id)
 
     async def handle_station_track_start(self, guild, track) -> None:
         station = self.stations.get_active(guild.id)
@@ -775,8 +791,7 @@ class DjGooAudioBridge:
         item = {"type": "command", "intent": intent, "raw": f"button:{intent}", "source": "button"}
         try:
             if intent == "skip":
-                await self._mark_station_skip(ctx)
-                await self._invoke(audio.command_skip, ctx)
+                await self._skip_playback(audio, ctx)
                 message = "Skipped."
             elif intent == "toggle_pause":
                 message = await self._toggle_pause(audio, ctx)
@@ -848,7 +863,7 @@ class DjGooAudioBridge:
         if station.get("more_like"):
             seeds.append(station["more_like"][-1]["title"])
         recommended = await self._recommended_radio_track(station)
-        query = recommended["uri"] if recommended else self._radio_search_query(random.choice(seeds))
+        query = recommended["uri"] if recommended else await self._radio_fallback_query(random.choice(seeds))
         await self._invoke(audio.command_play, ctx, query=query)
 
     async def _recommended_radio_track(self, station: Dict[str, Any]) -> Optional[Dict[str, str]]:

@@ -140,6 +140,7 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
             "Some Song instrumental",
             "Band interview clip",
             "90s greatest hits playlist",
+            "Alternative Rock Of The 90s 2000s - Rock Music Collection",
             "Guitar lesson tutorial",
         ]
 
@@ -153,6 +154,79 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
                 {"title": "Metallica: Nothing Else Matters (Official Music Video)", "uri": "u:ok"},
             )
         )
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_radio_start_resolves_seed_before_playing(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+            bridge.stations = DjGooStations(Path(temp_dir) / "stations.json")
+            bridge.notices = []
+            bridge.played_queries = []
+
+            async def notice(message):
+                bridge.notices.append(message)
+
+            async def resolve(query):
+                return f"Resolved {query}"
+
+            async def play_query_when_ready(audio, ctx, query):
+                bridge.played_queries.append(query)
+                return True
+
+            async def send_controls(ctx):
+                return None
+
+            bridge._notice = notice
+            bridge._resolve_radio_seed_query = resolve
+            bridge._play_query_when_ready = play_query_when_ready
+            bridge._send_controls_for_player = send_controls
+
+            result = await bridge._start_radio(FakeAudio(), FakeContext(), "Rock")
+            active_station = bridge.stations.get_active(FakeGuild.id)
+
+        self.assertEqual(result, "Started Rock radio")
+        self.assertEqual(bridge.played_queries, ["Resolved Rock"])
+        self.assertEqual(active_station["seed"], "Rock")
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_radio_skip_tops_up_station_after_skipping(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+            bridge.stations = DjGooStations(Path(temp_dir) / "stations.json")
+            bridge.stations.set_active(FakeGuild.id, "Rock")
+            bridge.invoked = []
+            bridge.topped_up = []
+
+            async def invoke(command, ctx, *args, **kwargs):
+                bridge.invoked.append(command)
+
+            async def top_up(guild_id):
+                bridge.topped_up.append(guild_id)
+
+            bridge._invoke = invoke
+            bridge._top_up_station_queue = top_up
+
+            await bridge._skip_playback(FakeAudio(), FakeContext())
+
+        self.assertEqual(bridge.invoked, [FakeAudio.command_skip])
+        self.assertEqual(bridge.topped_up, [FakeGuild.id])
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_radio_fallback_query_uses_nuclear_before_search_text(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        class Resolver:
+            def resolve_track_query(self, query):
+                return f"Nuclear {query}"
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge.nuclear = Resolver()
+
+        self.assertEqual(await bridge._radio_fallback_query("Rock"), "Nuclear Rock")
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     def test_radio_search_query_avoids_similarity_wording_and_excludes_junk(self):
