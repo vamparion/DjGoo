@@ -300,10 +300,28 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
             bridge._notice = notice
             bridge._send_payload = lambda payload: None
 
-            await bridge.resume_active_radio_stations()
+            with patch.dict("os.environ", {"DJGOO_RESUME_ACTIVE_RADIO": "1"}):
+                await bridge.resume_active_radio_stations()
 
         self.assertEqual(bridge.played_queries, ["Nuclear 80s hits"])
         self.assertEqual(bridge.notices, [])
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_resume_active_radio_does_nothing_without_restart_flag(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge.played_queries = []
+
+        async def play_query_when_ready(audio, ctx, query):
+            bridge.played_queries.append(query)
+
+        bridge._play_query_when_ready = play_query_when_ready
+
+        with patch.dict("os.environ", {}, clear=True):
+            await bridge.resume_active_radio_stations()
+
+        self.assertEqual(bridge.played_queries, [])
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     def test_radio_search_query_avoids_similarity_wording_and_excludes_junk(self):

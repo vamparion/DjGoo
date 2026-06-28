@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import asyncio
 import logging
+import os
 import random
 import re
 import time
@@ -195,10 +196,15 @@ class DjGooAudioBridge:
         self.project_root = project_root
         self.playlists = DjGooPlaylists(project_root / "data" / "djgoo-playlists.json")
         self.stations = DjGooStations(project_root / "data" / "djgoo-stations.json")
+        if not self._should_resume_active_radio():
+            self.stations.clear_all_active()
         self.nuclear = NuclearResolver()
         self._send_payload = send_payload
         self._recent_control_posts: Dict[int, tuple[str, float]] = {}
         self._ytmusic = None
+
+    def _should_resume_active_radio(self) -> bool:
+        return os.environ.get("DJGOO_RESUME_ACTIVE_RADIO", "").strip() == "1"
 
     async def handle(self, item: Dict[str, Any]) -> str:
         audio = self.bot.get_cog("Audio")
@@ -401,6 +407,8 @@ class DjGooAudioBridge:
         return await callback(cog, ctx, *args, **kwargs)
 
     async def resume_active_radio_stations(self) -> None:
+        if not self._should_resume_active_radio():
+            return
         audio = self.bot.get_cog("Audio")
         if audio is None:
             return
