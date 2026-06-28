@@ -6,5 +6,7 @@ data/
 .venv/
 .voice-venv/
 .worktrees/
+control_panel_ui/node_modules/
+control_panel_ui/dist/
 __pycache__/
 *.pyc

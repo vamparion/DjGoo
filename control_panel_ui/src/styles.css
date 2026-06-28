@@ -1,0 +1,14 @@
+body {
+  margin: 0;
+  background: #0d1014;
+  color: #f4f7fb;
+  font-family: Inter, Segoe UI, system-ui, sans-serif;
+}
+
+.appShell {
+  padding: 24px;
+}
+
+.error {
+  color: #ff7482;
+}
