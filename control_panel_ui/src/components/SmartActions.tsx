@@ -1,11 +1,16 @@
 import type { PanelProps } from "./types";
 
-export function SmartActions({ send }: PanelProps) {
+type Props = PanelProps & {
+  mode?: "live" | "radio";
+};
+
+export function SmartActions({ send, mode = "live" }: Props) {
+  const radioMode = mode === "radio";
   return (
     <section className="smart-row">
       <div className="smart">
-        <strong>One-tap playlist add</strong>
-        <p>Current track goes to your most-used lists.</p>
+        <strong>{radioMode ? "Shape this station" : "One-tap playlist add"}</strong>
+        <p>{radioMode ? "Every rating stays local to this station." : "Current track goes to your most-used lists."}</p>
         <button className="btn" onClick={() => void send("save_current", { playlist: "chill" })}>Chill</button>
         <button className="btn" onClick={() => void send("save_current", { playlist: "80s" })}>80s</button>
       </div>
@@ -15,9 +20,13 @@ export function SmartActions({ send }: PanelProps) {
         <button className="btn danger" onClick={() => void send("ban")}>Ban + Replace</button>
       </div>
       <div className="smart">
-        <strong>Guest requests</strong>
-        <p>Guest mode lands here after local admin is stable.</p>
-        <button className="btn primary" disabled>Approve Next</button>
+        <strong>{radioMode ? "Stop station cleanly" : "Quick radio starts"}</strong>
+        <p>{radioMode ? "Stop means stop; it should not auto-resume after a song request." : "Start common moods without typing."}</p>
+        {radioMode ? (
+          <button className="btn amber" onClick={() => void send("stop_radio")}>Stop Radio</button>
+        ) : (
+          <button className="btn primary" onClick={() => void send("start_radio", { query: "80s" })}>80s Radio</button>
+        )}
       </div>
       <div className="smart">
         <strong>Recovery</strong>

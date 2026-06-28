@@ -32,12 +32,14 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
     playlists = _playlist_summaries(playlists_data)
     stations = _station_summaries(stations_data)
     active_station = _active_station(stations_data)
+    last_track = active_station.get("last_track") if active_station else None
+    last_title = last_track.get("title", "") if isinstance(last_track, dict) else ""
     return {
         "playback": {
-            "title": "",
+            "title": last_title,
             "artist": "",
             "station": active_station["name"] if active_station else "",
-            "source": "",
+            "source": "Station memory" if last_title else "",
             "remaining": "",
             "queue_count": 0,
         },

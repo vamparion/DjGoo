@@ -15,10 +15,11 @@ export function HealthPanel({ state, send }: PanelProps) {
       <div className="health">
         {Object.entries(state.health).map(([key, item]) => (
           <div className="metric" key={key}>
-            <span>{labels[key] || key}</span>
+            <span><i className={item.status === "online" || item.status === "configured" ? "dot ok-bg" : "dot warn-bg"} />{labels[key] || key}</span>
             <strong className={item.status === "online" || item.status === "configured" ? "ok" : "warn"}>
               {item.status}
             </strong>
+            {item.pid && <em>PID {item.pid}</em>}
           </div>
         ))}
       </div>

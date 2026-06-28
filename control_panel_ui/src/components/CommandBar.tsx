@@ -9,15 +9,27 @@ export function CommandBar({ send }: Props) {
   const [query, setQuery] = useState("");
   const [action, setAction] = useState("auto");
 
+  function resolveAutoAction(text: string) {
+    const lower = text.toLowerCase();
+    if (lower.startsWith("radio ")) return { action: "start_radio", query: text.slice(6).trim() };
+    if (lower.startsWith("play ")) return { action: "play_next", query: text.slice(5).trim() };
+    if (lower.startsWith("save ") || lower.startsWith("add ")) return { action: "save_current", playlist: text.replace(/^(save|add)\s+/i, "").trim() };
+    if (["skip", "stop", "queue", "pause", "resume"].includes(lower)) return { action: lower, query: "" };
+    return { action: "play_next", query: text };
+  }
+
   async function submit() {
     const text = query.trim();
     if (!text) return;
-    if (action === "start_radio") {
-      await send("start_radio", { query: text });
+    if (action === "auto") {
+      const resolved = resolveAutoAction(text);
+      await send(resolved.action, { query: resolved.query, playlist: resolved.playlist });
+    } else if (action === "start_radio") {
+      await send("start_radio", { query: text.replace(/^radio\s+/i, "") });
     } else if (action === "add_to_playlist") {
       await send("save_current", { playlist: text });
     } else {
-      await send(action === "auto" ? "play_next" : action, { query: text });
+      await send(action, { query: text.replace(/^play\s+/i, "") });
     }
     setQuery("");
   }
@@ -26,7 +38,10 @@ export function CommandBar({ send }: Props) {
     <header className="topbar">
       <div className="brand">
         <div className="logo">DG</div>
-        <div>DjGoo</div>
+        <div>
+          <strong>DjGoo</strong>
+          <span>Control Panel</span>
+        </div>
       </div>
       <div className="command">
         <input
@@ -35,7 +50,7 @@ export function CommandBar({ send }: Props) {
           onKeyDown={(event) => {
             if (event.key === "Enter") void submit();
           }}
-          placeholder="Type once: play song, radio 80s, add current to chill, ban this"
+          placeholder="Command: play song, radio 80s, save chill"
         />
         <select value={action} onChange={(event) => setAction(event.target.value)}>
           <option value="auto">Auto action</option>
@@ -48,9 +63,10 @@ export function CommandBar({ send }: Props) {
           Go
         </button>
       </div>
-      <button className="btn danger" onClick={() => void send("stop")}>
-        Panic Stop
-      </button>
+      <div className="top-actions">
+        <button className="btn" onClick={() => void send("queue")}>Queue</button>
+        <button className="btn danger" onClick={() => void send("stop")}>Stop</button>
+      </div>
     </header>
   );
 }
