@@ -195,7 +195,6 @@ class DjGooAudioBridge:
         self.project_root = project_root
         self.playlists = DjGooPlaylists(project_root / "data" / "djgoo-playlists.json")
         self.stations = DjGooStations(project_root / "data" / "djgoo-stations.json")
-        self.stations.clear_all_active()
         self.nuclear = NuclearResolver()
         self._send_payload = send_payload
         self._recent_control_posts: Dict[int, tuple[str, float]] = {}
@@ -346,6 +345,13 @@ class DjGooAudioBridge:
                 return channel
         return None
 
+    def _active_voice_member_for_guild(self, guild):
+        for channel in getattr(guild, "voice_channels", []):
+            members = [member for member in channel.members if not member.bot]
+            if members:
+                return members[0]
+        return None
+
     def _can_send_to(self, guild, channel) -> bool:
         if channel is None:
             return False
@@ -394,6 +400,32 @@ class DjGooAudioBridge:
         cog = self.bot.get_cog("Audio")
         return await callback(cog, ctx, *args, **kwargs)
 
+    async def resume_active_radio_stations(self) -> None:
+        audio = self.bot.get_cog("Audio")
+        if audio is None:
+            return
+        active_guild_ids = set(self.stations.active_guild_ids())
+        for guild in self.bot.guilds:
+            if int(guild.id) not in active_guild_ids:
+                continue
+            station = self.stations.get_active(guild.id)
+            if station is None or self._player_has_music(guild.id):
+                continue
+            author = self._active_voice_member_for_guild(guild)
+            channel = self._best_text_channel(guild)
+            if author is None or channel is None:
+                continue
+            ctx = self._context_for(guild, author, channel)
+            query = await self._radio_fallback_query(station["seed"])
+            await self._play_query_when_ready(audio, ctx, query)
+
+    def _player_has_music(self, guild_id: int) -> bool:
+        try:
+            player = lavalink.get_player(guild_id)
+        except (NodeNotFound, PlayerNotFound):
+            return False
+        return bool(player.current or player.queue)
+
     async def _play_playlist(self, audio, ctx, playlist_name: str, *, shuffle: bool) -> str:
         tracks = self.playlists.get_tracks(playlist_name)
         if not tracks:
@@ -418,8 +450,29 @@ class DjGooAudioBridge:
 
     async def _radio_fallback_query(self, seed: str) -> str:
         resolver = getattr(self, "nuclear", None)
-        resolved = await asyncio.to_thread(resolver.resolve_track_query, seed) if resolver is not None else None
+        search_query = self._radio_seed_search_query(seed)
+        resolved = await asyncio.to_thread(resolver.resolve_track_query, search_query) if resolver is not None else None
         return resolved or self._radio_search_query(seed)
+
+    def _radio_seed_search_query(self, seed: str) -> str:
+        normalized = re.sub(r"\s+", " ", seed.strip().lower())
+        aliases = {
+            "80s": "80s hits",
+            "80's": "80s hits",
+            "90s": "90s hits",
+            "90's": "90s hits",
+            "rock": "rock hits",
+            "edm": "edm hits",
+            "country": "country hits",
+            "rap": "rap hits",
+            "r&b": "r&b hits",
+            "white girl music": "2000s pop hits",
+        }
+        if normalized in aliases:
+            return aliases[normalized]
+        if re.search(r"\b(hit|hits|music|songs|radio)\b", normalized, re.IGNORECASE):
+            return seed.strip()
+        return seed.strip()
 
     async def _play_album(self, audio, ctx, query: str) -> str:
         query = query.strip()
@@ -640,7 +693,7 @@ class DjGooAudioBridge:
             return True
         key = track_key(data)
         blocked = []
-        for bucket in ("banned", "skipped", "recent"):
+        for bucket in ("banned", "skipped", "less_like", "recent"):
             blocked.extend(track for track in station.get(bucket, []) if isinstance(track, dict))
         return key in {track_key(track) for track in blocked}
 

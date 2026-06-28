@@ -24,6 +24,26 @@ class FakeAudio:
     command_skip = object()
 
 
+class FakeMember:
+    bot = False
+
+
+class FakeVoiceChannel:
+    members = [FakeMember()]
+
+
+class FakeTextChannel:
+    pass
+
+
+class FakeResumeGuild:
+    id = 123
+    voice_channels = [FakeVoiceChannel()]
+    text_channels = [FakeTextChannel()]
+    system_channel = None
+    me = object()
+
+
 class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     async def test_radio_does_not_become_active_when_initial_play_never_queues(self):
@@ -121,11 +141,13 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         station = {
             "banned": [{"title": "Blocked", "uri": "u:block"}],
             "skipped": [{"title": "Skipped", "uri": "u:skip"}],
+            "less_like": [{"title": "Less", "uri": "u:less"}],
             "recent": [{"title": "Recent", "uri": "u:recent"}],
         }
 
         self.assertTrue(bridge._station_rejects_track(station, {"title": "Blocked", "uri": "u:block"}))
         self.assertTrue(bridge._station_rejects_track(station, {"title": "Skipped", "uri": "u:skip"}))
+        self.assertTrue(bridge._station_rejects_track(station, {"title": "Less", "uri": "u:less"}))
         self.assertTrue(bridge._station_rejects_track(station, {"title": "Recent", "uri": "u:recent"}))
         self.assertFalse(bridge._station_rejects_track(station, {"title": "Fresh", "uri": "u:fresh"}))
 
@@ -226,7 +248,62 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
         bridge.nuclear = Resolver()
 
-        self.assertEqual(await bridge._radio_fallback_query("Rock"), "Nuclear Rock")
+        self.assertEqual(await bridge._radio_fallback_query("Rock"), "Nuclear rock hits")
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_radio_fallback_expands_broad_station_seed_for_nuclear(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        class Resolver:
+            def resolve_track_query(self, query):
+                return f"Nuclear {query}"
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge.nuclear = Resolver()
+
+        self.assertEqual(await bridge._radio_fallback_query("80s"), "Nuclear 80s hits")
+        self.assertEqual(await bridge._radio_fallback_query("white girl music"), "Nuclear 2000s pop hits")
+        self.assertEqual(await bridge._radio_fallback_query("Sandstorm"), "Nuclear Sandstorm")
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_resume_active_radio_starts_station_without_notice(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        class Bot:
+            guilds = [FakeResumeGuild()]
+
+            def get_cog(self, name):
+                return FakeAudio()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+            bridge.bot = Bot()
+            bridge.stations = DjGooStations(Path(temp_dir) / "stations.json")
+            bridge.stations.set_active(FakeGuild.id, "80s")
+            bridge.played_queries = []
+            bridge.notices = []
+
+            async def play_query_when_ready(audio, ctx, query):
+                bridge.played_queries.append(query)
+                return True
+
+            async def notice(message):
+                bridge.notices.append(message)
+
+            bridge._best_text_channel = lambda guild: FakeTextChannel()
+            bridge._player_has_music = lambda guild_id: False
+            async def radio_fallback_query(seed):
+                return "Nuclear 80s hits"
+
+            bridge._radio_fallback_query = radio_fallback_query
+            bridge._play_query_when_ready = play_query_when_ready
+            bridge._notice = notice
+            bridge._send_payload = lambda payload: None
+
+            await bridge.resume_active_radio_stations()
+
+        self.assertEqual(bridge.played_queries, ["Nuclear 80s hits"])
+        self.assertEqual(bridge.notices, [])
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     def test_radio_search_query_avoids_similarity_wording_and_excludes_junk(self):

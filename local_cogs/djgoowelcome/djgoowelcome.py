@@ -102,6 +102,7 @@ class DjGooWelcome(commands.Cog):
 
     async def _command_queue_loop(self) -> None:
         await self.bot.wait_until_red_ready()
+        await self._audio_bridge.resume_active_radio_stations()
         while True:
             try:
                 for item in drain_queue(self._queue_path()):

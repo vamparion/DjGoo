@@ -90,6 +90,7 @@ class DjGooStationsTests(unittest.TestCase):
             self.assertEqual(stations.get_active(20)["id"], guild_two_station["id"])
             self.assertNotEqual(stations.get_active(10)["id"], stations.get_active(20)["id"])
             self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["active"]["10"], "sandstorm")
+            self.assertEqual(stations.active_guild_ids(), [10, 20])
 
     def test_clear_active_station_only_removes_requested_guild(self):
         with tempfile.TemporaryDirectory() as temp_dir:

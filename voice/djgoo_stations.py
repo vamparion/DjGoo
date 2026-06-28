@@ -103,6 +103,16 @@ class DjGooStations:
         station = data["stations"].get(active)
         return station if isinstance(station, dict) else None
 
+    def active_guild_ids(self) -> List[int]:
+        data = self._read()
+        guild_ids = []
+        for guild_id in data.get("active", {}):
+            try:
+                guild_ids.append(int(guild_id))
+            except (TypeError, ValueError):
+                continue
+        return guild_ids
+
     def clear_active(self, guild_id: int) -> None:
         data = self._read()
         data["active"].pop(str(guild_id), None)
