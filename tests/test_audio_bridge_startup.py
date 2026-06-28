@@ -268,6 +268,59 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(bridge.sent, [])
 
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_resolve_play_query_uses_nuclear_when_available(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        class Resolver:
+            def resolve_track_query(self, query):
+                return f"Resolved {query}"
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge.nuclear = Resolver()
+
+        self.assertEqual(await bridge._resolve_play_query("song"), "Resolved song")
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_resolve_play_query_falls_back_to_original_query(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        class Resolver:
+            def resolve_track_query(self, query):
+                return None
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge.nuclear = Resolver()
+
+        self.assertEqual(await bridge._resolve_play_query("song"), "song")
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_play_album_queues_resolved_album_tracks(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        class Resolver:
+            def resolve_album_queries(self, query):
+                return ["Artist - One official audio", "Artist - Two official audio"]
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge.nuclear = Resolver()
+        bridge.notices = []
+        bridge.invoked = []
+
+        async def notice(message):
+            bridge.notices.append(message)
+
+        async def invoke(command, ctx, *args, **kwargs):
+            bridge.invoked.append(kwargs["query"])
+
+        bridge._notice = notice
+        bridge._invoke = invoke
+
+        result = await bridge._play_album(FakeAudio(), FakeContext(), "Album")
+
+        self.assertEqual(result, "Queued album Album")
+        self.assertEqual(bridge.invoked, ["Artist - One official audio", "Artist - Two official audio"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -21,6 +21,7 @@ class VoiceCommandParserTests(unittest.TestCase):
             "skip": ("skip", ""),
             "SKIP": ("skip", ""),
             "radio Sandstorm": ("start_radio", "Sandstorm"),
+            "play album Discovery": ("play_album", "Discovery"),
         }
 
         for transcript, expected in examples.items():
@@ -103,6 +104,12 @@ class VoiceCommandParserTests(unittest.TestCase):
         self.assertEqual(save.playlist, "white girl music")
         self.assertEqual(play.intent, "shuffle_playlist")
         self.assertEqual(play.playlist, "80s")
+
+    def test_parses_album_play(self):
+        parsed = parse_command("DjGoo play album Discovery")
+
+        self.assertEqual(parsed.intent, "play_album")
+        self.assertEqual(parsed.query, "Discovery")
 
     def test_parses_radio_station_commands(self):
         radio = parse_command("DjGoo radio Sandstorm")

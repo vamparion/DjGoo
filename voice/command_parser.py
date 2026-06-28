@@ -96,6 +96,9 @@ def parse_command(transcript: str, *, require_wake: bool = True) -> ParsedComman
     if lowered.startswith("play playlist "):
         playlist = _clean_playlist_name(command[len("play playlist ") :])
         return ParsedCommand(intent="play_playlist", playlist=playlist, raw=raw)
+    if lowered.startswith("play album "):
+        query = _normalize(command[len("play album ") :])
+        return ParsedCommand(intent="play_album", query=query, confidence=0.95, raw=raw)
     if lowered.startswith("shuffle "):
         playlist = _clean_playlist_name(command[len("shuffle ") :])
         return ParsedCommand(intent="shuffle_playlist", playlist=playlist, raw=raw)

@@ -14,6 +14,7 @@ import lavalink
 from lavalink import NodeNotFound, PlayerNotFound
 
 from voice.djgoo_playlists import DjGooPlaylists
+from voice.nuclear_resolver import NuclearResolver
 from voice.djgoo_stations import DjGooStations, track_key
 
 from .helpers import (
@@ -194,6 +195,7 @@ class DjGooAudioBridge:
         self.playlists = DjGooPlaylists(project_root / "data" / "djgoo-playlists.json")
         self.stations = DjGooStations(project_root / "data" / "djgoo-stations.json")
         self.stations.clear_all_active()
+        self.nuclear = NuclearResolver()
         self._send_payload = send_payload
         self._recent_control_posts: Dict[int, tuple[str, float]] = {}
         self._ytmusic = None
@@ -248,14 +250,17 @@ class DjGooAudioBridge:
                 if not query:
                     await self._notice("I need a song name or URL.")
                     return "Missing query"
-                if not await self._play_query_when_ready(audio, ctx, query):
+                resolved_query = await self._resolve_play_query(query)
+                if not await self._play_query_when_ready(audio, ctx, resolved_query):
                     await self._notice(
                         "DjGoo is still warming up the music engine. I did not start playback yet, "
                         "so try that command again in a few seconds if nothing starts."
                     )
                     return "Playback startup failed"
                 await self._send_controls_for_player(ctx)
-                return f"Playing {query}"
+                return f"Playing {resolved_query}"
+            if intent == "play_album":
+                return await self._play_album(audio, ctx, str(item.get("query", "")))
             if intent == "play_playlist":
                 return await self._play_playlist(audio, ctx, str(item.get("playlist", "")), shuffle=False)
             if intent == "shuffle_playlist":
@@ -403,6 +408,24 @@ class DjGooAudioBridge:
                 await self._invoke(audio.command_play, ctx, query=str(query))
         await self._notice(f"Queued {len(tracks)} track(s) from `{playlist_name}`.")
         return f"Queued playlist {playlist_name}"
+
+    async def _resolve_play_query(self, query: str) -> str:
+        resolved = await asyncio.to_thread(self.nuclear.resolve_track_query, query)
+        return resolved or query
+
+    async def _play_album(self, audio, ctx, query: str) -> str:
+        query = query.strip()
+        if not query:
+            await self._notice("Tell me which album to play.")
+            return "Missing album query"
+        tracks = await asyncio.to_thread(self.nuclear.resolve_album_queries, query)
+        if not tracks:
+            await self._notice(f"I could not find album tracks for `{query}`.")
+            return "Album missing"
+        for track_query in tracks:
+            await self._invoke(audio.command_play, ctx, query=track_query)
+        await self._notice(f"Queued {len(tracks)} track(s) from `{query}`.")
+        return f"Queued album {query}"
 
     async def _start_radio(self, audio, ctx, seed: str) -> str:
         seed = seed.strip()
