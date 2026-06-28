@@ -65,6 +65,12 @@ def _clean_playlist_name(text: str) -> str:
     return _normalize(text).lower()
 
 
+def _matches_command_phrase(command: str, phrase: str) -> bool:
+    if command == phrase:
+        return True
+    return command.startswith(f"{phrase} ")
+
+
 def parse_command(transcript: str, *, require_wake: bool = True) -> ParsedCommand:
     raw = _normalize(transcript)
     command = _after_wake(raw) if require_wake else _normalize(raw)
@@ -140,7 +146,7 @@ def parse_command(transcript: str, *, require_wake: bool = True) -> ParsedComman
         (("cancel", "never mind"), "cancel"),
     ]
     for phrases, intent in phrase_intents:
-        if any(phrase in lowered for phrase in phrases):
+        if any(_matches_command_phrase(lowered, phrase) for phrase in phrases):
             return ParsedCommand(intent=intent, raw=raw)
 
     return ParsedCommand(intent="unknown", query=command, confidence=0.35, raw=raw)

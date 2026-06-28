@@ -17,7 +17,9 @@ class VoiceCommandParserTests(unittest.TestCase):
     def test_push_to_talk_mode_does_not_require_wake_phrase(self):
         examples = {
             "play Sandstorm": ("play", "Sandstorm"),
+            "PLAY SANDSTORM": ("play", "SANDSTORM"),
             "skip": ("skip", ""),
+            "SKIP": ("skip", ""),
             "radio Sandstorm": ("start_radio", "Sandstorm"),
         }
 
@@ -50,6 +52,22 @@ class VoiceCommandParserTests(unittest.TestCase):
 
         self.assertEqual(parsed.intent, "play")
         self.assertEqual(parsed.query, "Sandstorm")
+
+    def test_song_titles_with_stop_are_not_control_commands(self):
+        examples = {
+            "play dont stop the music": ("play", "dont stop the music"),
+            "PLAY DON'T STOP THE MUSIC": ("play", "DON'T STOP THE MUSIC"),
+            "DjGoo play dont stop the music": ("play", "dont stop the music"),
+            "DjGoo don't stop the music": ("unknown", ""),
+        }
+
+        for transcript, expected in examples.items():
+            with self.subTest(transcript=transcript):
+                parsed = parse_command(transcript, require_wake=transcript.lower().startswith("dj"))
+
+                self.assertEqual(parsed.intent, expected[0])
+                if expected[1]:
+                    self.assertEqual(parsed.query, expected[1])
 
     def test_does_not_wake_on_casual_mentions_of_dj(self):
         parsed = parse_command("that DJ was great play sandstorm")

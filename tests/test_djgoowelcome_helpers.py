@@ -135,7 +135,9 @@ class DjGooWelcomeHelperTests(unittest.TestCase):
 
         examples = {
             "DjGoo play Sandstorm": "play Sandstorm",
+            "DJGOO PLAY SANDSTORM": "PLAY SANDSTORM",
             "DjGoo, skip": "skip",
+            "DJGOO SKIP": "SKIP",
             "DJ stop": "stop",
             "DeeJay queue": "queue",
             "hey DjGoo volume 50": "volume 50",
