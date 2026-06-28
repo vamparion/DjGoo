@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DjGoo Control Center Mockup</title>
+  <style>
+    :root {
+      --bg: #101316;
+      --panel: #181d22;
+      --panel-2: #20262d;
+      --line: #313943;
+      --text: #f2f6fb;
+      --muted: #9aa7b5;
+      --blue: #4f7cff;
+      --green: #12a66a;
+      --red: #dc3d4e;
+      --amber: #d6a33c;
+      --purple: #8c6cff;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, Segoe UI, system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 236px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    aside {
+      border-right: 1px solid var(--line);
+      background: #11161b;
+      padding: 18px 14px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 20px;
+      font-weight: 800;
+      letter-spacing: .2px;
+    }
+
+    .mark {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: var(--blue);
+      color: white;
+      font-weight: 900;
+    }
+
+    nav {
+      display: grid;
+      gap: 6px;
+    }
+
+    nav button, .control {
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted);
+      padding: 10px 11px;
+      text-align: left;
+      font: inherit;
+      font-size: 14px;
+    }
+
+    nav button.active {
+      background: var(--panel-2);
+      color: var(--text);
+      border-color: var(--line);
+    }
+
+    main {
+      min-width: 0;
+      padding: 18px;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: 24px; line-height: 1.1; }
+    h2 { font-size: 16px; margin-bottom: 10px; }
+    h3 { font-size: 14px; margin-bottom: 6px; }
+    p { color: var(--muted); line-height: 1.45; font-size: 13px; }
+
+    .status {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 10px;
+      color: var(--muted);
+      font-size: 12px;
+      background: #14191e;
+    }
+
+    .ok { color: #72e3a8; }
+    .warn { color: #ffd36a; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(330px, .65fr);
+      gap: 14px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 14px;
+      min-width: 0;
+    }
+
+    .now {
+      display: grid;
+      grid-template-columns: 96px minmax(0, 1fr);
+      gap: 14px;
+      align-items: center;
+    }
+
+    .art {
+      aspect-ratio: 1;
+      border-radius: 8px;
+      background:
+        linear-gradient(135deg, rgba(79,124,255,.9), rgba(18,166,106,.85)),
+        repeating-linear-gradient(45deg, transparent 0 12px, rgba(255,255,255,.12) 12px 13px);
+    }
+
+    .track-title {
+      font-size: 22px;
+      font-weight: 800;
+      margin-bottom: 5px;
+      overflow-wrap: anywhere;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+
+    .buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .btn {
+      border: 0;
+      border-radius: 7px;
+      padding: 10px 13px;
+      color: white;
+      font-weight: 700;
+      background: var(--panel-2);
+      font-size: 13px;
+    }
+
+    .primary { background: var(--blue); }
+    .good { background: var(--green); }
+    .danger { background: var(--red); }
+    .soft { background: #2a313a; color: var(--text); }
+    .amber { background: var(--amber); color: #17120a; }
+
+    .search {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    input, select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #12171c;
+      color: var(--text);
+      padding: 11px 12px;
+      font: inherit;
+      font-size: 14px;
+    }
+
+    .two {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px;
+      border-radius: 7px;
+      background: #131920;
+      border: 1px solid #252d36;
+    }
+
+    .row strong {
+      display: block;
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .row span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .tab {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 10px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .tab.active {
+      background: rgba(79,124,255,.15);
+      color: #cbd7ff;
+      border-color: rgba(79,124,255,.5);
+    }
+
+    .health {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+
+    .metric {
+      border: 1px solid #29323c;
+      background: #131920;
+      border-radius: 7px;
+      padding: 10px;
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
+    .metric span {
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .mobile {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: 170px minmax(0, 1fr);
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .phone {
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 12px;
+      background: #0d1115;
+    }
+
+    .phone-screen {
+      border-radius: 14px;
+      background: var(--panel);
+      min-height: 260px;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+      align-content: start;
+    }
+
+    .small-button {
+      border: 0;
+      border-radius: 7px;
+      padding: 9px 10px;
+      background: var(--panel-2);
+      color: var(--text);
+      font-weight: 700;
+      font-size: 12px;
+    }
+
+    @media (max-width: 960px) {
+      .shell { grid-template-columns: 1fr; }
+      aside { position: sticky; top: 0; z-index: 2; border-right: 0; border-bottom: 1px solid var(--line); }
+      nav { display: flex; overflow-x: auto; }
+      nav button { white-space: nowrap; }
+      .grid, .two, .mobile { grid-template-columns: 1fr; }
+      header { align-items: flex-start; flex-direction: column; }
+      .status { justify-content: flex-start; }
+      .search { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <div class="brand"><div class="mark">DG</div><div>DjGoo Control</div></div>
+      <nav aria-label="DjGoo sections">
+        <button class="active">Live</button>
+        <button>Nuclear Search</button>
+        <button>Stations</button>
+        <button>Playlists</button>
+        <button>Guest Mode</button>
+        <button>Health</button>
+        <button>Settings</button>
+      </nav>
+    </aside>
+
+    <main>
+      <header>
+        <div>
+          <h1>Hybrid Control Center</h1>
+          <p>Fast enough for a Rocket League match, deep enough for playlist and station tuning later.</p>
+        </div>
+        <div class="status">
+          <div class="pill ok">Redbot online</div>
+          <div class="pill ok">Lavalink connected</div>
+          <div class="pill ok">Nuclear MCP ready</div>
+          <div class="pill warn">Guest mode private</div>
+        </div>
+      </header>
+
+      <div class="grid">
+        <section class="panel">
+          <h2>Game-Time Live Controls</h2>
+          <div class="now">
+            <div class="art"></div>
+            <div>
+              <div class="track-title">Tears For Fears - Everybody Wants To Rule The World</div>
+              <div class="meta">Station: 80s radio | Source: Nuclear resolved | Queue: 3 tracks ready</div>
+              <div class="buttons">
+                <button class="btn primary">Play / Pause</button>
+                <button class="btn primary">Skip</button>
+                <button class="btn soft">Replay</button>
+                <button class="btn danger">Stop</button>
+                <button class="btn good">Like</button>
+                <button class="btn soft">More Like</button>
+                <button class="btn soft">Less Like</button>
+                <button class="btn danger">Ban</button>
+                <button class="btn amber">Stop Radio</button>
+                <button class="btn soft">Reset DjGoo</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="search">
+            <input value="" placeholder="Search Nuclear, queue a song, or start a station">
+            <select>
+              <option>Play next</option>
+              <option>Add to queue</option>
+              <option>Start radio</option>
+              <option>Add to playlist</option>
+            </select>
+            <button class="btn primary">Search</button>
+          </div>
+
+          <div class="two">
+            <div>
+              <h2>Queue</h2>
+              <div class="list">
+                <div class="row"><div><strong>Vanessa Carlton - A Thousand Miles</strong><span>Requested by oinkblaster</span></div><button class="small-button">Move</button></div>
+                <div class="row"><div><strong>Darude - Sandstorm</strong><span>Radio continuation</span></div><button class="small-button">Next</button></div>
+                <div class="row"><div><strong>Robert Palmer - Addicted To Love</strong><span>Saved from station</span></div><button class="small-button">Save</button></div>
+              </div>
+            </div>
+            <div>
+              <h2>Station Memory</h2>
+              <div class="tabs">
+                <button class="tab active">Liked</button>
+                <button class="tab">More Like</button>
+                <button class="tab">Less Like</button>
+                <button class="tab">Banned</button>
+              </div>
+              <div class="list">
+                <div class="row"><div><strong>Cyndi Lauper - Time After Time</strong><span>80s radio taste anchor</span></div><button class="small-button">Remove</button></div>
+                <div class="row"><div><strong>a-ha - Take On Me</strong><span>More like this</span></div><button class="small-button">Edit</button></div>
+                <div class="row"><div><strong>Full Album Collection</strong><span>Banned from this station</span></div><button class="small-button">Keep</button></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="panel">
+          <h2>Health + Diagnostics</h2>
+          <div class="health">
+            <div class="metric"><strong>Redbot</strong><span class="ok">Online</span></div>
+            <div class="metric"><strong>Voice listener</strong><span class="ok">F12 ready</span></div>
+            <div class="metric"><strong>Nuclear</strong><span class="ok">MCP ready</span></div>
+            <div class="metric"><strong>Webhook</strong><span class="ok">Gaming</span></div>
+          </div>
+
+          <div style="height:14px"></div>
+          <h2>Downtime Management</h2>
+          <div class="list">
+            <div class="row"><div><strong>Playlists</strong><span>Create, dedupe, reorder, merge, repair bad tracks</span></div><button class="small-button">Open</button></div>
+            <div class="row"><div><strong>Stations</strong><span>Rename, clean bad history, export/import taste</span></div><button class="small-button">Tune</button></div>
+            <div class="row"><div><strong>Guests</strong><span>Request queue, permissions, rate limits, phone link</span></div><button class="small-button">Share</button></div>
+            <div class="row"><div><strong>Logs</strong><span>Playback errors, bad picks, failed buttons</span></div><button class="small-button">View</button></div>
+          </div>
+        </aside>
+      </div>
+
+      <section class="panel mobile">
+        <div class="phone">
+          <div class="phone-screen">
+            <h3>Guest Remote</h3>
+            <p>Now: Everybody Wants To Rule The World</p>
+            <button class="small-button">Request Song</button>
+            <button class="small-button">Vote Skip</button>
+            <button class="small-button">Like Current</button>
+            <button class="small-button">View Queue</button>
+          </div>
+        </div>
+        <div>
+          <h2>Guest Mode Later</h2>
+          <p>When you are ready to share this with Discord members, they get a phone-first page with search, request queue, voting, and now-playing info. Admin rules keep it from becoming chaos: request limits, approval mode, trusted users, blocked terms, and emergency lock.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

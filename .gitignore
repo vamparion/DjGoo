@@ -2,6 +2,7 @@ config/secrets.json
 logs/
 data/
 .localappdata/
+/.superpowers/
 .venv/
 .voice-venv/
 .worktrees/

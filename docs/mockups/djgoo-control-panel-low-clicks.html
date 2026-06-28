@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DjGoo Low-Click Control Concept</title>
+  <style>
+    :root {
+      --bg: #0d1014;
+      --rail: #12171d;
+      --panel: #171d24;
+      --panel2: #202832;
+      --line: #303a46;
+      --text: #f4f7fb;
+      --muted: #9ba7b4;
+      --blue: #4676ff;
+      --green: #09a96b;
+      --red: #dc3c4d;
+      --amber: #d8a538;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, Segoe UI, system-ui, sans-serif;
+    }
+    button, input, select { font: inherit; }
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+    .topbar {
+      display: grid;
+      grid-template-columns: auto minmax(280px, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #0f1419;
+      position: sticky;
+      top: 0;
+      z-index: 5;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 850;
+      white-space: nowrap;
+    }
+    .logo {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 7px;
+      background: var(--blue);
+    }
+    .command {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 8px;
+    }
+    input, select {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #10161c;
+      color: var(--text);
+      padding: 11px 12px;
+      min-width: 0;
+    }
+    .btn {
+      border: 0;
+      border-radius: 7px;
+      color: white;
+      padding: 10px 12px;
+      font-weight: 760;
+      background: var(--panel2);
+      white-space: nowrap;
+    }
+    .primary { background: var(--blue); }
+    .good { background: var(--green); }
+    .danger { background: var(--red); }
+    .amber { background: var(--amber); color: #171103; }
+    .ghost { border: 1px solid var(--line); background: transparent; color: var(--muted); }
+    .content {
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr) 340px;
+      gap: 14px;
+      padding: 14px;
+      min-height: 0;
+    }
+    .rail {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--rail);
+      padding: 8px;
+      display: grid;
+      gap: 8px;
+      align-content: start;
+    }
+    .rail button {
+      width: 54px;
+      height: 54px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted);
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .rail button.active {
+      background: var(--panel2);
+      color: var(--text);
+      border-color: var(--line);
+    }
+    .stack { display: grid; gap: 14px; align-content: start; min-width: 0; }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 14px;
+      min-width: 0;
+    }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: 21px; line-height: 1.1; }
+    h2 { font-size: 15px; margin-bottom: 10px; }
+    h3 { font-size: 13px; }
+    p { color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .hero {
+      display: grid;
+      grid-template-columns: 112px minmax(0, 1fr);
+      gap: 14px;
+      align-items: center;
+    }
+    .art {
+      width: 112px;
+      aspect-ratio: 1;
+      border-radius: 8px;
+      background:
+        linear-gradient(135deg, rgba(70,118,255,.95), rgba(9,169,107,.82)),
+        repeating-linear-gradient(45deg, rgba(255,255,255,.12) 0 2px, transparent 2px 13px);
+    }
+    .title {
+      font-size: 26px;
+      line-height: 1.08;
+      font-weight: 880;
+      overflow-wrap: anywhere;
+      margin-bottom: 6px;
+    }
+    .meta {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+    .actions {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(82px, 1fr));
+      gap: 8px;
+    }
+    .smart-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+    }
+    .smart {
+      border: 1px solid #29323d;
+      border-radius: 8px;
+      background: #131920;
+      padding: 11px;
+      display: grid;
+      gap: 7px;
+    }
+    .smart strong { font-size: 13px; }
+    .smart button { width: 100%; }
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+    .list { display: grid; gap: 8px; }
+    .row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      border: 1px solid #28313b;
+      background: #121820;
+      border-radius: 7px;
+      padding: 9px;
+    }
+    .row strong {
+      display: block;
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .row span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+    .side {
+      display: grid;
+      gap: 14px;
+      align-content: start;
+      min-width: 0;
+    }
+    .health {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .metric {
+      border: 1px solid #29323b;
+      border-radius: 7px;
+      background: #121820;
+      padding: 10px;
+    }
+    .metric span { display: block; color: var(--muted); font-size: 12px; }
+    .metric strong { display: block; margin-top: 4px; font-size: 14px; }
+    .ok { color: #70e5a8; }
+    .warn { color: #ffd678; }
+    .bottom {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 14px;
+      border-top: 1px solid var(--line);
+      background: #0f1419;
+      position: sticky;
+      bottom: 0;
+      z-index: 4;
+    }
+    .mini-title {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .phone-preview {
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: #0b0f13;
+      padding: 10px;
+      width: 170px;
+      margin: 0 auto;
+    }
+    .phone-screen {
+      border-radius: 13px;
+      background: #171d24;
+      padding: 10px;
+      display: grid;
+      gap: 7px;
+    }
+    .phone-screen .btn { width: 100%; padding: 9px; font-size: 12px; }
+    @media (max-width: 1100px) {
+      .content { grid-template-columns: 62px minmax(0, 1fr); }
+      .side { grid-column: 2; grid-template-columns: 1fr 1fr; }
+      .actions { grid-template-columns: repeat(3, 1fr); }
+    }
+    @media (max-width: 760px) {
+      .topbar, .content, .bottom { grid-template-columns: 1fr; }
+      .rail { display: flex; overflow-x: auto; }
+      .rail button { flex: 0 0 auto; }
+      .side, .split, .smart-row, .hero { grid-template-columns: 1fr; }
+      .actions { grid-template-columns: repeat(2, 1fr); }
+      .art { width: 92px; }
+      .title { font-size: 21px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand"><div class="logo">DG</div><div>DjGoo</div></div>
+      <div class="command">
+        <input placeholder="Type once: play song, radio 80s, add current to chill, ban this">
+        <select>
+          <option>Auto action</option>
+          <option>Play now</option>
+          <option>Play next</option>
+          <option>Add to playlist</option>
+          <option>Start radio</option>
+        </select>
+        <button class="btn primary">Go</button>
+      </div>
+      <button class="btn danger">Panic Stop</button>
+    </header>
+
+    <main class="content">
+      <nav class="rail" aria-label="DjGoo tools">
+        <button class="active">Live</button>
+        <button>Find</button>
+        <button>Radio</button>
+        <button>Lists</button>
+        <button>Guests</button>
+        <button>Logs</button>
+      </nav>
+
+      <div class="stack">
+        <section class="panel hero">
+          <div class="art"></div>
+          <div>
+            <h1 class="title">Tears For Fears - Everybody Wants To Rule The World</h1>
+            <div class="meta">80s radio | Nuclear resolved | 03:42 left | Queue protected with 3 clean tracks</div>
+            <div class="actions">
+              <button class="btn primary">Pause</button>
+              <button class="btn primary">Skip</button>
+              <button class="btn good">Like</button>
+              <button class="btn">More Like</button>
+              <button class="btn">Less Like</button>
+              <button class="btn danger">Ban</button>
+              <button class="btn amber">Stop Radio</button>
+              <button class="btn">Save</button>
+              <button class="btn">Play Next</button>
+              <button class="btn">Queue</button>
+              <button class="btn">Volume</button>
+              <button class="btn danger">Reset</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="smart-row">
+          <div class="smart">
+            <strong>One-tap playlist add</strong>
+            <p>Current track goes to your most-used lists.</p>
+            <button class="btn">Chill</button>
+            <button class="btn">80s</button>
+          </div>
+          <div class="smart">
+            <strong>Fix bad radio</strong>
+            <p>Ban current, clear queue, replace with station-safe picks.</p>
+            <button class="btn danger">Ban + Replace</button>
+          </div>
+          <div class="smart">
+            <strong>Guest requests</strong>
+            <p>Approve the next clean request with one tap.</p>
+            <button class="btn primary">Approve Next</button>
+          </div>
+          <div class="smart">
+            <strong>Recovery</strong>
+            <p>Restart Redbot, voice listener, and resume only when reset.</p>
+            <button class="btn danger">Reset DjGoo</button>
+          </div>
+        </section>
+
+        <section class="split">
+          <div class="panel">
+            <h2>Queue, One-Tap Editable</h2>
+            <div class="list">
+              <div class="row"><div><strong>Vanessa Carlton - A Thousand Miles</strong><span>Play next | requested by guest</span></div><button class="btn">Next</button></div>
+              <div class="row"><div><strong>Darude - Sandstorm</strong><span>Station continuation</span></div><button class="btn">Pin</button></div>
+              <div class="row"><div><strong>Cyndi Lauper - Time After Time</strong><span>80s radio taste anchor</span></div><button class="btn">Save</button></div>
+            </div>
+          </div>
+          <div class="panel">
+            <h2>Radio Taste, Station-Local</h2>
+            <div class="list">
+              <div class="row"><div><strong>Liked: 12 songs</strong><span>Only affects 80s radio</span></div><button class="btn">Open</button></div>
+              <div class="row"><div><strong>Less Like: 4 songs</strong><span>Steers away without bleeding to 90s</span></div><button class="btn">Tune</button></div>
+              <div class="row"><div><strong>Banned: 9 bad picks</strong><span>Clips, mixes, long collections</span></div><button class="btn">Clean</button></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <aside class="side">
+        <section class="panel">
+          <h2>System Health</h2>
+          <div class="health">
+            <div class="metric"><span>Redbot</span><strong class="ok">Online</strong></div>
+            <div class="metric"><span>Lavalink</span><strong class="ok">Ready</strong></div>
+            <div class="metric"><span>Nuclear</span><strong class="ok">MCP</strong></div>
+            <div class="metric"><span>Voice</span><strong class="ok">F12</strong></div>
+          </div>
+        </section>
+        <section class="panel">
+          <h2>Phone Guest Mode</h2>
+          <div class="phone-preview">
+            <div class="phone-screen">
+              <h3>DjGoo Remote</h3>
+              <p>Now playing visible first.</p>
+              <button class="btn primary">Request Song</button>
+              <button class="btn">Vote Skip</button>
+              <button class="btn good">Like</button>
+              <button class="btn">Queue</button>
+            </div>
+          </div>
+        </section>
+        <section class="panel">
+          <h2>Downtime Tools</h2>
+          <div class="list">
+            <div class="row"><div><strong>Playlist repair</strong><span>Find dupes and bad old entries</span></div><button class="btn">Run</button></div>
+            <div class="row"><div><strong>Station cleanup</strong><span>Clear polluted recent history</span></div><button class="btn">Clean</button></div>
+            <div class="row"><div><strong>Export backup</strong><span>Playlists and stations</span></div><button class="btn">Save</button></div>
+          </div>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="bottom">
+      <button class="btn primary">Skip</button>
+      <div class="mini-title">Persistent footer: critical controls stay reachable from every screen, even on mobile.</div>
+      <div class="actions" style="display:flex">
+        <button class="btn good">Like</button>
+        <button class="btn">Less Like</button>
+        <button class="btn danger">Stop</button>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>
