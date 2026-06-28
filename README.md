@@ -10,6 +10,31 @@ Run:
 .\Start-DjGoo.command.ps1
 ```
 
+## Control Panel
+
+Build the web UI once after frontend changes:
+
+```powershell
+cd control_panel_ui
+npm install
+npm run build
+cd ..
+```
+
+Start the local control panel:
+
+```powershell
+.\Start-DjGoo-ControlPanel.ps1
+```
+
+Open:
+
+```text
+http://127.0.0.1:8765
+```
+
+The panel is local/admin-only in Phase 1. Guest phone mode comes later.
+
 ## Stop
 
 Run:
