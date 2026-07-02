@@ -11,6 +11,8 @@ $alreadyRunning = Get-CimInstance Win32_Process | Where-Object {
     ($_.ProcessId -ne $PID) -and
     (
         $_.CommandLine -like "*redbot.exe*discordbot*" -or
+        $_.CommandLine -like "*tools\start_redbot_selector.py*" -or
+        $_.CommandLine -like "*-m redbot*discordbot*" -or
         $_.CommandLine -like "*start-djgoo.ps1*" -or
         $_.CommandLine -like "*data\discordbot\cogs\Audio\Lavalink.jar*"
     )

@@ -5,4 +5,4 @@ $env:REDBOT_CONFIG_DIR = Join-Path $ProjectRoot ".localappdata\Red-DiscordBot\Re
 $env:DJGOO_SECRETS_FILE = Join-Path $ProjectRoot "config\secrets.json"
 
 Set-Location $ProjectRoot
-& (Join-Path $ProjectRoot ".venv\Scripts\redbot.exe") discordbot --cog-path (Join-Path $ProjectRoot "local_cogs") --load-cogs audio djgoowelcome
+& (Join-Path $ProjectRoot ".venv\Scripts\python.exe") (Join-Path $ProjectRoot "tools\start_redbot_selector.py")
