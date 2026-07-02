@@ -45,24 +45,42 @@ def wait_for_hotkey_press(hotkey: str, *, poll_seconds: float = 0.03) -> None:
         time.sleep(poll_seconds)
 
 
-def record_while_hotkey_held(
+def wait_for_hotkey_release(hotkey: str, *, poll_seconds: float = 0.03) -> None:
+    while is_hotkey_down(hotkey):
+        time.sleep(poll_seconds)
+
+
+def audio_rms(audio: np.ndarray) -> float:
+    if audio.size == 0:
+        return 0.0
+    return float(np.sqrt(np.mean(np.square(audio))))
+
+
+def record_hotkey_command(
     hotkey: str,
     *,
     min_seconds: float,
+    tap_seconds: float,
     max_seconds: float,
     block_seconds: float = 0.1,
 ) -> np.ndarray:
     block_frames = max(1, int(SAMPLE_RATE * block_seconds))
     max_frames = int(SAMPLE_RATE * max_seconds)
     min_frames = int(SAMPLE_RATE * min_seconds)
+    tap_frames = int(SAMPLE_RATE * tap_seconds)
     chunks = []
     total_frames = 0
+    released_after_min = False
     with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32") as stream:
         while total_frames < max_frames:
             data, _overflowed = stream.read(block_frames)
             chunks.append(data.reshape(-1).copy())
             total_frames += len(chunks[-1])
-            if total_frames >= min_frames and not is_hotkey_down(hotkey):
+
+            hotkey_down = is_hotkey_down(hotkey)
+            if total_frames >= min_frames and not hotkey_down:
+                released_after_min = True
+            if released_after_min and total_frames >= tap_frames:
                 break
     if not chunks:
         return np.array([], dtype="float32")
@@ -100,7 +118,7 @@ def run(project_root: Path) -> None:
     print(f"Loading Whisper model {settings['model_name']} ({settings['compute_type']})...", flush=True)
     model = WhisperModel(settings["model_name"], device="cpu", compute_type=settings["compute_type"])
     if settings["push_to_talk"]:
-        ready_message = f"DjGoo local voice listener is running. Hold {settings['hotkey']} and speak a command."
+        ready_message = f"DjGoo local voice listener is running. Tap {settings['hotkey']} and speak a command."
     else:
         ready_message = "DjGoo local voice listener is running. Say 'DjGoo ...' into the default mic."
     print(ready_message, flush=True)
@@ -109,13 +127,19 @@ def run(project_root: Path) -> None:
     while True:
         if settings["push_to_talk"]:
             wait_for_hotkey_press(settings["hotkey"])
-            audio = record_while_hotkey_held(
+            print(f"Hotkey {settings['hotkey']} detected. Recording command...", flush=True)
+            audio = record_hotkey_command(
                 settings["hotkey"],
                 min_seconds=settings["min_record_seconds"],
+                tap_seconds=settings["tap_record_seconds"],
                 max_seconds=settings["max_record_seconds"],
             )
+            wait_for_hotkey_release(settings["hotkey"])
         else:
             audio = record_chunk(settings["chunk_seconds"])
+        duration = audio.size / SAMPLE_RATE if audio.size else 0.0
+        rms = audio_rms(audio)
+        print(f"Recorded {duration:.1f}s, mic level {rms:.4f}.", flush=True)
         transcript = transcribe(
             model,
             audio,
@@ -125,6 +149,7 @@ def run(project_root: Path) -> None:
             initial_prompt=settings["initial_prompt"],
         )
         if not transcript:
+            print("No speech recognized.", flush=True)
             continue
 
         print(f"Heard: {transcript}", flush=True)
@@ -142,9 +167,11 @@ def run(project_root: Path) -> None:
 
         command = parse_command(transcript, require_wake=settings["require_wake_word"])
         if command.intent in {"ignore", "unknown"}:
+            print(f"Ignored transcript as {command.intent}: {transcript}", flush=True)
             continue
 
         append_queue_item(settings["queue_path"], command_to_queue_item(command, transcript=transcript))
+        print(f"Queued command: {command.intent}", flush=True)
 
 
 def main() -> int:

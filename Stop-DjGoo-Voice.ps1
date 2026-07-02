@@ -2,7 +2,10 @@ $ErrorActionPreference = "Stop"
 
 $targets = Get-CimInstance Win32_Process | Where-Object {
     ($_.Name -eq "python.exe") -and
-    ($_.CommandLine -like "*voice.djgoo_voice_listener*")
+    (
+        $_.CommandLine -like "*-m voice.djgoo_voice_listener*" -or
+        $_.CommandLine -like "*\\voice\\djgoo_voice_listener.py*"
+    )
 }
 
 foreach ($proc in $targets) {
