@@ -23,6 +23,9 @@ if ($alreadyRunning) {
     exit 0
 }
 
+& (Join-Path $ProjectRoot "Start-DjGoo-Lavalink.command.ps1") *> $null
+Start-Sleep -Seconds 7
+
 Start-Process `
     -FilePath "powershell.exe" `
     -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $ProjectRoot "start-djgoo.ps1") `
