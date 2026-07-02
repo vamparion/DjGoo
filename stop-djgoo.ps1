@@ -3,15 +3,14 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 $targets = Get-CimInstance Win32_Process | Where-Object {
-    ($_.Name -in @("redbot.exe", "python.exe", "java.exe", "powershell.exe")) -and
     (
-        $_.CommandLine -like "*redbot.exe*discordbot*" -or
-        $_.CommandLine -like "*tools\start_redbot_selector.py*" -or
-        $_.CommandLine -like "*-m redbot*discordbot*" -or
-        $_.CommandLine -like "*start-djgoo.ps1*" -or
-        $_.CommandLine -like "*voice.djgoo_voice_listener*" -or
-        $_.CommandLine -like "*Lavalink.jar*" -or
-        $_.CommandLine -like "*data\discordbot\cogs\Audio\Lavalink.jar*"
+        ($_.Name -eq "redbot.exe" -and $_.CommandLine -like "*discordbot*") -or
+        ($_.Name -eq "python.exe" -and $_.CommandLine -like "*tools\start_redbot_selector.py*") -or
+        ($_.Name -eq "python.exe" -and $_.CommandLine -like "*-m voice.djgoo_voice_listener*") -or
+        ($_.Name -eq "python.exe" -and $_.CommandLine -like "*voice.djgoo_voice_listener*") -or
+        ($_.Name -eq "python.exe" -and $_.CommandLine -like "*-m redbot*discordbot*") -or
+        ($_.Name -eq "java.exe" -and $_.CommandLine -like "*Lavalink.jar*") -or
+        ($_.Name -eq "powershell.exe" -and $_.CommandLine -like "*-File*$ProjectRoot\start-djgoo.ps1*")
     )
 }
 

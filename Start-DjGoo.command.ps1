@@ -18,8 +18,16 @@ $alreadyRunning = Get-CimInstance Win32_Process | Where-Object {
 }
 
 if ($alreadyRunning) {
-    "DjGoo is already running. $(Get-Date -Format s)" | Add-Content -LiteralPath $logPath
-    exit 0
+    & (Join-Path $ProjectRoot ".venv\Scripts\python.exe") (Join-Path $ProjectRoot "tools\djgoo_health.py") --project-root $ProjectRoot 2>&1 |
+        ForEach-Object { $_ | Add-Content -LiteralPath $logPath }
+    if ($LASTEXITCODE -eq 0) {
+        "DjGoo is already running and healthy. $(Get-Date -Format s)" | Add-Content -LiteralPath $logPath
+        & (Join-Path $ProjectRoot "Start-DjGoo-Voice.command.ps1") *> $null
+        exit 0
+    }
+    "DjGoo was running but unhealthy; restarting. $(Get-Date -Format s)" | Add-Content -LiteralPath $logPath
+    & (Join-Path $ProjectRoot "stop-djgoo.ps1") *> $null
+    Start-Sleep -Seconds 3
 }
 
 & (Join-Path $ProjectRoot "Repair-DjGoo-IPv6-Audio.ps1") *> $null

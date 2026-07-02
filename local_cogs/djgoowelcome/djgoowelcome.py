@@ -107,7 +107,13 @@ class DjGooWelcome(commands.Cog):
             try:
                 for item in drain_queue(self._queue_path()):
                     await self._send_webhook_payload(build_voice_command_payload(item))
-                    await self._audio_bridge.handle(item)
+                    result = await self._audio_bridge.handle(item)
+                    log.info(
+                        "DjGoo handled %s command from %s: %s",
+                        item.get("intent") or item.get("action") or item.get("type"),
+                        item.get("source", "unknown"),
+                        result,
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception:
