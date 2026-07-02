@@ -7,14 +7,13 @@ $logPath = Join-Path $logDir "startup.log"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
 $alreadyRunning = Get-CimInstance Win32_Process | Where-Object {
-    ($_.Name -in @("redbot.exe", "python.exe", "java.exe", "powershell.exe")) -and
+    ($_.Name -in @("redbot.exe", "python.exe", "powershell.exe")) -and
     ($_.ProcessId -ne $PID) -and
     (
         $_.CommandLine -like "*redbot.exe*discordbot*" -or
         $_.CommandLine -like "*tools\start_redbot_selector.py*" -or
         $_.CommandLine -like "*-m redbot*discordbot*" -or
-        $_.CommandLine -like "*start-djgoo.ps1*" -or
-        $_.CommandLine -like "*data\discordbot\cogs\Audio\Lavalink.jar*"
+        $_.CommandLine -like "*start-djgoo.ps1*"
     )
 }
 
@@ -23,6 +22,7 @@ if ($alreadyRunning) {
     exit 0
 }
 
+& (Join-Path $ProjectRoot "Repair-DjGoo-IPv6-Audio.ps1") *> $null
 & (Join-Path $ProjectRoot "Start-DjGoo-Lavalink.command.ps1") *> $null
 Start-Sleep -Seconds 7
 
@@ -31,5 +31,7 @@ Start-Process `
     -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $ProjectRoot "start-djgoo.ps1") `
     -WorkingDirectory $ProjectRoot `
     -WindowStyle Hidden
+
+& (Join-Path $ProjectRoot "Start-DjGoo-Voice.command.ps1") *> $null
 
 "Started DjGoo. $(Get-Date -Format s)" | Add-Content -LiteralPath $logPath

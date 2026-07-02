@@ -13,7 +13,6 @@ from faster_whisper import WhisperModel
 from voice.command_queue import append_queue_item, command_to_queue_item, followup_to_queue_item
 from voice.command_parser import PendingChoice, parse_command, parse_followup
 from voice.listener_settings import voice_settings
-from voice.overlay import send_overlay
 from voice.secrets import load_project_secrets
 
 
@@ -95,7 +94,6 @@ def transcribe(
 
 def run(project_root: Path) -> None:
     secrets = load_project_secrets(project_root)
-    webhook_url = secrets.get("webhook_url", "")
     voice_config = secrets.get("voice", {})
     settings = voice_settings(voice_config, project_root)
 
@@ -106,11 +104,6 @@ def run(project_root: Path) -> None:
     else:
         ready_message = "DjGoo local voice listener is running. Say 'DjGoo ...' into the default mic."
     print(ready_message, flush=True)
-    send_overlay(
-        webhook_url,
-        "DjGoo voice listener started",
-        f"Hold `{settings['hotkey']}` and speak a command." if settings["push_to_talk"] else "Listening on the default Windows microphone for `DjGoo ...`.",
-    )
 
     pending: PendingChoice | None = None
     while True:

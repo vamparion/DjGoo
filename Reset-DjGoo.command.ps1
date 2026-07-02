@@ -14,9 +14,6 @@ Start-Sleep -Seconds 3
 $env:DJGOO_RESUME_ACTIVE_RADIO = "1"
 & (Join-Path $ProjectRoot "Start-DjGoo.command.ps1") *> $null
 Remove-Item Env:\DJGOO_RESUME_ACTIVE_RADIO -ErrorAction SilentlyContinue
-"Started DjGoo bot. $(Get-Date -Format s)" | Add-Content -LiteralPath $logPath
-Start-Sleep -Seconds 3
-& (Join-Path $ProjectRoot "Start-DjGoo-Voice.command.ps1") *> $null
-"Started DjGoo voice listener. $(Get-Date -Format s)" | Add-Content -LiteralPath $logPath
+"Started DjGoo stack. $(Get-Date -Format s)" | Add-Content -LiteralPath $logPath
 
 "Reset command finished. $(Get-Date -Format s)" | Add-Content -LiteralPath $logPath
