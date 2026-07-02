@@ -24,6 +24,11 @@ if ($alreadyRunning) {
 
 & (Join-Path $ProjectRoot "Repair-DjGoo-IPv6-Audio.ps1") *> $null
 & (Join-Path $ProjectRoot "Start-DjGoo-Lavalink.command.ps1") *> $null
+& (Join-Path $ProjectRoot ".venv\Scripts\python.exe") (Join-Path $ProjectRoot "tools\wait_for_discord_network.py") --timeout 120 --stable-checks 5 2>&1 |
+    ForEach-Object { $_ | Add-Content -LiteralPath $logPath }
+if ($LASTEXITCODE -ne 0) {
+    throw "Discord network was not ready. See $logPath."
+}
 Start-Sleep -Seconds 7
 
 Start-Process `
