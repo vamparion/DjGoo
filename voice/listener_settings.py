@@ -16,6 +16,7 @@ def voice_settings(voice_config: Dict[str, Any], project_root: Path) -> Dict[str
     return {
         "model_name": voice_config.get("model", "small.en"),
         "chunk_seconds": float(voice_config.get("chunk_seconds", 4)),
+        "silence_rms_threshold": float(voice_config.get("silence_rms_threshold", 0.002)),
         "min_record_seconds": float(voice_config.get("min_record_seconds", 0.4)),
         "tap_record_seconds": float(voice_config.get("tap_record_seconds", voice_config.get("chunk_seconds", 4))),
         "max_record_seconds": float(voice_config.get("max_record_seconds", 8)),

@@ -71,7 +71,7 @@ def drain_queue(path: Path) -> List[Dict[str, Any]]:
                 if not line:
                     continue
                 try:
-                    items.append(json.loads(line))
+                    items.append(json.loads(line.lstrip("\ufeff")))
                 except json.JSONDecodeError:
                     continue
     finally:

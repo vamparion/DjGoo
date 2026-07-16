@@ -25,6 +25,7 @@ if (!(Test-Path $python)) {
 }
 
 $env:PYTHONPATH = $ProjectRoot
+$env:DJGOO_EVENT_LOG = Join-Path $logDir "djgoo-events.jsonl"
 Start-Process `
     -FilePath $python `
     -ArgumentList "-m", "voice.djgoo_voice_listener", "--project-root", $ProjectRoot `

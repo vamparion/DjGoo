@@ -66,6 +66,13 @@ class VoiceCommandQueueTests(unittest.TestCase):
 
             self.assertEqual(drain_queue(queue_path), [{"type": "command", "intent": "pause"}])
 
+    def test_drain_queue_accepts_utf8_bom_from_windows_powershell(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            queue_path = Path(temp_dir) / "voice-command-queue.jsonl"
+            queue_path.write_text('\ufeff{"type":"command","intent":"now"}\n', encoding="utf-8")
+
+            self.assertEqual(drain_queue(queue_path), [{"type": "command", "intent": "now"}])
+
 
 if __name__ == "__main__":
     unittest.main()

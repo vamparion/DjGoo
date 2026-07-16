@@ -277,6 +277,7 @@ def run(project_root: Path) -> None:
         push_to_talk=settings["push_to_talk"],
         require_wake_word=settings["require_wake_word"],
         queue_path=str(settings["queue_path"]),
+        silence_rms_threshold=settings["silence_rms_threshold"],
     )
 
     print(f"Loading Whisper model {settings['model_name']} ({settings['compute_type']})...", flush=True)
@@ -290,6 +291,7 @@ def run(project_root: Path) -> None:
 
     pending: PendingChoice | None = None
     hotkey_waiter = HotkeyWaiter(settings["hotkey"]) if settings["push_to_talk"] else None
+    last_silence_log = 0.0
     try:
         while True:
             if settings["push_to_talk"]:
@@ -309,6 +311,16 @@ def run(project_root: Path) -> None:
             rms = audio_rms(audio)
             print(f"Recorded {duration:.1f}s, mic level {rms:.4f}.", flush=True)
             log_event("voice.audio.recorded", seconds=round(duration, 2), rms=round(rms, 6))
+            if not settings["push_to_talk"] and rms < settings["silence_rms_threshold"]:
+                now = time.monotonic()
+                if now - last_silence_log >= 30.0:
+                    log_event(
+                        "voice.audio.silence",
+                        rms=round(rms, 6),
+                        threshold=settings["silence_rms_threshold"],
+                    )
+                    last_silence_log = now
+                continue
             transcript = transcribe(
                 model,
                 audio,

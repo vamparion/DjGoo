@@ -5,6 +5,7 @@ $logDir = Join-Path $ProjectRoot "logs"
 $logPath = Join-Path $logDir "startup.log"
 
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$env:DJGOO_EVENT_LOG = Join-Path $logDir "djgoo-events.jsonl"
 
 $alreadyRunning = Get-CimInstance Win32_Process | Where-Object {
     ($_.Name -in @("redbot.exe", "python.exe", "powershell.exe")) -and
