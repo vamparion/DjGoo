@@ -160,6 +160,23 @@ def parse_command(transcript: str, *, require_wake: bool = True) -> ParsedComman
     return ParsedCommand(intent="unknown", query=command, confidence=0.35, raw=raw)
 
 
+def parse_emergency_control(transcript: str) -> ParsedCommand:
+    raw = _normalize(transcript)
+    lowered = re.sub(r"^[\s\W_]+|[\s\W_]+$", "", raw.lower())
+    patterns = [
+        (r"^(skip|next)(?:\s+(it|this|song|track|please))?$", "skip"),
+        (r"^stop(?:\s+(music|song|track|please))?$", "stop"),
+        (r"^pause(?:\s+(music|song|track|please))?$", "pause"),
+        (r"^(resume|unpause)(?:\s+(music|song|track|please))?$", "resume"),
+        (r"^(queue|what's next|what is next)$", "queue"),
+        (r"^(now|now playing|what's playing|what is playing)$", "now"),
+    ]
+    for pattern, intent in patterns:
+        if re.match(pattern, lowered):
+            return ParsedCommand(intent=intent, confidence=0.8, raw=raw)
+    return ParsedCommand(intent="ignore", confidence=0.0, raw=raw)
+
+
 def _choice_index(text: str) -> Optional[int]:
     digit_match = re.search(r"\b(?:number|option|pick|play)?\s*([1-4])\b", text)
     if digit_match:

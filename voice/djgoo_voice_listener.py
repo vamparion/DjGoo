@@ -11,7 +11,7 @@ import sounddevice as sd
 from faster_whisper import WhisperModel
 
 from voice.command_queue import append_queue_item, command_to_queue_item, followup_to_queue_item
-from voice.command_parser import PendingChoice, parse_command, parse_followup
+from voice.command_parser import PendingChoice, parse_command, parse_emergency_control, parse_followup
 from voice.listener_settings import voice_settings
 from voice.operational_log import log_event
 from voice.secrets import load_project_secrets
@@ -120,17 +120,26 @@ class HotkeyWaiter:
             return "low-level keyboard hook"
         return "GetAsyncKeyState fallback"
 
-    def wait(self, *, heartbeat_seconds: float = 30.0, poll_seconds: float = 0.03) -> None:
+    def wait(
+        self,
+        *,
+        heartbeat_seconds: float = 30.0,
+        poll_seconds: float = 0.03,
+        timeout_seconds: float | None = None,
+    ) -> bool:
         last_heartbeat = time.monotonic()
+        started = last_heartbeat
         while True:
             if self._consume_hotkey_message():
-                return
+                return True
             if self._hook_hit:
                 self._hook_hit = False
-                return
+                return True
             if is_hotkey_down(self.hotkey):
-                return
+                return True
             now = time.monotonic()
+            if timeout_seconds is not None and now - started >= timeout_seconds:
+                return False
             if now - last_heartbeat >= heartbeat_seconds:
                 log_event(
                     "voice.hotkey.waiting",
@@ -321,6 +330,7 @@ def run(project_root: Path) -> None:
         queue_path=str(settings["queue_path"]),
         silence_rms_threshold=settings["silence_rms_threshold"],
         input_device=input_device_summary(input_device),
+        emergency_voice_controls=settings["emergency_voice_controls"],
     )
 
     print(f"Loading Whisper model {settings['model_name']} ({settings['compute_type']})...", flush=True)
@@ -337,28 +347,45 @@ def run(project_root: Path) -> None:
     last_silence_log = 0.0
     try:
         while True:
+            recording_mode = "continuous"
             if settings["push_to_talk"]:
-                hotkey_waiter.wait()
-                print(
-                    f"Hotkey {settings['hotkey']} detected. Release it, then speak now...",
-                    flush=True,
+                hotkey_detected = hotkey_waiter.wait(
+                    timeout_seconds=(
+                        settings["emergency_listen_interval_seconds"]
+                        if settings["emergency_voice_controls"]
+                        else None
+                    )
                 )
-                log_event(
-                    "voice.hotkey.detected",
-                    hotkey=settings["hotkey"],
-                    record_mode="tap_then_fixed_chunk",
-                    seconds=settings["tap_record_seconds"],
-                )
-                wait_for_hotkey_release(settings["hotkey"])
-                time.sleep(0.15)
-                audio = record_chunk(settings["tap_record_seconds"], device=input_device)
+                if hotkey_detected:
+                    recording_mode = "hotkey"
+                    print(
+                        f"Hotkey {settings['hotkey']} detected. Release it, then speak now...",
+                        flush=True,
+                    )
+                    log_event(
+                        "voice.hotkey.detected",
+                        hotkey=settings["hotkey"],
+                        record_mode="tap_then_fixed_chunk",
+                        seconds=settings["tap_record_seconds"],
+                    )
+                    wait_for_hotkey_release(settings["hotkey"])
+                    time.sleep(0.15)
+                    audio = record_chunk(settings["tap_record_seconds"], device=input_device)
+                else:
+                    recording_mode = "emergency"
+                    audio = record_chunk(settings["emergency_chunk_seconds"], device=input_device)
             else:
                 audio = record_chunk(settings["chunk_seconds"], device=input_device)
             duration = audio.size / SAMPLE_RATE if audio.size else 0.0
             rms = audio_rms(audio)
             print(f"Recorded {duration:.1f}s, mic level {rms:.4f}.", flush=True)
-            log_event("voice.audio.recorded", seconds=round(duration, 2), rms=round(rms, 6))
-            if settings["push_to_talk"] and rms < settings["silence_rms_threshold"]:
+            log_event(
+                "voice.audio.recorded",
+                seconds=round(duration, 2),
+                rms=round(rms, 6),
+                mode=recording_mode,
+            )
+            if recording_mode == "hotkey" and rms < settings["silence_rms_threshold"]:
                 log_event(
                     "voice.audio.too_quiet",
                     rms=round(rms, 6),
@@ -367,7 +394,7 @@ def run(project_root: Path) -> None:
                 )
                 print("Recorded audio was too quiet; skipping transcription.", flush=True)
                 continue
-            if not settings["push_to_talk"] and rms < settings["silence_rms_threshold"]:
+            if recording_mode in {"continuous", "emergency"} and rms < settings["silence_rms_threshold"]:
                 now = time.monotonic()
                 if now - last_silence_log >= 30.0:
                     log_event(
@@ -407,9 +434,14 @@ def run(project_root: Path) -> None:
                     pending = None
                     continue
 
-            command = parse_command(transcript, require_wake=settings["require_wake_word"])
+            command = (
+                parse_emergency_control(transcript)
+                if recording_mode == "emergency"
+                else parse_command(transcript, require_wake=settings["require_wake_word"])
+            )
             log_event(
                 "voice.command.parsed",
+                mode=recording_mode,
                 intent=command.intent,
                 query=command.query,
                 playlist=command.playlist,
