@@ -23,7 +23,6 @@ if ($alreadyRunning) {
         ForEach-Object { $_ | Add-Content -LiteralPath $logPath }
     if ($LASTEXITCODE -eq 0) {
         "DjGoo is already running and healthy. $(Get-Date -Format s)" | Add-Content -LiteralPath $logPath
-        & (Join-Path $ProjectRoot "Start-DjGoo-Voice.command.ps1") *> $null
         exit 0
     }
     "DjGoo was running but unhealthy; restarting. $(Get-Date -Format s)" | Add-Content -LiteralPath $logPath
@@ -45,7 +44,5 @@ Start-Process `
     -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $ProjectRoot "start-djgoo.ps1") `
     -WorkingDirectory $ProjectRoot `
     -WindowStyle Hidden
-
-& (Join-Path $ProjectRoot "Start-DjGoo-Voice.command.ps1") *> $null
 
 "Started DjGoo. $(Get-Date -Format s)" | Add-Content -LiteralPath $logPath

@@ -388,6 +388,11 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
                 {"title": "Normal looking title", "uri": "u:long", "duration_seconds": "1200"}
             )
         )
+        self.assertTrue(
+            bridge._should_reject_playing_track(
+                {"title": "Toto - Africa [10 Hour]", "uri": "u:ten-hour"}
+            )
+        )
         self.assertFalse(
             bridge._should_reject_playing_track(
                 {"title": "Metallica - One", "uri": "u:song", "duration_seconds": "447"}

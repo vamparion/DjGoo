@@ -804,6 +804,8 @@ class DjGooAudioBridge:
 
     def _is_bad_radio_title(self, title: str) -> bool:
         lowered = f" {re.sub(r'[^a-z0-9]+', ' ', title.lower()).strip()} "
+        if re.search(r"\b\d+\s*(?:hour|hours|hr|hrs)\b", lowered):
+            return True
         return any(phrase in lowered for phrase in RADIO_REJECT_TITLE_PHRASES)
 
     def _track_duration_seconds(self, track) -> int:
@@ -843,7 +845,13 @@ class DjGooAudioBridge:
 
     async def handle_track_start(self, guild, track) -> None:
         log.info("DjGoo saw track start in guild %s: %s", guild.id, getattr(track, "title", track))
-        log_event("red_audio.track.start", guild_id=guild.id, track=self._track_data(track))
+        data = self._track_data(track)
+        log_event("red_audio.track.start", guild_id=guild.id, track=data)
+        if self._should_reject_playing_track(data):
+            log.info("DjGoo blocking overlong or repeated-format track before controls: %s", data.get("title", ""))
+            log_event("red_audio.track.blocked", guild_id=guild.id, reason="bad_title_or_duration", track=data)
+            await self.handle_station_track_start(guild, track)
+            return
         await self._send_playback_controls(guild, track, force=True)
         await self.handle_station_track_start(guild, track)
 
@@ -857,8 +865,18 @@ class DjGooAudioBridge:
             log.info("DjGoo saw Track Enqueued in #%s before playback started.", message.channel)
             log_event("red_audio.visible_enqueue.before_playback", guild_id=message.guild.id, channel_id=message.channel.id)
             return
+        data = self._track_data(track)
+        if self._should_reject_playing_track(data):
+            log_event(
+                "red_audio.visible_enqueue.controls_blocked",
+                guild_id=message.guild.id,
+                channel_id=message.channel.id,
+                reason="bad_title_or_duration",
+                track=data,
+            )
+            return
         log.info("DjGoo saw visible Track Enqueued message in #%s.", message.channel)
-        log_event("red_audio.visible_enqueue.after_playback", guild_id=message.guild.id, channel_id=message.channel.id, track=self._track_data(track))
+        log_event("red_audio.visible_enqueue.after_playback", guild_id=message.guild.id, channel_id=message.channel.id, track=data)
         await self._send_playback_controls(message.guild, track, preferred_channel=message.channel)
 
     async def _send_controls_for_player(self, ctx: DjGooAudioContext) -> None:
@@ -888,8 +906,12 @@ class DjGooAudioBridge:
         return player.current
 
     async def _send_playback_controls(self, guild, track, *, preferred_channel=None, force: bool = False) -> None:
+        data = self._track_data(track)
+        if self._should_reject_playing_track(data):
+            log_event("discord.controls.blocked_bad_track", guild_id=guild.id, track=data)
+            return
         if not force and not self._should_post_playback_controls(guild.id, track):
-            log_event("discord.controls.skipped_duplicate", guild_id=guild.id, track=self._track_data(track))
+            log_event("discord.controls.skipped_duplicate", guild_id=guild.id, track=data)
             return
         channel = preferred_channel or self._best_text_channel(guild)
         if channel is None:
@@ -901,7 +923,6 @@ class DjGooAudioBridge:
             log.warning("DjGoo cannot send playback controls in #%s: missing send_messages.", channel)
             log_event("discord.controls.missing_permission", guild_id=guild.id, channel_id=channel.id)
             return
-        data = self._track_data(track)
         station = self.stations.get_active(guild.id)
         embed = discord.Embed.from_dict(
             build_playback_control_embed(
