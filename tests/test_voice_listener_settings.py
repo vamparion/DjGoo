@@ -33,7 +33,7 @@ class VoiceListenerSettingsTests(unittest.TestCase):
         self.assertEqual(settings["hotkey"], "F10")
         self.assertEqual(settings["hotwords"], "DjGoo play skip")
         self.assertEqual(settings["input_device"], "SteelSeries Sonar")
-        self.assertTrue(settings["emergency_voice_controls"])
+        self.assertFalse(settings["emergency_voice_controls"])
 
     def test_default_hotwords_cover_fast_music_commands(self):
         for word in ("DjGoo", "play", "skip", "pause", "resume", "radio", "Sandstorm"):

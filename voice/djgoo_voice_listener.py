@@ -272,21 +272,16 @@ def record_hotkey_command(
     block_frames = max(1, int(SAMPLE_RATE * block_seconds))
     max_frames = int(SAMPLE_RATE * max_seconds)
     min_frames = int(SAMPLE_RATE * min_seconds)
-    tap_frames = int(SAMPLE_RATE * tap_seconds)
     chunks = []
     total_frames = 0
-    released_after_min = False
-    with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32", device=device) as stream:
-        while total_frames < max_frames:
-            data, _overflowed = stream.read(block_frames)
-            chunks.append(data.reshape(-1).copy())
-            total_frames += len(chunks[-1])
+    while total_frames < max_frames:
+        data = sd.rec(block_frames, samplerate=SAMPLE_RATE, channels=1, dtype="float32", device=device)
+        sd.wait()
+        chunks.append(data.reshape(-1).copy())
+        total_frames += len(chunks[-1])
 
-            hotkey_down = is_hotkey_down(hotkey)
-            if total_frames >= min_frames and not hotkey_down:
-                released_after_min = True
-            if released_after_min and total_frames >= tap_frames:
-                break
+        if total_frames >= min_frames and not is_hotkey_down(hotkey):
+            break
     if not chunks:
         return np.array([], dtype="float32")
     return np.concatenate(chunks)
@@ -336,7 +331,7 @@ def run(project_root: Path) -> None:
     print(f"Loading Whisper model {settings['model_name']} ({settings['compute_type']})...", flush=True)
     model = WhisperModel(settings["model_name"], device="cpu", compute_type=settings["compute_type"])
     if settings["push_to_talk"]:
-        ready_message = f"DjGoo local voice listener is running. Tap {settings['hotkey']}, release it, then speak."
+        ready_message = f"DjGoo local voice listener is running. Hold {settings['hotkey']} while speaking."
     else:
         ready_message = "DjGoo local voice listener is running. Say 'DjGoo ...' into the default mic."
     print(ready_message, flush=True)
@@ -359,18 +354,23 @@ def run(project_root: Path) -> None:
                 if hotkey_detected:
                     recording_mode = "hotkey"
                     print(
-                        f"Hotkey {settings['hotkey']} detected. Release it, then speak now...",
+                        f"Hotkey {settings['hotkey']} detected. Recording while held...",
                         flush=True,
                     )
                     log_event(
                         "voice.hotkey.detected",
                         hotkey=settings["hotkey"],
-                        record_mode="tap_then_fixed_chunk",
-                        seconds=settings["tap_record_seconds"],
+                        record_mode="hold_to_talk",
+                        max_seconds=settings["max_record_seconds"],
+                    )
+                    audio = record_hotkey_command(
+                        settings["hotkey"],
+                        min_seconds=settings["min_record_seconds"],
+                        tap_seconds=settings["tap_record_seconds"],
+                        max_seconds=settings["max_record_seconds"],
+                        device=input_device,
                     )
                     wait_for_hotkey_release(settings["hotkey"])
-                    time.sleep(0.15)
-                    audio = record_chunk(settings["tap_record_seconds"], device=input_device)
                 else:
                     recording_mode = "emergency"
                     audio = record_chunk(settings["emergency_chunk_seconds"], device=input_device)
