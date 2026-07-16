@@ -7,6 +7,8 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
+from voice.operational_log import log_event
+
 
 DEFAULT_MCP_URL = "http://127.0.0.1:8800/mcp"
 MAX_TRACK_SECONDS = 10 * 60
@@ -65,22 +67,46 @@ class NuclearResolver:
         self._session_id: Optional[str] = None
 
     def resolve_track_query(self, query: str) -> Optional[str]:
+        log_event("nuclear.track.resolve.start", query=query, mcp_url=self.mcp_url)
         result = self._call(
             "Metadata.search",
             {"params": {"query": query, "types": ["tracks"], "limit": 8}},
         )
-        for item in result.get("tracks", []) or []:
+        tracks = result.get("tracks", []) or []
+        log_event("nuclear.track.search.result", query=query, count=len(tracks))
+        for index, item in enumerate(tracks):
             track = normalize_nuclear_track(item)
             if self.accepts_track(track):
-                return track.redbot_query()
+                resolved = track.redbot_query()
+                log_event(
+                    "nuclear.track.accepted",
+                    query=query,
+                    index=index,
+                    title=track.title,
+                    artists=track.artists,
+                    duration_seconds=track.duration_seconds,
+                    resolved_query=resolved,
+                )
+                return resolved
+            log_event(
+                "nuclear.track.rejected",
+                query=query,
+                index=index,
+                title=track.title,
+                artists=track.artists,
+                duration_seconds=track.duration_seconds,
+            )
+        log_event("nuclear.track.resolve.empty", query=query)
         return None
 
     def resolve_album_queries(self, query: str, *, limit: int = 50) -> List[str]:
+        log_event("nuclear.album.resolve.start", query=query, limit=limit)
         result = self._call(
             "Metadata.search",
             {"params": {"query": query, "types": ["albums"], "limit": 5}},
         )
         albums = result.get("albums", []) or []
+        log_event("nuclear.album.search.result", query=query, count=len(albums))
         if not albums:
             return []
         album = albums[0]
@@ -88,6 +114,7 @@ class NuclearResolver:
         album_id = str(source.get("id", "")).strip()
         provider_id = str(source.get("provider", "")).strip()
         if not album_id:
+            log_event("nuclear.album.missing_id", query=query)
             return []
         details = self._call(
             "Metadata.fetchAlbumDetails",
@@ -100,6 +127,7 @@ class NuclearResolver:
                 queries.append(track.redbot_query())
             if len(queries) >= limit:
                 break
+        log_event("nuclear.album.resolve.done", query=query, queued_count=len(queries), album_id=album_id)
         return queries
 
     def accepts_track(self, track: NuclearTrack) -> bool:
@@ -114,7 +142,8 @@ class NuclearResolver:
             return self._transport(method, params)
         try:
             return self._mcp_call(method, params)
-        except (OSError, TimeoutError, urllib.error.URLError, ValueError, KeyError):
+        except (OSError, TimeoutError, urllib.error.URLError, ValueError, KeyError) as exc:
+            log_event("nuclear.mcp.call.failed", method=method, error=type(exc).__name__, detail=str(exc))
             return {}
 
     def _mcp_call(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:

@@ -19,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from voice.command_parser import parse_command
 from voice.command_queue import command_to_queue_item
 from voice.command_queue import drain_queue
+from voice.operational_log import log_event
 
 from .audio_bridge import DjGooAudioBridge, PlaybackControlsView
 from .helpers import (
@@ -85,11 +86,18 @@ class DjGooWelcome(commands.Cog):
         webhook_url = secrets["webhook_url"]
         if not webhook_url:
             log.warning("DjGoo webhook is not configured. Edit config/secrets.json.")
+            log_event("discord.webhook.missing")
             return
 
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(webhook_url, json=payload) as response:
+                    log_event(
+                        "discord.webhook.sent",
+                        status=response.status,
+                        embed_titles=[embed.get("title", "") for embed in payload.get("embeds", [])],
+                        has_content=bool(payload.get("content")),
+                    )
                     if response.status >= 400:
                         body = await response.text()
                         log.warning(
@@ -97,15 +105,31 @@ class DjGooWelcome(commands.Cog):
                             response.status,
                             body[:500],
                         )
+                        log_event("discord.webhook.failed", status=response.status, body=body[:500])
         except (aiohttp.ClientError, asyncio.TimeoutError):
             log.exception("DjGoo webhook request failed.")
+            log_event("discord.webhook.exception")
 
     async def _command_queue_loop(self) -> None:
         await self.bot.wait_until_red_ready()
+        log_event("redbot.ready", guild_count=len(self.bot.guilds))
         await self._audio_bridge.resume_active_radio_stations()
         while True:
             try:
-                for item in drain_queue(self._queue_path()):
+                items = drain_queue(self._queue_path())
+                if items:
+                    log_event("voice.queue.drained", count=len(items), queue_path=str(self._queue_path()))
+                for item in items:
+                    log_event(
+                        "voice.queue.item.received",
+                        type=item.get("type"),
+                        source=item.get("source"),
+                        intent=item.get("intent"),
+                        action=item.get("action"),
+                        query=item.get("query"),
+                        playlist=item.get("playlist"),
+                        raw=item.get("raw"),
+                    )
                     await self._send_webhook_payload(build_voice_command_payload(item))
                     result = await self._audio_bridge.handle(item)
                     log.info(
@@ -114,10 +138,18 @@ class DjGooWelcome(commands.Cog):
                         item.get("source", "unknown"),
                         result,
                     )
+                    log_event(
+                        "voice.queue.item.handled",
+                        type=item.get("type"),
+                        source=item.get("source"),
+                        intent=item.get("intent"),
+                        result=result,
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception:
                 log.exception("DjGoo voice command queue loop failed.")
+                log_event("voice.queue.loop.exception")
             await asyncio.sleep(1)
 
     @commands.Cog.listener()
@@ -148,6 +180,17 @@ class DjGooWelcome(commands.Cog):
             return
 
         parsed = parse_command(message.content)
+        log_event(
+            "chat.command.received",
+            guild_id=message.guild.id,
+            channel_id=message.channel.id,
+            author_id=message.author.id,
+            content=message.content,
+            command_text=command_text,
+            parsed_intent=parsed.intent,
+            parsed_query=parsed.query,
+            parsed_playlist=parsed.playlist,
+        )
         bridge_intents = {
             "play",
             "play_album",
@@ -167,15 +210,17 @@ class DjGooWelcome(commands.Cog):
             "remove_current",
         }
         if parsed.intent in bridge_intents:
-            await self._audio_bridge.handle(
+            result = await self._audio_bridge.handle(
                 command_to_queue_item(parsed, transcript=message.content, source="chat")
             )
+            log_event("chat.command.handled_by_bridge", intent=parsed.intent, result=result)
             return
 
         original_content = message.content
         message.content = f"!{command_text}"
         try:
             await self.bot.process_commands(message)
+            log_event("chat.command.forwarded_to_redbot", command_text=command_text)
         finally:
             message.content = original_content
 

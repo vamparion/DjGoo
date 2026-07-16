@@ -17,6 +17,7 @@ from lavalink import NodeNotFound, PlayerNotFound
 from voice.djgoo_playlists import DjGooPlaylists
 from voice.nuclear_resolver import NuclearResolver
 from voice.djgoo_stations import DjGooStations, track_key
+from voice.operational_log import log_event
 
 from .helpers import (
     PLAYBACK_CONTROL_BUTTONS,
@@ -187,6 +188,13 @@ class _PlaybackControlButton(discord.ui.Button):
         view = self.view
         if not isinstance(view, PlaybackControlsView):
             return
+        log_event(
+            "discord.button.clicked",
+            guild_id=getattr(interaction.guild, "id", None),
+            channel_id=getattr(interaction.channel, "id", None),
+            user_id=getattr(interaction.user, "id", None),
+            intent=self.intent,
+        )
         await view.bridge.handle_button_interaction(interaction, self.intent)
 
 
@@ -202,23 +210,37 @@ class DjGooAudioBridge:
         self._send_payload = send_payload
         self._recent_control_posts: Dict[int, tuple[str, float]] = {}
         self._ytmusic = None
+        log_event("bridge.initialized", resume_active_radio=self._should_resume_active_radio())
 
     def _should_resume_active_radio(self) -> bool:
         return os.environ.get("DJGOO_RESUME_ACTIVE_RADIO", "").strip() == "1"
 
     async def handle(self, item: Dict[str, Any]) -> str:
+        log_event(
+            "bridge.command.start",
+            type=item.get("type"),
+            source=item.get("source"),
+            intent=item.get("intent"),
+            action=item.get("action"),
+            query=item.get("query"),
+            playlist=item.get("playlist"),
+            raw=item.get("raw"),
+        )
         audio = self.bot.get_cog("Audio")
         if audio is None:
             await self._notice("Audio is not loaded yet.")
+            log_event("bridge.command.no_audio", item=item)
             return "Audio is not loaded"
 
         ctx = self._context()
         if ctx is None:
             await self._notice("Join a Discord voice channel once so DjGoo knows where to act.")
+            log_event("bridge.command.no_context", item=item, guild_count=len(self.bot.guilds))
             return "No voice context"
 
         if item.get("type") == "followup":
             await self._notice("Choice follow-ups are ready for the search step. Say a full command for now.")
+            log_event("bridge.followup.acknowledged", item=item)
             return "Follow-up acknowledged"
 
         intent = str(item.get("intent", "unknown"))
@@ -316,6 +338,12 @@ class DjGooAudioBridge:
             return "Unknown command"
         except Exception as exc:
             await self._notice(f"That command hit an error: `{type(exc).__name__}: {exc}`")
+            log_event(
+                "bridge.command.exception",
+                intent=item.get("intent"),
+                error=type(exc).__name__,
+                detail=str(exc),
+            )
             raise
 
     def _context(self) -> Optional[DjGooAudioContext]:
@@ -341,7 +369,14 @@ class DjGooAudioBridge:
             for channel in getattr(guild, "voice_channels", []):
                 members = [member for member in channel.members if not member.bot]
                 if members:
+                    log_event(
+                        "bridge.context.voice_member.selected",
+                        guild_id=guild.id,
+                        voice_channel_id=getattr(channel, "id", None),
+                        member_id=getattr(members[0], "id", None),
+                    )
                     return guild, members[0]
+        log_event("bridge.context.no_voice_members", guild_count=len(self.bot.guilds))
         return None, None
 
     def _active_voice_channel(self, guild):
@@ -378,28 +413,43 @@ class DjGooAudioBridge:
     def _best_text_channel(self, guild):
         configured_channel = self._configured_controls_channel(guild)
         if self._can_send_to(guild, configured_channel):
+            log_event("bridge.context.text_channel.selected", guild_id=guild.id, channel_id=configured_channel.id, reason="configured")
             return configured_channel
         active_voice_channel = self._active_voice_channel(guild)
         if self._can_send_to(guild, active_voice_channel):
+            log_event("bridge.context.text_channel.selected", guild_id=guild.id, channel_id=active_voice_channel.id, reason="active_voice")
             return active_voice_channel
         with contextlib.suppress(Exception):
             player = lavalink.get_player(guild.id)
             player_channel = getattr(player, "channel", None)
             if self._can_send_to(guild, player_channel):
+                log_event("bridge.context.text_channel.selected", guild_id=guild.id, channel_id=player_channel.id, reason="player_channel")
                 return player_channel
             notify_channel_id = player.fetch("notify_channel")
             if notify_channel_id:
                 channel = guild.get_channel(int(notify_channel_id))
                 if self._can_send_to(guild, channel):
+                    log_event("bridge.context.text_channel.selected", guild_id=guild.id, channel_id=channel.id, reason="notify_channel")
                     return channel
         if self._can_send_to(guild, guild.system_channel):
+            log_event("bridge.context.text_channel.selected", guild_id=guild.id, channel_id=guild.system_channel.id, reason="system_channel")
             return guild.system_channel
         for channel in guild.text_channels:
             if self._can_send_to(guild, channel):
+                log_event("bridge.context.text_channel.selected", guild_id=guild.id, channel_id=channel.id, reason="first_text_channel")
                 return channel
+        log_event("bridge.context.no_text_channel", guild_id=guild.id)
         return None
 
     async def _invoke(self, command, ctx: DjGooAudioContext, *args, **kwargs):
+        log_event(
+            "redbot.command.invoke",
+            guild_id=getattr(ctx.guild, "id", None),
+            channel_id=getattr(ctx.channel, "id", None),
+            command=getattr(command, "qualified_name", repr(command)),
+            args=[str(arg) for arg in args],
+            kwargs=kwargs,
+        )
         callback = getattr(command, "callback", None)
         if callback is None:
             return await command(ctx, *args, **kwargs)
@@ -408,6 +458,7 @@ class DjGooAudioBridge:
 
     async def resume_active_radio_stations(self) -> None:
         if not self._should_resume_active_radio():
+            log_event("radio.resume.skipped", reason="resume_flag_not_set")
             return
         audio = self.bot.get_cog("Audio")
         if audio is None:
@@ -418,13 +469,16 @@ class DjGooAudioBridge:
                 continue
             station = self.stations.get_active(guild.id)
             if station is None or self._player_has_music(guild.id):
+                log_event("radio.resume.skipped_guild", guild_id=guild.id, reason="no_station_or_music_already_present")
                 continue
             author = self._active_voice_member_for_guild(guild)
             channel = self._best_text_channel(guild)
             if author is None or channel is None:
+                log_event("radio.resume.skipped_guild", guild_id=guild.id, reason="missing_author_or_channel")
                 continue
             ctx = self._context_for(guild, author, channel)
             query = await self._radio_fallback_query(station["seed"])
+            log_event("radio.resume.playing", guild_id=guild.id, station=station["name"], seed=station["seed"], query=query)
             await self._play_query_when_ready(audio, ctx, query)
 
     def _player_has_music(self, guild_id: int) -> bool:
@@ -451,6 +505,7 @@ class DjGooAudioBridge:
 
     async def _resolve_play_query(self, query: str) -> str:
         resolved = await asyncio.to_thread(self.nuclear.resolve_track_query, query)
+        log_event("play.resolve.done", query=query, resolved_query=resolved or query, used_nuclear=bool(resolved))
         return resolved or query
 
     async def _resolve_radio_seed_query(self, seed: str) -> str:
@@ -460,7 +515,15 @@ class DjGooAudioBridge:
         resolver = getattr(self, "nuclear", None)
         search_query = self._radio_seed_search_query(seed)
         resolved = await asyncio.to_thread(resolver.resolve_track_query, search_query) if resolver is not None else None
-        return resolved or self._radio_search_query(seed)
+        fallback = self._radio_search_query(seed)
+        log_event(
+            "radio.seed.resolve.done",
+            seed=seed,
+            nuclear_search_query=search_query,
+            resolved_query=resolved or fallback,
+            used_nuclear=bool(resolved),
+        )
+        return resolved or fallback
 
     def _radio_seed_search_query(self, seed: str) -> str:
         normalized = re.sub(r"\s+", " ", seed.strip().lower())
@@ -502,6 +565,7 @@ class DjGooAudioBridge:
             await self._notice("Tell me what to seed the station with, like `DjGoo radio Sandstorm`.")
             return "Missing radio seed"
         play_query = await self._resolve_radio_seed_query(seed)
+        log_event("radio.start.play_seed", guild_id=ctx.guild.id, seed=seed, play_query=play_query)
         if not await self._play_query_when_ready(audio, ctx, play_query):
             await self._notice(
                 "DjGoo is still warming up the music engine. I did not start the radio station yet, "
@@ -509,6 +573,7 @@ class DjGooAudioBridge:
             )
             return "Radio startup failed"
         station = self.stations.set_active(ctx.guild.id, seed)
+        log_event("radio.start.active", guild_id=ctx.guild.id, station=station["name"], seed=seed)
         await self._notice(f"Started `{station['name']}`. I will keep this station's taste separate.")
         await self._send_controls_for_player(ctx)
         return f"Started {station['name']}"
@@ -516,11 +581,16 @@ class DjGooAudioBridge:
     async def _play_query_when_ready(self, audio, ctx, query: str) -> bool:
         if not self._lavalink_node_ready(ctx.guild.id):
             await self._notice("DjGoo is warming up the music engine. I will start this as soon as it is ready.")
+            log_event("play.lavalink.waiting", guild_id=ctx.guild.id, query=query)
         if not await self._wait_for_lavalink_node(ctx.guild.id):
             log.warning("Lavalink was not ready after waiting for guild %s.", ctx.guild.id)
+            log_event("play.lavalink.timeout", guild_id=ctx.guild.id, query=query)
             return False
+        log_event("play.command.start", guild_id=ctx.guild.id, query=query)
         await self._invoke(audio.command_play, ctx, query=query)
-        return await self._wait_for_track_after_play(ctx.guild.id)
+        success = await self._wait_for_track_after_play(ctx.guild.id)
+        log_event("play.command.result", guild_id=ctx.guild.id, query=query, track_detected=success)
+        return success
 
     async def _wait_for_lavalink_node(self, guild_id: int, *, timeout: float = 35.0) -> bool:
         deadline = time.monotonic() + timeout
@@ -546,6 +616,7 @@ class DjGooAudioBridge:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self._track_from_player_for_controls(guild_id) is not None:
+                log_event("play.track.detected", guild_id=guild_id)
                 return True
             await asyncio.sleep(0.5)
         return self._track_from_player_for_controls(guild_id) is not None
@@ -554,12 +625,16 @@ class DjGooAudioBridge:
         station = self.stations.get_active(ctx.guild.id)
         if station is None:
             await self._notice("No active radio station yet. Start one with `DjGoo radio <song>`.")
+            log_event("radio.feedback.no_station", bucket=bucket)
             return "No active station"
         track = self._selected_track(ctx.guild.id, last=False)
         if track is None:
             await self._notice("I could not read the current track.")
+            log_event("radio.feedback.no_current_track", guild_id=ctx.guild.id, bucket=bucket)
             return "No current track"
-        self.stations.add_feedback(station["seed"], bucket, self._track_data(track))
+        data = self._track_data(track)
+        self.stations.add_feedback(station["seed"], bucket, data)
+        log_event("radio.feedback.saved", guild_id=ctx.guild.id, station=station["name"], bucket=bucket, track=data)
         await self._notice(message)
         return message
 
@@ -579,6 +654,7 @@ class DjGooAudioBridge:
     async def _stop_radio(self, audio, ctx) -> str:
         station = self.stations.get_active(ctx.guild.id)
         self.stations.clear_active(ctx.guild.id)
+        log_event("radio.stop", guild_id=ctx.guild.id, had_station=station is not None, station=(station or {}).get("name"))
         await self._invoke(audio.command_stop, ctx)
         if station is None:
             await self._notice("Radio mode is already off.")
@@ -589,6 +665,7 @@ class DjGooAudioBridge:
     async def _stop_playback(self, audio, ctx) -> str:
         station = self.stations.get_active(ctx.guild.id)
         self.stations.clear_active(ctx.guild.id)
+        log_event("play.stop", guild_id=ctx.guild.id, cleared_station=(station or {}).get("name"))
         await self._invoke(audio.command_stop, ctx)
         if station is not None:
             await self._notice(f"Stopped playback and turned off `{station['name']}`.")
@@ -600,6 +677,15 @@ class DjGooAudioBridge:
             await self._notice("There is no current or previous song to save yet.")
             return "No track"
         result = self.playlists.add_track(playlist_name, self._track_data(track))
+        log_event(
+            "playlist.track.save",
+            guild_id=ctx.guild.id,
+            playlist=playlist_name,
+            resolved_playlist=result.playlist_name,
+            added=result.added,
+            track=self._track_data(track),
+            track_count=result.track_count,
+        )
         verb = "Added" if result.added else "Already had"
         await self._notice(
             f"{verb} `{track.title}` in `{result.playlist_name}` ({result.track_count} track(s))."
@@ -667,6 +753,7 @@ class DjGooAudioBridge:
     async def _skip_playback(self, audio, ctx) -> None:
         station = self.stations.get_active(ctx.guild.id)
         await self._mark_station_skip(ctx)
+        log_event("play.skip", guild_id=ctx.guild.id, station=(station or {}).get("name"))
         await self._invoke(audio.command_skip, ctx)
         if station is not None:
             await self._top_up_station_queue(ctx.guild.id)
@@ -676,6 +763,7 @@ class DjGooAudioBridge:
         data = self._track_data(track)
         if self._should_reject_playing_track(data):
             log.info("DjGoo auto-skipping overlong or non-song track: %s", data.get("title", ""))
+            log_event("radio.track.rejected_playing", guild_id=guild.id, reason="bad_title_or_duration", track=data)
             if station is not None:
                 self.stations.add_feedback(station["seed"], "banned", data)
             await self._skip_rejected_station_track(guild.id)
@@ -684,9 +772,11 @@ class DjGooAudioBridge:
             return
         if self._station_rejects_track(station, data):
             log.info("DjGoo auto-skipping repeated radio track in %s: %s", station["name"], data.get("title", ""))
+            log_event("radio.track.rejected_playing", guild_id=guild.id, reason="station_rejects_track", station=station["name"], track=data)
             await self._skip_rejected_station_track(guild.id)
             return
         self.stations.mark_played(station["seed"], data)
+        log_event("radio.track.played", guild_id=guild.id, station=station["name"], track=data)
         await self._send_payload(
             build_station_track_payload(
                 station_name=station["name"],
@@ -753,24 +843,29 @@ class DjGooAudioBridge:
 
     async def handle_track_start(self, guild, track) -> None:
         log.info("DjGoo saw track start in guild %s: %s", guild.id, getattr(track, "title", track))
+        log_event("red_audio.track.start", guild_id=guild.id, track=self._track_data(track))
         await self._send_playback_controls(guild, track, force=True)
         await self.handle_station_track_start(guild, track)
 
     async def handle_track_enqueue(self, guild, track) -> None:
         log.info("DjGoo saw track enqueue in guild %s: %s", guild.id, getattr(track, "title", track))
+        log_event("red_audio.track.enqueue", guild_id=guild.id, track=self._track_data(track))
 
     async def handle_red_track_enqueue_message(self, message) -> None:
         track = self._current_track_for_controls(message.guild.id)
         if track is None:
             log.info("DjGoo saw Track Enqueued in #%s before playback started.", message.channel)
+            log_event("red_audio.visible_enqueue.before_playback", guild_id=message.guild.id, channel_id=message.channel.id)
             return
         log.info("DjGoo saw visible Track Enqueued message in #%s.", message.channel)
+        log_event("red_audio.visible_enqueue.after_playback", guild_id=message.guild.id, channel_id=message.channel.id, track=self._track_data(track))
         await self._send_playback_controls(message.guild, track, preferred_channel=message.channel)
 
     async def _send_controls_for_player(self, ctx: DjGooAudioContext) -> None:
         track = self._track_from_player_for_controls(ctx.guild.id)
         if track is None:
             log.warning("DjGoo found no current or queued track after play command in guild %s.", ctx.guild.id)
+            log_event("discord.controls.no_track", guild_id=ctx.guild.id)
             return
         await self._send_playback_controls(ctx.guild, track, preferred_channel=ctx.channel)
 
@@ -794,14 +889,17 @@ class DjGooAudioBridge:
 
     async def _send_playback_controls(self, guild, track, *, preferred_channel=None, force: bool = False) -> None:
         if not force and not self._should_post_playback_controls(guild.id, track):
+            log_event("discord.controls.skipped_duplicate", guild_id=guild.id, track=self._track_data(track))
             return
         channel = preferred_channel or self._best_text_channel(guild)
         if channel is None:
             log.warning("DjGoo could not find a text channel for playback controls in guild %s.", guild.id)
+            log_event("discord.controls.no_channel", guild_id=guild.id)
             return
         permissions = channel.permissions_for(guild.me)
         if not permissions.send_messages:
             log.warning("DjGoo cannot send playback controls in #%s: missing send_messages.", channel)
+            log_event("discord.controls.missing_permission", guild_id=guild.id, channel_id=channel.id)
             return
         data = self._track_data(track)
         station = self.stations.get_active(guild.id)
@@ -819,8 +917,10 @@ class DjGooAudioBridge:
                 channel,
                 data.get("title", "unknown track"),
             )
+            log_event("discord.controls.posted", guild_id=guild.id, channel_id=channel.id, track=data, station=(station or {}).get("name"))
         except (discord.HTTPException, discord.Forbidden):
             log.exception("DjGoo failed to send playback controls in #%s.", channel)
+            log_event("discord.controls.failed", guild_id=guild.id, channel_id=getattr(channel, "id", None), track=data)
 
     def _should_post_playback_controls(self, guild_id: int, track) -> bool:
         key = self._track_key(track)
@@ -907,16 +1007,20 @@ class DjGooAudioBridge:
     async def _top_up_station_queue(self, guild_id: int) -> None:
         station = self.stations.get_active(guild_id)
         if station is None:
+            log_event("radio.top_up.skipped", guild_id=guild_id, reason="no_active_station")
             return
         audio = self.bot.get_cog("Audio")
         ctx = self._context()
         if audio is None or ctx is None:
+            log_event("radio.top_up.skipped", guild_id=guild_id, reason="missing_audio_or_context")
             return
         try:
             player = lavalink.get_player(guild_id)
         except (NodeNotFound, PlayerNotFound):
+            log_event("radio.top_up.skipped", guild_id=guild_id, reason="no_player")
             return
         if len(player.queue) >= 2:
+            log_event("radio.top_up.skipped", guild_id=guild_id, reason="queue_already_buffered", queue_length=len(player.queue))
             return
         seeds = [station["seed"]]
         if station.get("liked"):
@@ -925,18 +1029,29 @@ class DjGooAudioBridge:
             seeds.append(station["more_like"][-1]["title"])
         recommended = await self._recommended_radio_track(station)
         query = recommended["uri"] if recommended else await self._radio_fallback_query(random.choice(seeds))
+        log_event(
+            "radio.top_up.play",
+            guild_id=guild_id,
+            station=station["name"],
+            query=query,
+            used_recommendation=bool(recommended),
+            queue_length=len(player.queue),
+        )
         await self._invoke(audio.command_play, ctx, query=query)
 
     async def _recommended_radio_track(self, station: Dict[str, Any]) -> Optional[Dict[str, str]]:
         last_track = station.get("last_track") if isinstance(station.get("last_track"), dict) else None
         video_id = self._youtube_video_id((last_track or {}).get("uri", ""))
         if not video_id:
+            log_event("radio.recommendation.skipped", station=station.get("name"), reason="missing_youtube_video_id")
             return None
         try:
             tracks = await asyncio.to_thread(self._ytmusic_watch_tracks, video_id)
         except Exception:
             log.exception("DjGoo could not fetch YouTube Music radio recommendations.")
+            log_event("radio.recommendation.fetch_failed", station=station.get("name"), video_id=video_id)
             return None
+        log_event("radio.recommendation.fetched", station=station.get("name"), video_id=video_id, count=len(tracks or []))
         return self._pick_recommended_track(station, tracks)
 
     def _ytmusic_watch_tracks(self, video_id: str):
@@ -954,8 +1069,10 @@ class DjGooAudioBridge:
             video_id = str(item.get("videoId") or "").strip()
             title = str(item.get("title") or "").strip()
             if not video_id or not title:
+                log_event("radio.recommendation.rejected", reason="missing_video_or_title", raw=item)
                 continue
             if self._track_length_seconds(str(item.get("length") or "")) > 600:
+                log_event("radio.recommendation.rejected", reason="overlong", title=title, length=item.get("length"))
                 continue
             artists = [
                 str(artist.get("name", "")).strip()
@@ -965,9 +1082,12 @@ class DjGooAudioBridge:
             display_title = f"{', '.join(artists)} - {title}" if artists else title
             candidate = {"title": display_title, "uri": f"https://www.youtube.com/watch?v={video_id}"}
             if self._station_rejects_track(station, candidate):
+                log_event("radio.recommendation.rejected", reason="station_rejects_track", candidate=candidate, station=station.get("name"))
                 continue
             candidates.append(candidate)
-        return random.choice(candidates) if candidates else None
+        choice = random.choice(candidates) if candidates else None
+        log_event("radio.recommendation.picked", station=station.get("name"), candidate_count=len(candidates), choice=choice)
+        return choice
 
     def _youtube_video_id(self, uri: str) -> str:
         match = re.search(r"(?:v=|youtu\.be/|embed/|shorts/)([A-Za-z0-9_-]{11})", uri)

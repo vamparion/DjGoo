@@ -13,6 +13,7 @@ from faster_whisper import WhisperModel
 from voice.command_queue import append_queue_item, command_to_queue_item, followup_to_queue_item
 from voice.command_parser import PendingChoice, parse_command, parse_followup
 from voice.listener_settings import voice_settings
+from voice.operational_log import log_event
 from voice.secrets import load_project_secrets
 
 
@@ -114,6 +115,15 @@ def run(project_root: Path) -> None:
     secrets = load_project_secrets(project_root)
     voice_config = secrets.get("voice", {})
     settings = voice_settings(voice_config, project_root)
+    log_event(
+        "voice.listener.starting",
+        model=settings["model_name"],
+        compute_type=settings["compute_type"],
+        hotkey=settings["hotkey"],
+        push_to_talk=settings["push_to_talk"],
+        require_wake_word=settings["require_wake_word"],
+        queue_path=str(settings["queue_path"]),
+    )
 
     print(f"Loading Whisper model {settings['model_name']} ({settings['compute_type']})...", flush=True)
     model = WhisperModel(settings["model_name"], device="cpu", compute_type=settings["compute_type"])
@@ -122,12 +132,14 @@ def run(project_root: Path) -> None:
     else:
         ready_message = "DjGoo local voice listener is running. Say 'DjGoo ...' into the default mic."
     print(ready_message, flush=True)
+    log_event("voice.listener.ready", message=ready_message)
 
     pending: PendingChoice | None = None
     while True:
         if settings["push_to_talk"]:
             wait_for_hotkey_press(settings["hotkey"])
             print(f"Hotkey {settings['hotkey']} detected. Recording command...", flush=True)
+            log_event("voice.hotkey.detected", hotkey=settings["hotkey"])
             audio = record_hotkey_command(
                 settings["hotkey"],
                 min_seconds=settings["min_record_seconds"],
@@ -140,6 +152,7 @@ def run(project_root: Path) -> None:
         duration = audio.size / SAMPLE_RATE if audio.size else 0.0
         rms = audio_rms(audio)
         print(f"Recorded {duration:.1f}s, mic level {rms:.4f}.", flush=True)
+        log_event("voice.audio.recorded", seconds=round(duration, 2), rms=round(rms, 6))
         transcript = transcribe(
             model,
             audio,
@@ -150,28 +163,44 @@ def run(project_root: Path) -> None:
         )
         if not transcript:
             print("No speech recognized.", flush=True)
+            log_event("voice.transcript.empty")
             continue
 
         print(f"Heard: {transcript}", flush=True)
+        log_event("voice.transcript.heard", transcript=transcript)
         now = time.monotonic()
         if pending is not None:
             followup = parse_followup(transcript, pending, now=now)
+            log_event("voice.followup.parsed", action=followup.action, index=followup.index, raw=followup.raw)
             if followup.action == "expired":
                 append_queue_item(settings["queue_path"], followup_to_queue_item(followup, transcript=transcript))
+                log_event("voice.queue.appended", type="followup", action=followup.action)
                 pending = None
                 continue
             if followup.action in {"choose", "neither", "cancel"}:
                 append_queue_item(settings["queue_path"], followup_to_queue_item(followup, transcript=transcript))
+                log_event("voice.queue.appended", type="followup", action=followup.action, index=followup.index)
                 pending = None
                 continue
 
         command = parse_command(transcript, require_wake=settings["require_wake_word"])
+        log_event(
+            "voice.command.parsed",
+            intent=command.intent,
+            query=command.query,
+            playlist=command.playlist,
+            value=command.value,
+            confidence=command.confidence,
+            raw=command.raw,
+        )
         if command.intent in {"ignore", "unknown"}:
             print(f"Ignored transcript as {command.intent}: {transcript}", flush=True)
+            log_event("voice.command.ignored", intent=command.intent, transcript=transcript)
             continue
 
         append_queue_item(settings["queue_path"], command_to_queue_item(command, transcript=transcript))
         print(f"Queued command: {command.intent}", flush=True)
+        log_event("voice.queue.appended", type="command", intent=command.intent, query=command.query)
 
 
 def main() -> int:
@@ -187,9 +216,11 @@ def main() -> int:
         run(Path(args.project_root).resolve())
     except KeyboardInterrupt:
         print("DjGoo local voice listener stopped.")
+        log_event("voice.listener.stopped")
         return 0
     except Exception as exc:
         print(f"DjGoo local voice listener crashed: {exc!r}", file=sys.stderr, flush=True)
+        log_event("voice.listener.crashed", error=type(exc).__name__, detail=str(exc))
         raise
     return 1
 
