@@ -40,6 +40,20 @@ class VoiceCommandParserTests(unittest.TestCase):
                 self.assertEqual(parsed.query, "Sandstorm")
                 self.assertGreaterEqual(parsed.confidence, 0.9)
 
+    def test_parses_wake_phrase_after_short_filler(self):
+        examples = {
+            "Okay, so DjGoo play Sandstorm": ("play", "Sandstorm"),
+            "alright Dj Goo skip": ("skip", ""),
+            "can you DeeJay stop": ("stop", ""),
+        }
+
+        for transcript, expected in examples.items():
+            with self.subTest(transcript=transcript):
+                parsed = parse_command(transcript)
+
+                self.assertEqual(parsed.intent, expected[0])
+                self.assertEqual(parsed.query, expected[1])
+
     def test_ignores_wake_phrase_with_only_punctuation(self):
         for transcript in ["DJ Goo.", "DJ Koo.", "DJ Goon.", "DjGoo,", "DJ!", "DeeJay ..."]:
             with self.subTest(transcript=transcript):
@@ -72,6 +86,10 @@ class VoiceCommandParserTests(unittest.TestCase):
 
     def test_does_not_wake_on_casual_mentions_of_dj(self):
         parsed = parse_command("that DJ was great play sandstorm")
+
+        self.assertEqual(parsed.intent, "ignore")
+
+        parsed = parse_command("the DJ Goo joke was funny play sandstorm")
 
         self.assertEqual(parsed.intent, "ignore")
 

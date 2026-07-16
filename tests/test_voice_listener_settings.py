@@ -22,6 +22,7 @@ class VoiceListenerSettingsTests(unittest.TestCase):
                 "push_to_talk": False,
                 "hotkey": "F10",
                 "hotwords": "DjGoo play skip",
+                "input_device": "SteelSeries Sonar",
             },
             Path("C:/DjGoo"),
         )
@@ -31,6 +32,7 @@ class VoiceListenerSettingsTests(unittest.TestCase):
         self.assertFalse(settings["push_to_talk"])
         self.assertEqual(settings["hotkey"], "F10")
         self.assertEqual(settings["hotwords"], "DjGoo play skip")
+        self.assertEqual(settings["input_device"], "SteelSeries Sonar")
 
     def test_default_hotwords_cover_fast_music_commands(self):
         for word in ("DjGoo", "play", "skip", "pause", "resume", "radio", "Sandstorm"):

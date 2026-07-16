@@ -179,9 +179,9 @@ class HotkeyWaiter:
             self._hook_callback = None
 
 
-def record_chunk(seconds: float) -> np.ndarray:
+def record_chunk(seconds: float, *, device: int | str | None = None) -> np.ndarray:
     frames = int(SAMPLE_RATE * seconds)
-    audio = sd.rec(frames, samplerate=SAMPLE_RATE, channels=1, dtype="float32")
+    audio = sd.rec(frames, samplerate=SAMPLE_RATE, channels=1, dtype="float32", device=device)
     sd.wait()
     return audio.reshape(-1)
 
@@ -211,12 +211,53 @@ def audio_rms(audio: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.square(audio))))
 
 
+def resolve_input_device(configured: object) -> int | str | None:
+    if configured is None or str(configured).strip() == "":
+        return None
+    if isinstance(configured, int):
+        return configured
+    text = str(configured).strip()
+    if text.isdigit():
+        return int(text)
+    lowered = text.lower()
+    matches = []
+    for index, device in enumerate(sd.query_devices()):
+        if int(device.get("max_input_channels", 0)) <= 0:
+            continue
+        if lowered in str(device.get("name", "")).lower():
+            matches.append(index)
+    if matches:
+        return matches[0]
+    return text
+
+
+def input_device_summary(device: int | str | None) -> dict:
+    try:
+        try:
+            default_input = list(sd.default.device)[0]
+        except TypeError:
+            default_input = sd.default.device
+        selected = default_input if device is None else device
+        info = sd.query_devices(selected, "input")
+        return {
+            "configured": device,
+            "selected": selected,
+            "name": info.get("name"),
+            "default_input": default_input,
+            "default_samplerate": info.get("default_samplerate"),
+            "max_input_channels": info.get("max_input_channels"),
+        }
+    except Exception as exc:
+        return {"configured": device, "error": f"{type(exc).__name__}: {exc}"}
+
+
 def record_hotkey_command(
     hotkey: str,
     *,
     min_seconds: float,
     tap_seconds: float,
     max_seconds: float,
+    device: int | str | None = None,
     block_seconds: float = 0.1,
 ) -> np.ndarray:
     block_frames = max(1, int(SAMPLE_RATE * block_seconds))
@@ -226,7 +267,7 @@ def record_hotkey_command(
     chunks = []
     total_frames = 0
     released_after_min = False
-    with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32") as stream:
+    with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32", device=device) as stream:
         while total_frames < max_frames:
             data, _overflowed = stream.read(block_frames)
             chunks.append(data.reshape(-1).copy())
@@ -269,6 +310,7 @@ def run(project_root: Path) -> None:
     secrets = load_project_secrets(project_root)
     voice_config = secrets.get("voice", {})
     settings = voice_settings(voice_config, project_root)
+    input_device = resolve_input_device(settings["input_device"])
     log_event(
         "voice.listener.starting",
         model=settings["model_name"],
@@ -278,6 +320,7 @@ def run(project_root: Path) -> None:
         require_wake_word=settings["require_wake_word"],
         queue_path=str(settings["queue_path"]),
         silence_rms_threshold=settings["silence_rms_threshold"],
+        input_device=input_device_summary(input_device),
     )
 
     print(f"Loading Whisper model {settings['model_name']} ({settings['compute_type']})...", flush=True)
@@ -303,10 +346,11 @@ def run(project_root: Path) -> None:
                     min_seconds=settings["min_record_seconds"],
                     tap_seconds=settings["tap_record_seconds"],
                     max_seconds=settings["max_record_seconds"],
+                    device=input_device,
                 )
                 wait_for_hotkey_release(settings["hotkey"])
             else:
-                audio = record_chunk(settings["chunk_seconds"])
+                audio = record_chunk(settings["chunk_seconds"], device=input_device)
             duration = audio.size / SAMPLE_RATE if audio.size else 0.0
             rms = audio_rms(audio)
             print(f"Recorded {duration:.1f}s, mic level {rms:.4f}.", flush=True)

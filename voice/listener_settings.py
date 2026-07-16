@@ -22,6 +22,7 @@ def voice_settings(voice_config: Dict[str, Any], project_root: Path) -> Dict[str
         "max_record_seconds": float(voice_config.get("max_record_seconds", 8)),
         "language": voice_config.get("language", "en"),
         "compute_type": voice_config.get("compute_type", "int8"),
+        "input_device": voice_config.get("input_device"),
         "queue_path": Path(voice_config.get("queue_path") or project_root / "data" / "voice-command-queue.jsonl"),
         "push_to_talk": push_to_talk,
         "hotkey": hotkey,

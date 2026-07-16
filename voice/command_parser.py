@@ -5,8 +5,13 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 
-WAKE_RE = re.compile(
+WAKE_AT_START_RE = re.compile(
     r"^\s*(?:(?:hey|yo|okay|ok)\s+)?(?:dj\s*(?:goo|koo|goon)|djgoo|dee\s*jay|d\s*j|dj)\b[:,]?\s*",
+    re.IGNORECASE,
+)
+WAKE_EARLY_RE = re.compile(
+    r"^\s*(?:(?:hey|yo|okay|ok|so|alright|all right|please|can you|could you)[\s,]+){0,4}"
+    r"(?:dj\s*(?:goo|koo|goon)|djgoo|dee\s*jay|d\s*j)\b[:,]?\s*",
     re.IGNORECASE,
 )
 NUMBER_WORDS = [
@@ -51,7 +56,7 @@ def _normalize(text: str) -> str:
 
 
 def _after_wake(transcript: str) -> Optional[str]:
-    match = WAKE_RE.search(transcript)
+    match = WAKE_AT_START_RE.search(transcript) or WAKE_EARLY_RE.search(transcript)
     if not match:
         return None
     command = _normalize(transcript[match.end() :])
