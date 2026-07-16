@@ -10,6 +10,11 @@ import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
 
+try:
+    import keyboard as keyboard_backend
+except Exception:
+    keyboard_backend = None
+
 from voice.command_queue import append_queue_item, command_to_queue_item, followup_to_queue_item
 from voice.command_parser import PendingChoice, parse_command, parse_emergency_control, parse_followup
 from voice.listener_settings import voice_settings
@@ -22,6 +27,11 @@ HOTKEYS = {
     "F10": 0x79,
     "F11": 0x7A,
     "F12": 0x7B,
+}
+KEYBOARD_BACKEND_NAMES = {
+    "F10": "f10",
+    "F11": "f11",
+    "F12": "f12",
 }
 WM_HOTKEY = 0x0312
 WM_KEYDOWN = 0x0100
@@ -85,11 +95,13 @@ class HotkeyWaiter:
     def __init__(self, hotkey: str):
         self.hotkey = hotkey.upper()
         self.vk_code = HOTKEYS.get(self.hotkey)
+        self.keyboard_name = KEYBOARD_BACKEND_NAMES.get(self.hotkey, self.hotkey.lower())
         self.hotkey_id = 0xD600
         self.registered = False
         self.hook_handle = None
         self._hook_hit = False
         self._hook_callback = None
+        self._keyboard_backend_failed = False
         if sys.platform == "win32" and self.vk_code is not None:
             self.registered = bool(
                 ctypes.windll.user32.RegisterHotKey(None, self.hotkey_id, MOD_NOREPEAT, self.vk_code)
@@ -101,6 +113,7 @@ class HotkeyWaiter:
             hotkey=self.hotkey,
             registered=self.registered,
             hook_installed=bool(self.hook_handle),
+            keyboard_backend=bool(keyboard_backend),
             mode=self.mode,
         )
 
@@ -137,6 +150,8 @@ class HotkeyWaiter:
                 return True
             if is_hotkey_down(self.hotkey):
                 return True
+            if self._is_keyboard_backend_pressed():
+                return True
             now = time.monotonic()
             if timeout_seconds is not None and now - started >= timeout_seconds:
                 return False
@@ -146,6 +161,7 @@ class HotkeyWaiter:
                     hotkey=self.hotkey,
                     registered=self.registered,
                     hook_installed=bool(self.hook_handle),
+                    keyboard_backend=bool(keyboard_backend) and not self._keyboard_backend_failed,
                     mode=self.mode,
                 )
                 last_heartbeat = now
@@ -159,6 +175,21 @@ class HotkeyWaiter:
             ctypes.windll.user32.TranslateMessage(ctypes.byref(msg))
             ctypes.windll.user32.DispatchMessageW(ctypes.byref(msg))
         return False
+
+    def _is_keyboard_backend_pressed(self) -> bool:
+        if keyboard_backend is None or self._keyboard_backend_failed:
+            return False
+        try:
+            return bool(keyboard_backend.is_pressed(self.keyboard_name))
+        except Exception as exc:
+            self._keyboard_backend_failed = True
+            log_event(
+                "voice.hotkey.keyboard_backend_failed",
+                hotkey=self.hotkey,
+                error=type(exc).__name__,
+                detail=str(exc),
+            )
+            return False
 
     def _install_keyboard_hook(self) -> None:
         if self.vk_code is None:

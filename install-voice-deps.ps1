@@ -9,4 +9,4 @@ if (!(Test-Path $python)) {
 }
 
 & $python -m pip install --upgrade pip
-& $python -m pip install numpy sounddevice requests faster-whisper
+& $python -m pip install numpy sounddevice requests faster-whisper keyboard
