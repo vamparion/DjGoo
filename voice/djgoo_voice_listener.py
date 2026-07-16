@@ -23,6 +23,160 @@ HOTKEYS = {
     "F11": 0x7A,
     "F12": 0x7B,
 }
+WM_HOTKEY = 0x0312
+WM_KEYDOWN = 0x0100
+WM_SYSKEYDOWN = 0x0104
+PM_REMOVE = 0x0001
+MOD_NOREPEAT = 0x4000
+WH_KEYBOARD_LL = 13
+
+LowLevelKeyboardProc = ctypes.WINFUNCTYPE(
+    ctypes.c_ssize_t,
+    ctypes.c_int,
+    ctypes.c_size_t,
+    ctypes.c_void_p,
+)
+
+if sys.platform == "win32":
+    ctypes.windll.user32.RegisterHotKey.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_uint, ctypes.c_uint]
+    ctypes.windll.user32.RegisterHotKey.restype = ctypes.c_bool
+    ctypes.windll.user32.UnregisterHotKey.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    ctypes.windll.user32.UnregisterHotKey.restype = ctypes.c_bool
+    ctypes.windll.user32.SetWindowsHookExW.argtypes = [
+        ctypes.c_int,
+        LowLevelKeyboardProc,
+        ctypes.c_void_p,
+        ctypes.c_uint,
+    ]
+    ctypes.windll.user32.SetWindowsHookExW.restype = ctypes.c_void_p
+    ctypes.windll.user32.UnhookWindowsHookEx.argtypes = [ctypes.c_void_p]
+    ctypes.windll.user32.UnhookWindowsHookEx.restype = ctypes.c_bool
+    ctypes.windll.user32.CallNextHookEx.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t, ctypes.c_void_p]
+    ctypes.windll.user32.CallNextHookEx.restype = ctypes.c_ssize_t
+    ctypes.windll.user32.PeekMessageW.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint]
+    ctypes.windll.user32.PeekMessageW.restype = ctypes.c_bool
+    ctypes.windll.kernel32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+    ctypes.windll.kernel32.GetModuleHandleW.restype = ctypes.c_void_p
+    ctypes.windll.kernel32.GetLastError.restype = ctypes.c_uint
+
+
+class MSG(ctypes.Structure):
+    _fields_ = [
+        ("hwnd", ctypes.c_void_p),
+        ("message", ctypes.c_uint),
+        ("wParam", ctypes.c_size_t),
+        ("lParam", ctypes.c_ssize_t),
+        ("time", ctypes.c_uint),
+        ("pt", ctypes.c_long * 2),
+    ]
+
+
+class KBDLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ("vkCode", ctypes.c_uint),
+        ("scanCode", ctypes.c_uint),
+        ("flags", ctypes.c_uint),
+        ("time", ctypes.c_uint),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
+
+class HotkeyWaiter:
+    def __init__(self, hotkey: str):
+        self.hotkey = hotkey.upper()
+        self.vk_code = HOTKEYS.get(self.hotkey)
+        self.hotkey_id = 0xD600
+        self.registered = False
+        self.hook_handle = None
+        self._hook_hit = False
+        self._hook_callback = None
+        if sys.platform == "win32" and self.vk_code is not None:
+            self.registered = bool(
+                ctypes.windll.user32.RegisterHotKey(None, self.hotkey_id, MOD_NOREPEAT, self.vk_code)
+            )
+            if not self.registered:
+                self._install_keyboard_hook()
+        log_event(
+            "voice.hotkey.registration",
+            hotkey=self.hotkey,
+            registered=self.registered,
+            hook_installed=bool(self.hook_handle),
+            mode=self.mode,
+        )
+
+    def close(self) -> None:
+        if self.registered:
+            ctypes.windll.user32.UnregisterHotKey(None, self.hotkey_id)
+            self.registered = False
+        if self.hook_handle:
+            ctypes.windll.user32.UnhookWindowsHookEx(self.hook_handle)
+            self.hook_handle = None
+
+    @property
+    def mode(self) -> str:
+        if self.registered:
+            return "RegisterHotKey"
+        if self.hook_handle:
+            return "low-level keyboard hook"
+        return "GetAsyncKeyState fallback"
+
+    def wait(self, *, heartbeat_seconds: float = 30.0, poll_seconds: float = 0.03) -> None:
+        last_heartbeat = time.monotonic()
+        while True:
+            if self._consume_hotkey_message():
+                return
+            if self._hook_hit:
+                self._hook_hit = False
+                return
+            if is_hotkey_down(self.hotkey):
+                return
+            now = time.monotonic()
+            if now - last_heartbeat >= heartbeat_seconds:
+                log_event(
+                    "voice.hotkey.waiting",
+                    hotkey=self.hotkey,
+                    registered=self.registered,
+                    hook_installed=bool(self.hook_handle),
+                    mode=self.mode,
+                )
+                last_heartbeat = now
+            time.sleep(poll_seconds)
+
+    def _consume_hotkey_message(self) -> bool:
+        msg = MSG()
+        while ctypes.windll.user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, PM_REMOVE):
+            if msg.message == WM_HOTKEY and int(msg.wParam) == self.hotkey_id:
+                return True
+            ctypes.windll.user32.TranslateMessage(ctypes.byref(msg))
+            ctypes.windll.user32.DispatchMessageW(ctypes.byref(msg))
+        return False
+
+    def _install_keyboard_hook(self) -> None:
+        if self.vk_code is None:
+            return
+
+        def callback(n_code, w_param, l_param):
+            if n_code >= 0 and w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                data = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                if int(data.vkCode) == int(self.vk_code):
+                    self._hook_hit = True
+            return ctypes.windll.user32.CallNextHookEx(self.hook_handle, n_code, w_param, l_param)
+
+        self._hook_callback = LowLevelKeyboardProc(callback)
+        module_handle = ctypes.windll.kernel32.GetModuleHandleW(None)
+        self.hook_handle = ctypes.windll.user32.SetWindowsHookExW(
+            WH_KEYBOARD_LL,
+            self._hook_callback,
+            module_handle,
+            0,
+        )
+        if not self.hook_handle:
+            log_event(
+                "voice.hotkey.hook_failed",
+                hotkey=self.hotkey,
+                error_code=ctypes.windll.kernel32.GetLastError(),
+            )
+            self._hook_callback = None
 
 
 def record_chunk(seconds: float) -> np.ndarray:
@@ -135,72 +289,77 @@ def run(project_root: Path) -> None:
     log_event("voice.listener.ready", message=ready_message)
 
     pending: PendingChoice | None = None
-    while True:
-        if settings["push_to_talk"]:
-            wait_for_hotkey_press(settings["hotkey"])
-            print(f"Hotkey {settings['hotkey']} detected. Recording command...", flush=True)
-            log_event("voice.hotkey.detected", hotkey=settings["hotkey"])
-            audio = record_hotkey_command(
-                settings["hotkey"],
-                min_seconds=settings["min_record_seconds"],
-                tap_seconds=settings["tap_record_seconds"],
-                max_seconds=settings["max_record_seconds"],
+    hotkey_waiter = HotkeyWaiter(settings["hotkey"]) if settings["push_to_talk"] else None
+    try:
+        while True:
+            if settings["push_to_talk"]:
+                hotkey_waiter.wait()
+                print(f"Hotkey {settings['hotkey']} detected. Recording command...", flush=True)
+                log_event("voice.hotkey.detected", hotkey=settings["hotkey"])
+                audio = record_hotkey_command(
+                    settings["hotkey"],
+                    min_seconds=settings["min_record_seconds"],
+                    tap_seconds=settings["tap_record_seconds"],
+                    max_seconds=settings["max_record_seconds"],
+                )
+                wait_for_hotkey_release(settings["hotkey"])
+            else:
+                audio = record_chunk(settings["chunk_seconds"])
+            duration = audio.size / SAMPLE_RATE if audio.size else 0.0
+            rms = audio_rms(audio)
+            print(f"Recorded {duration:.1f}s, mic level {rms:.4f}.", flush=True)
+            log_event("voice.audio.recorded", seconds=round(duration, 2), rms=round(rms, 6))
+            transcript = transcribe(
+                model,
+                audio,
+                language=settings["language"],
+                beam_size=settings["beam_size"],
+                hotwords=settings["hotwords"],
+                initial_prompt=settings["initial_prompt"],
             )
-            wait_for_hotkey_release(settings["hotkey"])
-        else:
-            audio = record_chunk(settings["chunk_seconds"])
-        duration = audio.size / SAMPLE_RATE if audio.size else 0.0
-        rms = audio_rms(audio)
-        print(f"Recorded {duration:.1f}s, mic level {rms:.4f}.", flush=True)
-        log_event("voice.audio.recorded", seconds=round(duration, 2), rms=round(rms, 6))
-        transcript = transcribe(
-            model,
-            audio,
-            language=settings["language"],
-            beam_size=settings["beam_size"],
-            hotwords=settings["hotwords"],
-            initial_prompt=settings["initial_prompt"],
-        )
-        if not transcript:
-            print("No speech recognized.", flush=True)
-            log_event("voice.transcript.empty")
-            continue
-
-        print(f"Heard: {transcript}", flush=True)
-        log_event("voice.transcript.heard", transcript=transcript)
-        now = time.monotonic()
-        if pending is not None:
-            followup = parse_followup(transcript, pending, now=now)
-            log_event("voice.followup.parsed", action=followup.action, index=followup.index, raw=followup.raw)
-            if followup.action == "expired":
-                append_queue_item(settings["queue_path"], followup_to_queue_item(followup, transcript=transcript))
-                log_event("voice.queue.appended", type="followup", action=followup.action)
-                pending = None
-                continue
-            if followup.action in {"choose", "neither", "cancel"}:
-                append_queue_item(settings["queue_path"], followup_to_queue_item(followup, transcript=transcript))
-                log_event("voice.queue.appended", type="followup", action=followup.action, index=followup.index)
-                pending = None
+            if not transcript:
+                print("No speech recognized.", flush=True)
+                log_event("voice.transcript.empty")
                 continue
 
-        command = parse_command(transcript, require_wake=settings["require_wake_word"])
-        log_event(
-            "voice.command.parsed",
-            intent=command.intent,
-            query=command.query,
-            playlist=command.playlist,
-            value=command.value,
-            confidence=command.confidence,
-            raw=command.raw,
-        )
-        if command.intent in {"ignore", "unknown"}:
-            print(f"Ignored transcript as {command.intent}: {transcript}", flush=True)
-            log_event("voice.command.ignored", intent=command.intent, transcript=transcript)
-            continue
+            print(f"Heard: {transcript}", flush=True)
+            log_event("voice.transcript.heard", transcript=transcript)
+            now = time.monotonic()
+            if pending is not None:
+                followup = parse_followup(transcript, pending, now=now)
+                log_event("voice.followup.parsed", action=followup.action, index=followup.index, raw=followup.raw)
+                if followup.action == "expired":
+                    append_queue_item(settings["queue_path"], followup_to_queue_item(followup, transcript=transcript))
+                    log_event("voice.queue.appended", type="followup", action=followup.action)
+                    pending = None
+                    continue
+                if followup.action in {"choose", "neither", "cancel"}:
+                    append_queue_item(settings["queue_path"], followup_to_queue_item(followup, transcript=transcript))
+                    log_event("voice.queue.appended", type="followup", action=followup.action, index=followup.index)
+                    pending = None
+                    continue
 
-        append_queue_item(settings["queue_path"], command_to_queue_item(command, transcript=transcript))
-        print(f"Queued command: {command.intent}", flush=True)
-        log_event("voice.queue.appended", type="command", intent=command.intent, query=command.query)
+            command = parse_command(transcript, require_wake=settings["require_wake_word"])
+            log_event(
+                "voice.command.parsed",
+                intent=command.intent,
+                query=command.query,
+                playlist=command.playlist,
+                value=command.value,
+                confidence=command.confidence,
+                raw=command.raw,
+            )
+            if command.intent in {"ignore", "unknown"}:
+                print(f"Ignored transcript as {command.intent}: {transcript}", flush=True)
+                log_event("voice.command.ignored", intent=command.intent, transcript=transcript)
+                continue
+
+            append_queue_item(settings["queue_path"], command_to_queue_item(command, transcript=transcript))
+            print(f"Queued command: {command.intent}", flush=True)
+            log_event("voice.queue.appended", type="command", intent=command.intent, query=command.query)
+    finally:
+        if hotkey_waiter is not None:
+            hotkey_waiter.close()
 
 
 def main() -> int:
