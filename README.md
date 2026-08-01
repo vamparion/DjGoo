@@ -2,7 +2,7 @@
 
 DjGoo is a game-first Discord music controller built around Red-DiscordBot Audio. It provides push-to-talk voice control, clean track selection, radio profiles, paired multi-user voice clients, and resilient process supervision without requiring players to leave a full-screen game.
 
-> Project status: alpha. Portable builds are automated and tested, but Windows/Discord acceptance is still required before broad public promotion.
+> Project status: alpha. Portable builds and relay containers are automated and tested, but Windows/Discord acceptance is still required before broad public promotion.
 
 ## Downloads
 
@@ -22,7 +22,7 @@ Every package includes a per-file SHA-256 manifest and CycloneDX SBOM. The relea
 5. Use **Test bot console** once to enter the token, prefix, and owner information.
 6. Return to `DjGoo.exe` and choose **Start**.
 
-No Python, Java, Node, PowerShell, installer, or administrator access is required by the portable package. Configuration, Red data, downloaded models, device credentials, and logs remain beside the application so the folder can be moved, backed up, or removed cleanly.
+No Python, Java, Node, PowerShell, installer, or administrator access is required by the portable package. Configuration, Red data, downloaded models, device credentials, relay identity keys, and logs remain beside the application so the folder can be moved, backed up, or removed cleanly.
 
 ```text
 DjGoo-Host-win-x64/
@@ -46,28 +46,45 @@ Public packages contain no `.ps1` or `.vbs` entrypoints. Source-only compatibili
 
 DjGoo keeps exactly one Discord bot and one playback authority per guild. Additional players run **DjGoo Voice Remote**; they do not invite another bot or receive the Host's Discord token.
 
-### Pair a player on the same LAN
+### Direct LAN pairing
 
 1. Start the DjGoo Host.
 2. The player joins the intended Discord voice channel.
 3. The player runs `/djgoo pair` or `!djgoo pair` in Discord.
-4. DjGoo sends the gateway URL, one-time pairing code, and TLS fingerprint by DM.
+4. DjGoo sends the direct gateway URL, one-time pairing code, and TLS fingerprint by DM.
 5. The player extracts `DjGoo-Voice-win-x64.zip` and runs `DjGoo Voice.exe`.
-6. They enter the three DM values, choose a microphone/model/hotkey, and select **Pair device**.
+6. They choose `direct`, enter the three DM values, select a microphone/model/hotkey, and pair.
 7. They select **Start voice** and hold F12 while speaking.
 
-The Voice Remote performs microphone capture, VAD, Whisper recognition, corrections, and parsing locally. Raw microphone audio is not accepted by the Host gateway. Only a structured command envelope is sent over certificate-pinned HTTPS.
+Direct mode uses certificate-pinned HTTPS and is intended for a trusted LAN or authenticated private overlay. Do not forward the direct gateway port to the public internet.
 
-The Host verifies every command against the paired Discord user, guild, current voice channel, device status, rate limits, permissions, timestamp, and command UUID. Destructive controls require server ownership or **Manage Server**.
+### Encrypted internet relay pairing
+
+An operator first deploys the self-hosted relay from `relay/`, or configures a compatible hosted relay. The Host and Voice Remote then make outbound WSS connections, so the Host does not require residential router port forwarding.
+
+1. Enable `voice_gateway.relay` in the Host configuration and restart DjGoo.
+2. The player runs `/djgoorelay pair` in Discord.
+3. DjGoo sends the relay URL, one-time code, Host room ID, Host encryption public key, and key fingerprint by DM.
+4. The player opens `DjGoo Voice.exe`, chooses `relay`, and enters those values.
+5. Pairing and later commands pass through the relay as end-to-end encrypted envelopes.
+
+Relay payloads use ephemeral X25519 key exchange, HKDF-SHA256, and ChaCha20-Poly1305. Host registration uses Ed25519 signatures. The relay can route traffic but cannot read pairing codes, device tokens, transcripts, command intents, search queries, or Host responses.
+
+The repository provides the relay source, hardened non-root container, Caddy TLS example, protocol tests, container health checks, build provenance, and image SBOM. It does not currently operate an official hosted relay service.
+
+### Shared command policy
+
+The Voice Remote performs microphone capture, VAD, Whisper recognition, corrections, and parsing locally. Raw microphone audio remains on the player's computer.
+
+The Host verifies every command against the paired Discord user, guild, current voice channel, device status, rate limits, permissions, timestamp, and command UUID. Destructive controls require server ownership or **Manage Server**. Direct and relay transports feed the same Host-side processor and authoritative queue.
 
 ```text
 /djgoo devices
 /djgoo revoke <device-id>
+/djgoorelay status
 ```
 
-Pairing codes expire after five minutes and can be redeemed once. Device credentials are individually revocable. See `docs/MULTI_USER_VOICE.md` for the protocol and threat boundaries.
-
-The direct gateway is intended for a trusted LAN or authenticated private overlay. Do not expose it directly to the public internet without a separate deployment review.
+Pairing codes expire after five minutes and can be redeemed once. Device credentials are individually revocable. See `docs/MULTI_USER_VOICE.md` and `relay/README.md` for protocol and deployment details.
 
 ## What DjGoo does
 
@@ -81,6 +98,7 @@ The direct gateway is intended for a trusted LAN or authenticated private overla
 - Scores radio recommendations using station feedback, artist cooldown, result quality, and duration matching.
 - Exposes seek, queue removal, shuffle, repeat, autoplay, favorites, and station controls through one intent path.
 - Attributes remote playback requests to the paired Discord member rather than an arbitrary active user.
+- Supports direct LAN voice clients and optional outbound-only encrypted relay clients without adding another music bot.
 
 ## Voice commands
 
@@ -163,11 +181,12 @@ Run tests:
 .\.voice-venv\Scripts\python.exe -m pytest -q
 ```
 
-Run source launchers:
+Run source applications:
 
 ```powershell
 .\.venv\Scripts\python.exe -m launcher.djgoo_launcher
 .\.voice-venv\Scripts\python.exe -m launcher.djgoo_voice_launcher
+python -m relay.server
 ```
 
 Legacy root scripts are compatibility entrypoints for existing source checkouts. New user-facing functionality belongs in the launchers or importable Python modules.
@@ -186,7 +205,14 @@ The Windows release workflow builds Host and Voice Remote in parallel, then publ
 - creates per-file manifests, CycloneDX SBOMs, ZIP checksums, and GitHub artifacts;
 - publishes both assets through one tagged GitHub Release.
 
-See `docs/ARCHITECTURE.md`, `docs/MULTI_USER_VOICE.md`, `CONTRIBUTING.md`, `SECURITY.md`, and `CHANGELOG.md`.
+The relay workflow separately:
+
+- runs cryptographic, routing, and complete encrypted round-trip tests;
+- builds an unprivileged, read-only-compatible container;
+- verifies the live health endpoint with all Linux capabilities dropped;
+- can publish a tagged GHCR image with build provenance and an image SBOM.
+
+See `docs/ARCHITECTURE.md`, `docs/MULTI_USER_VOICE.md`, `relay/README.md`, `CONTRIBUTING.md`, `SECURITY.md`, and `CHANGELOG.md`.
 
 ## Licensing
 
