@@ -8,12 +8,14 @@ DjGoo is a game-first Discord music controller built on Red-DiscordBot Audio and
 
 Use the repository's **Releases** section rather than downloading the source ZIP.
 
-Each release provides two Windows x64 packages:
+Releases can provide these Windows x64 packages:
 
-- `DjGoo-Host-win-x64.zip` — the Discord bot, Red Audio, Lavalink, portable Python and Java runtimes, `DjGoo.exe`, and optional local voice recognition.
+- `DjGoo-Host-win-x64.zip` — the complete first-install Host package, including the Discord bot, Red Audio, Lavalink, portable Python and Java runtimes, `DjGoo.exe`, and optional local voice recognition.
+- `DjGoo-Host-update.zip` — the substantially smaller Host update/bootstrap package. It contains application files and explicitly required runtime patches, but not Java, models, user data, logs, or normal runtime dependencies.
+- `DjGoo-Host-update.json` — the file-level manifest used to verify the incremental update ZIP.
 - `DjGoo-Voice-win-x64.zip` — `DjGoo Voice.exe` and the local speech-recognition runtime for additional users.
 
-The packages require no separate Python, Java, Node, PowerShell, installer, or administrator setup. Each package includes a file manifest and CycloneDX SBOM; each ZIP has a matching SHA-256 checksum file.
+The packages require no separate Python, Java, Node, PowerShell, installer, or administrator setup. Each complete package includes a file manifest and CycloneDX SBOM; downloadable ZIPs have matching SHA-256 checksum files.
 
 ### Host quick start
 
@@ -22,10 +24,34 @@ The packages require no separate Python, Java, Node, PowerShell, installer, or a
 3. Extract the ZIP into any writable folder.
 4. Run `DjGoo.exe`.
 5. Select **First-run setup** and create a Discord bot application.
-6. Use **Test bot console** once to enter the token, prefix, and owner information.
+6. Use **Test bot console** once to enter the token and command prefix.
 7. Close the console and select **Start**.
 
 Configuration, Red data, downloaded models, paired-device credentials, and logs remain inside the extracted folder. The folder can be moved, backed up, or deleted without an installer.
+
+### Updating the Host
+
+After installing a release that contains the updater, select **Check for updates** in `DjGoo.exe`. DjGoo downloads only the incremental Host assets, verifies the release version, bundle size, SHA-256 digest, archive paths, and every file hash, then:
+
+1. remembers whether the stack was running;
+2. stops DjGoo components;
+3. creates a backup of every file that will be replaced or removed;
+4. installs the update using atomic file replacements;
+5. rolls back if any replacement fails;
+6. resumes the stack when it was previously running;
+7. restarts the launcher and reports the result.
+
+Normal updates preserve the Java runtime, models, bot and radio data, logs, settings, Discord token, pairing credentials, and user secrets.
+
+For the one-time updater bootstrap on an older Host package:
+
+1. Close DjGoo and its test console.
+2. Download `DjGoo-Host-update.zip` from the release.
+3. Extract it directly over the existing Host folder.
+4. Allow Windows to replace matching files.
+5. Run the replaced `DjGoo.exe`.
+
+The repository is currently private. The first in-app update check therefore asks for a fine-grained GitHub token scoped only to this repository with read-only **Contents** permission. DjGoo encrypts that token with Windows DPAPI for the current Windows account and does not write it to update logs. This token is unrelated to the Discord bot token. Public releases can be checked without a GitHub token.
 
 ## Multiple voice users
 
@@ -145,10 +171,12 @@ GitHub Actions builds Host and Voice Remote on clean Windows runners. The releas
 - installs binary Windows dependencies into isolated portable runtimes;
 - bundles the Red-compatible Lavalink jar only with Host;
 - creates `DjGoo.exe` and `DjGoo Voice.exe` with PyInstaller;
-- smoke-tests both extracted package layouts;
+- runs portable setup and import self-tests under the generated Windows runtime;
+- verifies that Red uses DjGoo's package-local configuration and that required runtime modules such as `pip` are present;
 - rejects PowerShell and VBScript files;
-- creates manifests, CycloneDX SBOMs, ZIP checksums, and workflow artifacts;
-- publishes tagged releases and alpha prereleases with both packages attached.
+- creates manifests, CycloneDX SBOMs, full ZIP checksums, and a bounded incremental Host update;
+- rejects incremental bundles that contain Java, logs, secrets, or user data other than installed-version metadata;
+- publishes tagged releases and alpha prereleases only after the Windows package jobs succeed.
 
 See `docs/ARCHITECTURE.md`, `docs/MULTI_USER_VOICE.md`, `CONTRIBUTING.md`, `SECURITY.md`, and `CHANGELOG.md`.
 
