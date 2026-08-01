@@ -124,7 +124,12 @@ class DjGooWelcome(commands.Cog):
 
     async def _command_queue_loop(self) -> None:
         await self.bot.wait_until_red_ready()
-        log_event("redbot.ready", guild_count=len(self.bot.guilds), audio_loaded=self.bot.get_cog("Audio") is not None)
+        log_event(
+            "redbot.ready",
+            guild_count=len(self.bot.guilds),
+            audio_loaded=self.bot.get_cog("Audio") is not None,
+            discord_ready=self.bot.is_ready(),
+        )
         await self._audio_bridge.resume_saved_playback()
         next_heartbeat = 0.0
         while True:
@@ -135,6 +140,7 @@ class DjGooWelcome(commands.Cog):
                         "redbot.heartbeat",
                         guild_count=len(self.bot.guilds),
                         audio_loaded=self.bot.get_cog("Audio") is not None,
+                        discord_ready=self.bot.is_ready(),
                     )
                     next_heartbeat = now + 5.0
 
