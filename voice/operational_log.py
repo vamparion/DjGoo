@@ -41,13 +41,18 @@ def _event_heartbeat(event: str, fields: dict[str, Any]) -> None:
     if not component:
         return
     stopped = event.endswith((".stopped", ".crashed"))
+    allowed_fields = {"guild_count", "audio_loaded", "discord_ready"}
     try:
         write_heartbeat(
             component,
             fields={
                 "ready": not stopped,
                 "event": event,
-                **{key: _safe_value(value) for key, value in fields.items() if key in {"guild_count", "audio_loaded"}},
+                **{
+                    key: _safe_value(value)
+                    for key, value in fields.items()
+                    if key in allowed_fields
+                },
             },
         )
     except OSError:
