@@ -14,7 +14,8 @@ def test_prepare_for_whisper_resamples_and_normalizes() -> None:
     metrics = audio_metrics(prepared, 16_000)
     assert 7_900 <= prepared.size <= 8_100
     assert abs(float(np.mean(prepared))) < 0.02
-    assert 0.2 < metrics.peak <= 1.0
+    # Gain is deliberately capped so very quiet noise is not amplified to full scale.
+    assert 0.1 < metrics.peak <= 1.0
 
 
 def test_empty_audio_is_safe() -> None:
