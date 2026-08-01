@@ -74,7 +74,10 @@ def build_gui_executable(
     source: Path,
     name: str,
 ) -> Path:
-    key = "".join(character.lower() if character.isalnum() else "-" for character in name).strip("-")
+    key = "".join(
+        character.lower() if character.isalnum() else "-"
+        for character in name
+    ).strip("-")
     dist = output.parent / f"{key}-dist"
     build = output.parent / f"{key}-build"
     spec = output.parent / f"{key}-spec"
@@ -110,7 +113,7 @@ def build_gui_executable(
 def build_launcher(output: Path) -> Path:
     return build_gui_executable(
         output,
-        source=PROJECT_ROOT / "launcher" / "djgoo_launcher.py",
+        source=PROJECT_ROOT / "launcher" / "djgoo_host_experience.py",
         name="DjGoo",
     )
 
@@ -260,7 +263,9 @@ def build(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build a portable DjGoo host directory.")
+    parser = argparse.ArgumentParser(
+        description="Build a portable DjGoo Host directory."
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--runtime-python", type=Path, required=True)
     parser.add_argument("--runtime-java", type=Path, required=True)
