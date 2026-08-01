@@ -70,6 +70,17 @@ def build_launcher(output: Path) -> Path:
     return output / "DjGoo.exe"
 
 
+def install_portable_supervisor(output: Path) -> None:
+    tools = output / "tools"
+    source_core = tools / "djgoo_stack.py"
+    adapter = tools / "djgoo_portable_stack.py"
+    portable_core = tools / "djgoo_stack_core.py"
+    if not source_core.exists() or not adapter.exists():
+        raise FileNotFoundError("Portable supervisor sources are incomplete")
+    shutil.copy2(source_core, portable_core)
+    shutil.copy2(adapter, source_core)
+
+
 def write_manifest(output: Path, version: str) -> None:
     files: list[dict[str, object]] = []
     for path in sorted(item for item in output.rglob("*") if item.is_file()):
@@ -98,12 +109,16 @@ def build(output: Path, runtime_python: Path, runtime_java: Path, lavalink_jar: 
         if source.exists():
             shutil.copy2(source, output / filename)
 
+    install_portable_supervisor(output)
     copy_tree(runtime_python, output / "runtime" / "python")
     copy_tree(runtime_java, output / "runtime" / "java")
 
     lavalink_dir = output / "data" / "discordbot" / "cogs" / "Audio"
     lavalink_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(lavalink_jar, lavalink_dir / "Lavalink.jar")
+    lavalink_config = output / "config" / "lavalink.application.yml"
+    if lavalink_config.exists():
+        shutil.copy2(lavalink_config, lavalink_dir / "application.yml")
     for relative in ("config", "data", "data/models", "data/health", "data/pids", "logs", "licenses"):
         (output / relative).mkdir(parents=True, exist_ok=True)
 
