@@ -157,7 +157,7 @@ jobs:
             --output-manifest build/DjGoo-Host-update.json `
             --version $env:DJGOO_VERSION
           if ($LASTEXITCODE -ne 0) { throw "Incremental update build failed with exit $LASTEXITCODE" }
-          python -c "import json,zipfile; from pathlib import Path; m=json.loads(Path('build/DjGoo-Host-update.json').read_text()); z=zipfile.ZipFile('build/DjGoo-Host-update.zip'); names=set(z.namelist()); assert 'DjGoo.exe' in names; assert any(n.startswith('runtime/python/Lib/site-packages/pip/') for n in names); assert not any(n.startswith(('runtime/java/','data/','logs/')) for n in names); assert len(m['files']) == len(names); print('Incremental update verified:', Path('build/DjGoo-Host-update.zip').stat().st_size, 'bytes')"
+          python -c "import json,zipfile; from pathlib import Path; m=json.loads(Path('build/DjGoo-Host-update.json').read_text()); z=zipfile.ZipFile('build/DjGoo-Host-update.zip'); names=set(z.namelist()); assert 'DjGoo.exe' in names; assert 'data/installed-version.json' in names; assert any(n.startswith('runtime/python/Lib/site-packages/pip/') for n in names); assert not any(n.startswith(('runtime/java/','logs/')) for n in names); assert not any(n.startswith('data/') and n != 'data/installed-version.json' for n in names); assert len(m['files']) == len(names); print('Incremental update verified:', Path('build/DjGoo-Host-update.zip').stat().st_size, 'bytes')"
           if ($LASTEXITCODE -ne 0) { throw "Incremental update verification failed with exit $LASTEXITCODE" }
           $updateSize = (Get-Item build/DjGoo-Host-update.zip).Length
           if ($updateSize -gt 100MB) { throw "Incremental update is unexpectedly large: $updateSize bytes" }
