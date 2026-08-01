@@ -1,0 +1,14 @@
+[project]
+name = "djgoo"
+version = "0.2.0"
+description = "Private game-first Discord music bot extensions for Red-DiscordBot"
+requires-python = ">=3.11,<3.13"
+license = { text = "GPL-3.0-or-later" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120

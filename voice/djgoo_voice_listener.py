@@ -2,22 +2,26 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import math
 import sys
+import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
 
-from voice.command_queue import append_queue_item, command_to_queue_item, followup_to_queue_item
-from voice.command_parser import PendingChoice, parse_command, parse_emergency_control, parse_followup
+from voice.audio_capture import PushToTalkAudioCapture, audio_metrics, prepare_for_whisper
+from voice.command_queue import append_queue_item, command_to_queue_item
+from voice.command_parser import parse_command
+from voice.corrections import apply_corrections, correction_hotwords, load_corrections
 from voice.listener_settings import voice_settings
 from voice.operational_log import log_event
 from voice.secrets import load_project_secrets
 
 
-SAMPLE_RATE = 16000
 HOTKEYS = {
     "F10": 0x79,
     "F11": 0x7A,
@@ -29,71 +33,52 @@ if sys.platform == "win32":
     ctypes.windll.user32.GetAsyncKeyState.restype = ctypes.c_short
 
 
-class HotkeyWaiter:
-    def __init__(self, hotkey: str):
-        self.hotkey = hotkey.upper()
-        self.vk_code = HOTKEYS.get(self.hotkey)
-        log_event(
-            "voice.hotkey.registration",
-            hotkey=self.hotkey,
-            mode=self.mode,
-        )
+@dataclass(frozen=True)
+class SpeechResult:
+    text: str
+    avg_logprob: float
+    no_speech_prob: float
+    duration_seconds: float
 
-    def close(self) -> None:
-        return None
+
+class HotkeyWaiter:
+    def __init__(self, hotkey: str, *, poll_seconds: float) -> None:
+        self.hotkey = hotkey.upper()
+        self.poll_seconds = max(0.005, float(poll_seconds))
+        if self.hotkey not in HOTKEYS:
+            raise ValueError(f"Unsupported push-to-talk key: {self.hotkey}")
+        log_event("voice.hotkey.registration", hotkey=self.hotkey, mode=self.mode)
 
     @property
     def mode(self) -> str:
-        return "GetAsyncKeyState hold-to-talk"
+        return "GetAsyncKeyState continuous-stream hold-to-talk"
 
-    def wait(
-        self,
-        *,
-        heartbeat_seconds: float = 30.0,
-        poll_seconds: float = 0.05,
-        timeout_seconds: float | None = None,
-    ) -> bool:
+    def wait_for_press(self, *, heartbeat_seconds: float = 30.0) -> None:
         last_heartbeat = time.monotonic()
-        started = last_heartbeat
-        while True:
-            if is_hotkey_down(self.hotkey):
-                return True
+        while not is_hotkey_down(self.hotkey):
             now = time.monotonic()
-            if timeout_seconds is not None and now - started >= timeout_seconds:
-                return False
             if now - last_heartbeat >= heartbeat_seconds:
-                log_event(
-                    "voice.hotkey.waiting",
-                    hotkey=self.hotkey,
-                    mode=self.mode,
-                )
+                log_event("voice.hotkey.waiting", hotkey=self.hotkey, mode=self.mode)
                 last_heartbeat = now
-            time.sleep(poll_seconds)
+            time.sleep(self.poll_seconds)
 
-
-def record_chunk(seconds: float, *, device: int | str | None = None) -> np.ndarray:
-    samplerate = input_device_samplerate(device)
-    frames = int(samplerate * seconds)
-    audio = sd.rec(frames, samplerate=samplerate, channels=1, dtype="float32", device=device)
-    sd.wait()
-    return resample_to_whisper_rate(audio.reshape(-1), samplerate)
-
-
-def input_device_samplerate(device: int | str | None) -> int:
-    try:
-        info = sd.query_devices(device, "input")
-        return int(float(info.get("default_samplerate") or SAMPLE_RATE))
-    except Exception:
-        return SAMPLE_RATE
-
-
-def resample_to_whisper_rate(audio: np.ndarray, samplerate: int) -> np.ndarray:
-    if samplerate == SAMPLE_RATE or audio.size == 0:
-        return audio.astype("float32", copy=False)
-    target_size = max(1, int(audio.size * SAMPLE_RATE / samplerate))
-    original = np.linspace(0.0, 1.0, num=audio.size, endpoint=False)
-    target = np.linspace(0.0, 1.0, num=target_size, endpoint=False)
-    return np.interp(target, original, audio).astype("float32")
+    def capture_while_held(
+        self,
+        capture: PushToTalkAudioCapture,
+        *,
+        min_seconds: float,
+        max_seconds: float,
+    ) -> np.ndarray:
+        capture.begin()
+        started = time.monotonic()
+        while is_hotkey_down(self.hotkey) and time.monotonic() - started < max_seconds:
+            time.sleep(self.poll_seconds)
+        while time.monotonic() - started < min_seconds:
+            time.sleep(self.poll_seconds)
+        audio = capture.finish()
+        while is_hotkey_down(self.hotkey):
+            time.sleep(self.poll_seconds)
+        return audio
 
 
 def is_hotkey_down(hotkey: str) -> bool:
@@ -105,22 +90,6 @@ def is_hotkey_down(hotkey: str) -> bool:
     return bool(ctypes.windll.user32.GetAsyncKeyState(vk_code) & 0x8000)
 
 
-def wait_for_hotkey_press(hotkey: str, *, poll_seconds: float = 0.03) -> None:
-    while not is_hotkey_down(hotkey):
-        time.sleep(poll_seconds)
-
-
-def wait_for_hotkey_release(hotkey: str, *, poll_seconds: float = 0.03) -> None:
-    while is_hotkey_down(hotkey):
-        time.sleep(poll_seconds)
-
-
-def audio_rms(audio: np.ndarray) -> float:
-    if audio.size == 0:
-        return 0.0
-    return float(np.sqrt(np.mean(np.square(audio))))
-
-
 def resolve_input_device(configured: object) -> int | str | None:
     if configured is None or str(configured).strip() == "":
         return None
@@ -130,23 +99,21 @@ def resolve_input_device(configured: object) -> int | str | None:
     if text.isdigit():
         return int(text)
     lowered = text.lower()
-    matches = []
+    matches: list[int] = []
     for index, device in enumerate(sd.query_devices()):
         if int(device.get("max_input_channels", 0)) <= 0:
             continue
         if lowered in str(device.get("name", "")).lower():
             matches.append(index)
-    if matches:
-        return matches[0]
-    return text
+    if not matches:
+        raise ValueError(f"No microphone matched {configured!r}")
+    return matches[0]
 
 
 def input_device_summary(device: int | str | None) -> dict:
     try:
-        try:
-            default_input = list(sd.default.device)[0]
-        except TypeError:
-            default_input = sd.default.device
+        default_device = sd.default.device
+        default_input = list(default_device)[0] if not isinstance(default_device, int) else default_device
         selected = default_input if device is None else device
         info = sd.query_devices(selected, "input")
         return {
@@ -161,40 +128,6 @@ def input_device_summary(device: int | str | None) -> dict:
         return {"configured": device, "error": f"{type(exc).__name__}: {exc}"}
 
 
-def record_hotkey_command(
-    hotkey: str,
-    *,
-    min_seconds: float,
-    tap_seconds: float,
-    max_seconds: float,
-    device: int | str | None = None,
-    block_seconds: float = 0.1,
-) -> np.ndarray:
-    samplerate = input_device_samplerate(device)
-    block_frames = max(1, int(samplerate * block_seconds))
-    max_frames = int(samplerate * max_seconds)
-    min_frames = int(samplerate * min_seconds)
-    tap_frames = int(samplerate * min(max_seconds, tap_seconds))
-    chunks = []
-    total_frames = 0
-    was_held_after_minimum = False
-    while total_frames < max_frames:
-        data = sd.rec(block_frames, samplerate=samplerate, channels=1, dtype="float32", device=device)
-        sd.wait()
-        chunks.append(data.reshape(-1).copy())
-        total_frames += len(chunks[-1])
-
-        if total_frames >= min_frames and is_hotkey_down(hotkey):
-            was_held_after_minimum = True
-        if total_frames >= min_frames and not is_hotkey_down(hotkey) and was_held_after_minimum:
-            break
-        if total_frames >= tap_frames and not is_hotkey_down(hotkey):
-            break
-    if not chunks:
-        return np.array([], dtype="float32")
-    return resample_to_whisper_rate(np.concatenate(chunks), samplerate)
-
-
 def transcribe(
     model: WhisperModel,
     audio: np.ndarray,
@@ -203,18 +136,60 @@ def transcribe(
     beam_size: int,
     hotwords: str,
     initial_prompt: str,
-) -> str:
-    segments, _info = model.transcribe(
+    vad_filter: bool,
+    vad_min_silence_ms: int,
+    vad_speech_pad_ms: int,
+) -> SpeechResult:
+    segments, info = model.transcribe(
         audio,
         language=language,
         beam_size=beam_size,
         best_of=beam_size,
-        vad_filter=False,
+        temperature=0.0,
+        vad_filter=vad_filter,
+        vad_parameters={
+            "min_silence_duration_ms": vad_min_silence_ms,
+            "speech_pad_ms": vad_speech_pad_ms,
+        },
         condition_on_previous_text=False,
         initial_prompt=initial_prompt or None,
         hotwords=hotwords or None,
     )
-    return " ".join(segment.text.strip() for segment in segments).strip()
+    completed = list(segments)
+    text = " ".join(segment.text.strip() for segment in completed if segment.text.strip()).strip()
+    if not completed:
+        return SpeechResult(text="", avg_logprob=float("-inf"), no_speech_prob=1.0, duration_seconds=0.0)
+
+    weights = [max(0.05, float(segment.end) - float(segment.start)) for segment in completed]
+    weight_total = sum(weights)
+    avg_logprob = sum(float(segment.avg_logprob) * weight for segment, weight in zip(completed, weights)) / weight_total
+    no_speech_prob = max(float(segment.no_speech_prob) for segment in completed)
+    duration = max(float(segment.end) for segment in completed)
+    log_event(
+        "voice.transcript.metrics",
+        language=getattr(info, "language", language),
+        language_probability=getattr(info, "language_probability", None),
+        avg_logprob=round(avg_logprob, 4),
+        no_speech_prob=round(no_speech_prob, 4),
+        duration_seconds=round(duration, 3),
+    )
+    return SpeechResult(text=text, avg_logprob=avg_logprob, no_speech_prob=no_speech_prob, duration_seconds=duration)
+
+
+def feedback_sound(kind: str, enabled: bool) -> None:
+    if not enabled or sys.platform != "win32":
+        return
+
+    def play() -> None:
+        try:
+            import winsound
+
+            sound = winsound.MB_OK if kind == "accepted" else winsound.MB_ICONHAND
+            winsound.MessageBeep(sound)
+        except Exception:
+            return
+
+    threading.Thread(target=play, name=f"djgoo-feedback-{kind}", daemon=True).start()
 
 
 def run(project_root: Path) -> None:
@@ -222,133 +197,136 @@ def run(project_root: Path) -> None:
     voice_config = secrets.get("voice", {})
     settings = voice_settings(voice_config, project_root)
     input_device = resolve_input_device(settings["input_device"])
+    corrections = load_corrections(project_root, settings["corrections"])
+    dynamic_hotwords = " ".join(
+        part for part in (settings["hotwords"], correction_hotwords(corrections)) if part.strip()
+    )
+
     log_event(
         "voice.listener.starting",
         model=settings["model_name"],
+        device=settings["device"],
         compute_type=settings["compute_type"],
         hotkey=settings["hotkey"],
         push_to_talk=settings["push_to_talk"],
         require_wake_word=settings["require_wake_word"],
         queue_path=str(settings["queue_path"]),
-        silence_rms_threshold=settings["silence_rms_threshold"],
         input_device=input_device_summary(input_device),
-        emergency_voice_controls=settings["emergency_voice_controls"],
+        correction_count=len(corrections),
+        vad_filter=settings["vad_filter"],
     )
 
-    print(f"Loading Whisper model {settings['model_name']} ({settings['compute_type']})...", flush=True)
-    model = WhisperModel(settings["model_name"], device="cpu", compute_type=settings["compute_type"])
-    if settings["push_to_talk"]:
-        ready_message = f"DjGoo local voice listener is running. Hold {settings['hotkey']} while speaking."
-    else:
-        ready_message = "DjGoo local voice listener is running. Say 'DjGoo ...' into the default mic."
-    print(ready_message, flush=True)
-    log_event("voice.listener.ready", message=ready_message)
+    print(
+        f"Loading Whisper model {settings['model_name']} "
+        f"({settings['device']}/{settings['compute_type']})...",
+        flush=True,
+    )
+    model_kwargs = {
+        "device": settings["device"],
+        "compute_type": settings["compute_type"],
+    }
+    if settings["cpu_threads"] > 0:
+        model_kwargs["cpu_threads"] = settings["cpu_threads"]
+    model = WhisperModel(settings["model_name"], **model_kwargs)
 
-    pending: PendingChoice | None = None
-    hotkey_waiter = HotkeyWaiter(settings["hotkey"]) if settings["push_to_talk"] else None
-    last_silence_log = 0.0
-    try:
+    hotkey_waiter = HotkeyWaiter(
+        settings["hotkey"],
+        poll_seconds=settings["hotkey_poll_seconds"],
+    ) if settings["push_to_talk"] else None
+
+    with PushToTalkAudioCapture(
+        device=input_device,
+        block_seconds=settings["block_seconds"],
+        preroll_seconds=settings["preroll_seconds"],
+        release_tail_seconds=settings["release_tail_seconds"],
+    ) as capture:
+        ready_message = (
+            f"DjGoo voice is ready. Hold {settings['hotkey']} while speaking."
+            if hotkey_waiter is not None
+            else "DjGoo voice is ready."
+        )
+        print(ready_message, flush=True)
+        log_event(
+            "voice.listener.ready",
+            message=ready_message,
+            sample_rate=capture.sample_rate,
+            block_seconds=capture.block_seconds,
+        )
+
         while True:
-            recording_mode = "continuous"
-            if settings["push_to_talk"]:
-                hotkey_detected = hotkey_waiter.wait(
-                    timeout_seconds=(
-                        settings["emergency_listen_interval_seconds"]
-                        if settings["emergency_voice_controls"]
-                        else None
-                    )
+            if hotkey_waiter is not None:
+                hotkey_waiter.wait_for_press()
+                log_event("voice.hotkey.detected", hotkey=settings["hotkey"])
+                raw_audio = hotkey_waiter.capture_while_held(
+                    capture,
+                    min_seconds=settings["min_record_seconds"],
+                    max_seconds=settings["max_record_seconds"],
                 )
-                if hotkey_detected:
-                    recording_mode = "hotkey"
-                    print(
-                        f"Hotkey {settings['hotkey']} detected. Recording while held...",
-                        flush=True,
-                    )
-                    log_event(
-                        "voice.hotkey.detected",
-                        hotkey=settings["hotkey"],
-                        record_mode="hold_to_talk",
-                        max_seconds=settings["max_record_seconds"],
-                    )
-                    audio = record_hotkey_command(
-                        settings["hotkey"],
-                        min_seconds=settings["min_record_seconds"],
-                        tap_seconds=settings["tap_record_seconds"],
-                        max_seconds=settings["max_record_seconds"],
-                        device=input_device,
-                    )
-                    wait_for_hotkey_release(settings["hotkey"])
-                else:
-                    recording_mode = "emergency"
-                    audio = record_chunk(settings["emergency_chunk_seconds"], device=input_device)
+                mode = "hotkey"
             else:
-                audio = record_chunk(settings["chunk_seconds"], device=input_device)
-            duration = audio.size / SAMPLE_RATE if audio.size else 0.0
-            rms = audio_rms(audio)
-            print(f"Recorded {duration:.1f}s, mic level {rms:.4f}.", flush=True)
+                raw_audio = capture.record_for(settings["chunk_seconds"])
+                mode = "continuous"
+
+            audio = prepare_for_whisper(raw_audio, capture.sample_rate)
+            metrics = audio_metrics(audio, 16_000)
             log_event(
                 "voice.audio.recorded",
-                seconds=round(duration, 2),
-                rms=round(rms, 6),
-                mode=recording_mode,
+                mode=mode,
+                seconds=round(metrics.seconds, 3),
+                rms=round(metrics.rms, 6),
+                peak=round(metrics.peak, 6),
+                stream_status=capture.last_status,
             )
-            if recording_mode == "hotkey" and rms < settings["silence_rms_threshold"]:
+            if metrics.rms < settings["silence_rms_threshold"]:
                 log_event(
                     "voice.audio.too_quiet",
-                    rms=round(rms, 6),
+                    rms=round(metrics.rms, 6),
                     threshold=settings["silence_rms_threshold"],
-                    hint="Hold the hotkey while speaking toward the selected microphone.",
                 )
-                print("Recorded audio was too quiet; skipping transcription.", flush=True)
+                feedback_sound("rejected", settings["feedback_beeps"])
                 continue
-            if recording_mode in {"continuous", "emergency"} and rms < settings["silence_rms_threshold"]:
-                now = time.monotonic()
-                if now - last_silence_log >= 30.0:
-                    log_event(
-                        "voice.audio.silence",
-                        rms=round(rms, 6),
-                        threshold=settings["silence_rms_threshold"],
-                    )
-                    last_silence_log = now
-                continue
-            transcript = transcribe(
+
+            result = transcribe(
                 model,
                 audio,
                 language=settings["language"],
                 beam_size=settings["beam_size"],
-                hotwords=settings["hotwords"],
+                hotwords=dynamic_hotwords,
                 initial_prompt=settings["initial_prompt"],
+                vad_filter=settings["vad_filter"],
+                vad_min_silence_ms=settings["vad_min_silence_ms"],
+                vad_speech_pad_ms=settings["vad_speech_pad_ms"],
             )
-            if not transcript:
-                print("No speech recognized.", flush=True)
+            if not result.text:
                 log_event("voice.transcript.empty")
+                feedback_sound("rejected", settings["feedback_beeps"])
+                continue
+            if result.avg_logprob < settings["min_avg_logprob"] or result.no_speech_prob > settings["max_no_speech_prob"]:
+                log_event(
+                    "voice.transcript.rejected",
+                    transcript=result.text,
+                    avg_logprob=result.avg_logprob,
+                    no_speech_prob=result.no_speech_prob,
+                    min_avg_logprob=settings["min_avg_logprob"],
+                    max_no_speech_prob=settings["max_no_speech_prob"],
+                )
+                feedback_sound("rejected", settings["feedback_beeps"])
                 continue
 
+            transcript = apply_corrections(result.text, corrections)
+            if transcript != result.text:
+                log_event("voice.transcript.corrected", original=result.text, corrected=transcript)
             print(f"Heard: {transcript}", flush=True)
-            log_event("voice.transcript.heard", transcript=transcript)
-            now = time.monotonic()
-            if pending is not None:
-                followup = parse_followup(transcript, pending, now=now)
-                log_event("voice.followup.parsed", action=followup.action, index=followup.index, raw=followup.raw)
-                if followup.action == "expired":
-                    append_queue_item(settings["queue_path"], followup_to_queue_item(followup, transcript=transcript))
-                    log_event("voice.queue.appended", type="followup", action=followup.action)
-                    pending = None
-                    continue
-                if followup.action in {"choose", "neither", "cancel"}:
-                    append_queue_item(settings["queue_path"], followup_to_queue_item(followup, transcript=transcript))
-                    log_event("voice.queue.appended", type="followup", action=followup.action, index=followup.index)
-                    pending = None
-                    continue
-
-            command = (
-                parse_emergency_control(transcript)
-                if recording_mode == "emergency"
-                else parse_command(transcript, require_wake=settings["require_wake_word"])
+            log_event(
+                "voice.transcript.heard",
+                transcript=transcript,
+                raw_transcript=result.text,
+                confidence=round(math.exp(min(0.0, result.avg_logprob)), 4),
             )
+
+            command = parse_command(transcript, require_wake=settings["require_wake_word"])
             log_event(
                 "voice.command.parsed",
-                mode=recording_mode,
                 intent=command.intent,
                 query=command.query,
                 playlist=command.playlist,
@@ -357,16 +335,13 @@ def run(project_root: Path) -> None:
                 raw=command.raw,
             )
             if command.intent in {"ignore", "unknown"}:
-                print(f"Ignored transcript as {command.intent}: {transcript}", flush=True)
                 log_event("voice.command.ignored", intent=command.intent, transcript=transcript)
+                feedback_sound("rejected", settings["feedback_beeps"])
                 continue
 
             append_queue_item(settings["queue_path"], command_to_queue_item(command, transcript=transcript))
-            print(f"Queued command: {command.intent}", flush=True)
             log_event("voice.queue.appended", type="command", intent=command.intent, query=command.query)
-    finally:
-        if hotkey_waiter is not None:
-            hotkey_waiter.close()
+            feedback_sound("accepted", settings["feedback_beeps"])
 
 
 def main() -> int:
@@ -374,7 +349,7 @@ def main() -> int:
     parser.add_argument(
         "--project-root",
         default=str(Path(__file__).resolve().parents[1]),
-        help="DiscordBot project root.",
+        help="DjGoo project root.",
     )
     args = parser.parse_args()
 
@@ -392,4 +367,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

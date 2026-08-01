@@ -8,10 +8,11 @@ class VoiceListenerSettingsTests(unittest.TestCase):
     def test_voice_settings_default_to_push_to_talk_and_stronger_model(self):
         settings = voice_settings({}, Path("C:/DjGoo"))
 
-        self.assertEqual(settings["model_name"], "small.en")
+        self.assertEqual(settings["model_name"], "distil-large-v3")
         self.assertEqual(settings["hotkey"], "F12")
         self.assertTrue(settings["push_to_talk"])
         self.assertGreaterEqual(settings["beam_size"], 5)
+        self.assertTrue(settings["vad_filter"])
         self.assertIn("DjGoo", settings["hotwords"])
 
     def test_voice_settings_preserve_configured_queue_and_model(self):

@@ -1,11 +1,12 @@
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+$Python = Join-Path $ProjectRoot ".venv\Scripts\pythonw.exe"
 $Launcher = Join-Path $ProjectRoot "tools\djgoo_stack.py"
-$LogDir = Join-Path $ProjectRoot "logs"
 
-New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+if (!(Test-Path $Python)) {
+    throw "DjGoo Python was not found at $Python"
+}
 
-& $Python $Launcher start
-exit $LASTEXITCODE
+Start-Process -FilePath $Python -ArgumentList @("`"$Launcher`"", "start") -WorkingDirectory $ProjectRoot -WindowStyle Hidden
+exit 0

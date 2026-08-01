@@ -150,7 +150,7 @@ class VoiceCommandParserTests(unittest.TestCase):
             with self.subTest(transcript=transcript):
                 self.assertEqual(parse_command(transcript).intent, intent)
 
-    def test_negative_like_phrases_do_not_parse_as_likes(self):
+    def test_negative_like_phrases_parse_as_negative_station_feedback(self):
         for transcript in (
             "DjGoo I don't like this",
             "DjGoo don't like this",
@@ -159,7 +159,7 @@ class VoiceCommandParserTests(unittest.TestCase):
         ):
             with self.subTest(transcript=transcript):
                 parsed = parse_command(transcript)
-                self.assertEqual(parsed.intent, "unknown")
+                self.assertEqual(parsed.intent, "station_less_like_current")
                 self.assertNotEqual(parsed.intent, "station_like_current")
 
     def test_parses_pending_choice_naturally(self):
