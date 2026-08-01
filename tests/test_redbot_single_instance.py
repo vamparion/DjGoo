@@ -24,7 +24,6 @@ from tools.start_redbot_selector import (
     duplicate_instance_message,
     install_audio_runtime_patch,
     redbot_lock_path,
-    setup_djgoo_audio,
 )
 
 
@@ -158,11 +157,38 @@ def test_red_audio_is_configured_for_supervisor_owned_lavalink() -> None:
     }
 
 
-def test_audio_runtime_patch_replaces_managed_setup() -> None:
-    audio_package = SimpleNamespace(setup=object())
+def test_audio_initializer_is_wrapped_before_normal_startup() -> None:
+    class FakeAudio:
+        async def initialize(self) -> None:
+            self.calls.append("original")
+
+        def __init__(self) -> None:
+            self.config = _FakeConfig()
+            self.calls: list[str] = []
+
+    audio_package = SimpleNamespace(Audio=FakeAudio)
     server_config = SimpleNamespace(DEFAULT_LAVALINK_YAML={})
 
     install_audio_runtime_patch(audio_package, server_config)
+    instance = FakeAudio()
+    asyncio.run(instance.initialize())
 
-    assert audio_package.setup is setup_djgoo_audio
+    assert instance.calls == ["original"]
+    assert instance.config.values["use_external_lavalink"] is True
+    assert instance.config.values["host"] == LAVALINK_HOST
     assert server_config.DEFAULT_LAVALINK_YAML["yaml__server__address"] == LAVALINK_HOST
+
+
+def test_audio_runtime_patch_is_idempotent() -> None:
+    class FakeAudio:
+        async def initialize(self) -> None:
+            return None
+
+    audio_package = SimpleNamespace(Audio=FakeAudio)
+    server_config = SimpleNamespace(DEFAULT_LAVALINK_YAML={})
+
+    install_audio_runtime_patch(audio_package, server_config)
+    first_initialize = FakeAudio.initialize
+    install_audio_runtime_patch(audio_package, server_config)
+
+    assert FakeAudio.initialize is first_initialize
