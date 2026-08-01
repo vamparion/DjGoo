@@ -117,6 +117,24 @@ def test_stale_marker_without_state_does_not_suppress_first_run(
     assert marker.exists() is False
 
 
+def test_unrelated_sibling_red_install_is_ignored(tmp_path: Path) -> None:
+    current = tmp_path / "current-package"
+    unrelated = tmp_path / "other-red-app"
+    unrelated_data = unrelated / "data" / "discordbot"
+    unrelated_core = unrelated_data / "core"
+    unrelated_core.mkdir(parents=True)
+    (unrelated_core / "settings.json").write_text(
+        json.dumps({"token_sentinel": "wrong-application"}),
+        encoding="utf-8",
+    )
+    _write_instance_config(unrelated, unrelated_data)
+
+    assert migrate_existing_music_core(current) is False
+    assert not (
+        current / "data" / "discordbot" / "core" / "settings.json"
+    ).exists()
+
+
 def test_empty_instance_is_not_mistaken_for_configured_music_core(
     tmp_path: Path,
 ) -> None:
