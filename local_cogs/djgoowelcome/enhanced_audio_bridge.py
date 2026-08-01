@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import inspect
 import random
 import re
@@ -13,7 +12,6 @@ from lavalink import NodeNotFound, PlayerNotFound
 
 from voice.media_policy import (
     CanonicalTrack,
-    MediaCandidate,
     candidates_from_ytmusic,
     pick_best_search_candidate,
     pick_radio_candidate,
@@ -24,6 +22,9 @@ from voice.operational_log import log_event
 from voice.sqlite_stations import SqliteDjGooStations
 
 from .audio_bridge import DjGooAudioBridge
+
+
+RADIO_MODES = {"bangers", "balanced", "discovery", "throwbacks"}
 
 
 class EnhancedDjGooAudioBridge(DjGooAudioBridge):
@@ -193,11 +194,7 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
     def _track_data(self, track) -> Dict[str, str]:
         data = super()._track_data(track)
         info = getattr(track, "info", {}) or {}
-        artist = (
-            getattr(track, "author", "")
-            or info.get("author", "")
-            or info.get("artist", "")
-        )
+        artist = getattr(track, "author", "") or info.get("author", "") or info.get("artist", "")
         if artist:
             data["artist"] = str(artist).strip()
         return data
@@ -229,11 +226,59 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
     def _is_bad_radio_title(self, title: str) -> bool:
         return title_is_rejected(title)
 
+    def _split_radio_mode(self, seed: str) -> tuple[str, str]:
+        normalized = re.sub(r"\s+", " ", seed.strip())
+        first, separator, rest = normalized.partition(" ")
+        mode = first.lower()
+        if mode not in RADIO_MODES:
+            return "balanced", normalized
+        if rest:
+            return mode, rest
+        defaults = {
+            "bangers": "popular hits",
+            "balanced": "popular music",
+            "discovery": "new music recommendations",
+            "throwbacks": "80s 90s 2000s hits",
+        }
+        return mode, defaults[mode]
+
+    def _radio_seed_search_query(self, seed: str) -> str:
+        mode, actual_seed = self._split_radio_mode(seed)
+        query = super()._radio_seed_search_query(actual_seed)
+        log_event("radio.mode.seed", mode=mode, original_seed=seed, search_query=query)
+        return query
+
     def _pick_recommended_track(self, station: Dict[str, Any], tracks) -> Optional[Dict[str, str]]:
-        candidates = candidates_from_ytmusic(tracks or [])
+        mode, _actual_seed = self._split_radio_mode(str(station.get("seed", "")))
+        source_tracks = [track for track in (tracks or []) if isinstance(track, dict)]
+        if mode == "throwbacks":
+            dated = []
+            for track in source_tracks:
+                try:
+                    year = int(track.get("year") or 0)
+                except (TypeError, ValueError):
+                    year = 0
+                if not year or year <= 2012:
+                    dated.append(track)
+            if dated:
+                source_tracks = dated
+
+        candidates = candidates_from_ytmusic(source_tracks)
+        if mode == "bangers":
+            # Watch-playlist order is YouTube Music's strongest available relevance signal.
+            candidates = sorted(candidates, key=lambda item: item.result_index)[:8]
+        elif mode == "discovery" and len(candidates) > 5:
+            # Avoid always replaying the safest first recommendation in discovery mode.
+            candidates = candidates[2:]
+
         selected = pick_radio_candidate(candidates, station)
         if selected is None:
-            log_event("radio.recommendation.ranked_empty", station=station.get("name"), count=len(candidates))
+            log_event(
+                "radio.recommendation.ranked_empty",
+                station=station.get("name"),
+                mode=mode,
+                count=len(candidates),
+            )
             return None
         result = {
             "title": selected.display_title,
@@ -244,7 +289,16 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
         log_event(
             "radio.recommendation.ranked",
             station=station.get("name"),
+            mode=mode,
             candidate_count=len(candidates),
             selected=result,
         )
         return result
+
+    def _station_reason(self, station: Dict[str, Any]) -> str:
+        mode, _actual_seed = self._split_radio_mode(str(station.get("seed", "")))
+        if station.get("liked"):
+            return f"{mode.title()} mode, steered by liked tracks"
+        if station.get("more_like"):
+            return f"{mode.title()} mode, steered by more-like-this"
+        return f"{mode.title()} mode recommendation"
