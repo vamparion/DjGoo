@@ -11,8 +11,6 @@ from typing import Any
 
 import psutil
 
-from tools.lavalink_process import cleanup_lavalink_processes
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CORE_PATH = Path(__file__).with_name("djgoo_stack_core.py")
@@ -78,10 +76,6 @@ def _process_is_package_lavalink(process: Any, project_root: Path) -> bool:
     if str(root).lower() in command:
         return True
 
-    # Red Audio's managed-node launcher can use a relative command such as
-    # ``java -jar Lavalink.jar`` while setting cwd to its Audio data directory.
-    # That process still belongs to this package even though the full project
-    # path is absent from its command line.
     return _process_cwd(process) == _lavalink_directory(root)
 
 
@@ -97,13 +91,6 @@ def _connection_port(connection: Any) -> int | None:
 
 
 def _process_listens_on(process: Any, port: int) -> bool:
-    """Return true when psutil can prove this process owns the listener.
-
-    Windows can deny or omit per-process connection data for a non-elevated
-    process. Callers must treat ``False`` as "not proven" rather than proof that
-    the process does not own the socket.
-    """
-
     try:
         connection_reader = getattr(process, "net_connections", None)
         if connection_reader is None:
@@ -199,10 +186,6 @@ def _adopt_lavalink_listener(core: Any, spec: Any) -> bool:
         candidates = exact_listeners
         reason = "matching-lavalink-listener"
     elif matches and _lavalink_port_ready():
-        # On Windows, non-elevated per-process socket enumeration can return no
-        # listener even though the bundled Lavalink process is reachable. An
-        # older package-matching Java process is then the real listener; newer
-        # matching Java processes are failed bind attempts waiting to exit.
         candidates = matches
         reason = "reachable-lavalink-fallback"
     else:
@@ -254,21 +237,28 @@ def _portable_lavalink_ready(core: Any) -> bool:
     if not _lavalink_port_ready():
         return False
 
-    # Socket ownership was unavailable. Only accept the recorded PID when it is
-    # the oldest package-matching Lavalink process. This prevents a newer Java
-    # process that failed to bind from borrowing readiness from the real node.
     oldest = _oldest_process(_matching_package_lavalink_processes(core.PROJECT_ROOT))
     return oldest is not None and int(oldest.pid) == pid
 
 
+def _lavalink_client_ready(core: Any, expected_pid: int) -> bool:
+    heartbeat = core.read_json(core.health_path("lavalink-client"))
+    if not heartbeat:
+        return False
+    try:
+        heartbeat_pid = int(heartbeat.get("pid") or 0)
+        age = time.time() - float(heartbeat.get("timestamp") or 0)
+    except (TypeError, ValueError):
+        return False
+    return (
+        heartbeat_pid == expected_pid
+        and -5.0 <= age <= 10.0
+        and heartbeat.get("ready") is True
+        and int(heartbeat.get("ready_node_count") or 0) >= 1
+    )
+
+
 def _portable_redbot_ready(core: Any) -> bool:
-    """Allow the first Red-ready event time to finish playback restoration.
-
-    After the normal recurring heartbeat begins, the original fifteen-second
-    failure detection is restored. This prevents a slow Lavalink reconnect from
-    causing Red to be killed while it is still completing its startup work.
-    """
-
     record = core.component_record("redbot")
     heartbeat = core.read_json(core.health_path("redbot"))
     if not record or not heartbeat:
@@ -285,7 +275,9 @@ def _portable_redbot_ready(core: Any) -> bool:
         return False
     if heartbeat.get("audio_loaded") is not True or heartbeat.get("discord_ready") is not True:
         return False
-    if not _lavalink_port_ready():
+    if not _portable_lavalink_ready(core):
+        return False
+    if not _lavalink_client_ready(core, expected_pid):
         return False
 
     max_age = 120.0 if heartbeat.get("event") == "redbot.ready" else 15.0
@@ -293,8 +285,6 @@ def _portable_redbot_ready(core: Any) -> bool:
 
 
 def spawn_portable_supervisor(core: Any) -> bool:
-    """Start the supervisor through this adapter so portable overrides survive."""
-
     executable = core.PYTHONW if core.PYTHONW.exists() else core.BOT_PYTHON
     if not executable.exists():
         executable = Path(sys.executable)
@@ -348,8 +338,6 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
     core.LOCK_PATH = root / "data" / "djgoo-supervisor.lock"
     core.SUPERVISOR_PID_PATH = core.PID_DIR / "supervisor.json"
 
-    # A portable package must not be redirected to an old machine-wide DjGoo
-    # Java setting. Prefer the bundled runtime whenever it is present.
     configured_java = Path(os.environ.get("DJGOO_JAVA", "java.exe"))
     core.JAVA = runtime_java if runtime_java.exists() else configured_java
     core.BOT_PYTHON = runtime_python
@@ -361,8 +349,6 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
     core.EVENT_LOG = core.LOG_DIR / "djgoo-events.jsonl"
     core.WINDOWS_DETACHED_FLAGS = portable_windows_flags()
     core.LOG = core.Logger()
-    core.pid_path("lavalink").unlink(missing_ok=True)
-    core.health_path("lavalink").unlink(missing_ok=True)
 
     original_component_running = core.component_running
     original_terminate_component = core.terminate_component
@@ -370,27 +356,17 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
     original_start_component = core.start_component
 
     def portable_component_running(spec: Any) -> bool:
-        # Red Audio owns Lavalink. Keep a virtual supervisor component so
-        # existing status/UI behavior remains compatible without starting
-        # a second Java process.
-        if getattr(spec, "name", "") == "lavalink":
+        if original_component_running(spec):
             return True
-        return bool(original_component_running(spec))
+        if getattr(spec, "name", "") == "lavalink":
+            return _adopt_lavalink_listener(core, spec)
+        return False
 
     def portable_terminate_component(spec: Any, reason: str) -> None:
         if getattr(spec, "name", "") == "lavalink":
-            for pid in cleanup_lavalink_processes(root):
-                core.LOG.event(
-                    "component.orphan_stop",
-                    component="lavalink",
-                    pid=int(pid),
-                    reason=reason,
-                )
-            core.pid_path(spec.name).unlink(missing_ok=True)
-            core.health_path(spec.name).unlink(missing_ok=True)
-            return
-
-        leftovers = _matching_processes(spec)
+            leftovers = _matching_package_lavalink_processes(root)
+        else:
+            leftovers = _matching_processes(spec)
         original_terminate_component(spec, reason)
         for process in leftovers:
             try:
@@ -407,6 +383,8 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
             _terminate_process_tree(process)
         core.pid_path(spec.name).unlink(missing_ok=True)
         core.health_path(spec.name).unlink(missing_ok=True)
+        if getattr(spec, "name", "") == "redbot":
+            core.health_path("lavalink-client").unlink(missing_ok=True)
 
     def portable_component_environment(resume_playback: bool = False) -> dict[str, str]:
         env = original_component_environment(resume_playback=resume_playback)
@@ -418,6 +396,8 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
     def guarded_start_component(spec: Any, *, resume_playback: bool = False) -> bool:
         previous_component = getattr(core, "_djgoo_starting_component", "")
         core._djgoo_starting_component = str(getattr(spec, "name", ""))
+        if getattr(spec, "name", "") == "redbot":
+            core.health_path("lavalink-client").unlink(missing_ok=True)
         try:
             return bool(original_start_component(spec, resume_playback=resume_playback))
         except OSError as exc:
@@ -447,7 +427,7 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
     core.terminate_component = portable_terminate_component
     core.component_environment = portable_component_environment
     core.start_component = guarded_start_component
-    core.lavalink_ready = lambda: True
+    core.lavalink_ready = lambda: _portable_lavalink_ready(core)
     core.redbot_ready = lambda: _portable_redbot_ready(core)
     core.run_supervisor = guarded_run_supervisor
     core.spawn_supervisor = lambda: spawn_portable_supervisor(core)
