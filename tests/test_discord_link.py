@@ -111,7 +111,7 @@ async def test_encrypted_pairing_round_trip(tmp_path: Path) -> None:
     assert response["result"]["device_id"] == "device"
     assert fingerprint_public_key(
         identity.encryption_public_b64
-    ) == identity.encryption_fingerprint
+    ) == identity.encryption_fingerprint_sha256
 
 
 @pytest.mark.asyncio

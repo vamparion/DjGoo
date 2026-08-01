@@ -49,19 +49,17 @@ env:
 jobs:
   build:
     name: Build and validate Windows packages
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 90
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      tag: ${{ steps.version.outputs.tag }}
-      publish: ${{ steps.version.outputs.publish }}
+    permissions:
+      contents: write
     steps:
       - name: Check out source
         uses: actions/checkout@v4
 
       - name: Resolve release version
         id: version
-        shell: pwsh
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           if ($env:GITHUB_REF_TYPE -eq "tag") {
@@ -103,25 +101,28 @@ jobs:
           java-version: "17"
 
       - name: Install build dependencies
-        shell: pwsh
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
-          $PSNativeCommandUseErrorActionPreference = $true
           python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed with exit $LASTEXITCODE" }
           python -m pip install -r requirements-dev.txt -r requirements-release.txt
+          if ($LASTEXITCODE -ne 0) { throw "Build dependency installation failed with exit $LASTEXITCODE" }
 
       - name: Compile and run complete tests
-        shell: pwsh
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
-          $PSNativeCommandUseErrorActionPreference = $true
           python -m compileall -q launcher voice tools local_cogs relay tests
+          if ($LASTEXITCODE -ne 0) { throw "Source compilation failed with exit $LASTEXITCODE" }
           python -m pytest -q
+          if ($LASTEXITCODE -ne 0) { throw "Test suite failed with exit $LASTEXITCODE" }
 
       - name: Prepare embedded Python runtimes
-        shell: pwsh
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build | Out-Null
           $url = "https://www.python.org/ftp/python/$env:PYTHON_VERSION/python-$env:PYTHON_VERSION-embed-amd64.zip"
           Invoke-WebRequest -UseBasicParsing $url -OutFile build/python-embed.zip
           $actual = (Get-FileHash build/python-embed.zip -Algorithm MD5).Hash.ToLowerInvariant()
@@ -137,52 +138,62 @@ jobs:
           }
 
       - name: Install portable dependencies
-        shell: pwsh
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
-          $PSNativeCommandUseErrorActionPreference = $true
           python -m pip install --only-binary=:all: --target build/host-python/Lib/site-packages -r requirements-bot.txt -r requirements-voice.txt
+          if ($LASTEXITCODE -ne 0) { throw "Host dependency installation failed with exit $LASTEXITCODE" }
           python -m pip install --only-binary=:all: --target build/voice-python/Lib/site-packages -r requirements-voice.txt
+          if ($LASTEXITCODE -ne 0) { throw "Voice dependency installation failed with exit $LASTEXITCODE" }
 
       - name: Download Music Core Audio Engine
-        shell: pwsh
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           $pin = (& build/host-python/python.exe -c "from redbot.cogs.audio.managed_node.version_pins import JAR_VERSION; print(str(JAR_VERSION))").Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Could not resolve Audio Engine pin" }
           if (-not $pin) { throw "Music Core returned an empty Audio Engine version pin" }
           $url = "https://github.com/Cog-Creators/Lavalink-Jars/releases/download/$pin/Lavalink.jar"
           Invoke-WebRequest -UseBasicParsing $url -OutFile build/Lavalink.jar
           if ((Get-Item build/Lavalink.jar).Length -lt 1000000) { throw "Audio Engine download is unexpectedly small" }
           $output = (& "$env:JAVA_HOME/bin/java.exe" -jar build/Lavalink.jar --version 2>&1 | Out-String)
+          if ($LASTEXITCODE -ne 0) { throw "Audio Engine version command failed: $output" }
           if ($output -notmatch "(?m)^Version:\s+$([regex]::Escape($pin))\s*$") { throw "Audio Engine version mismatch: $output" }
 
       - name: Build Host and Voice packages
-        shell: pwsh
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
-          $PSNativeCommandUseErrorActionPreference = $true
           python tools/build_portable.py --output build/DjGoo-Host-win-x64 --runtime-python build/host-python --runtime-java "$env:JAVA_HOME" --lavalink-jar build/Lavalink.jar --version $env:DJGOO_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "Host package build failed with exit $LASTEXITCODE" }
           python tools/build_voice_remote.py --output build/DjGoo-Voice-win-x64 --runtime-python build/voice-python --version $env:DJGOO_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "Voice package build failed with exit $LASTEXITCODE" }
           python tools/generate_sbom.py --site-packages build/host-python/Lib/site-packages --output build/DjGoo-Host-win-x64/sbom.cdx.json --version $env:DJGOO_VERSION --name "DjGoo Host"
+          if ($LASTEXITCODE -ne 0) { throw "Host SBOM generation failed with exit $LASTEXITCODE" }
           python tools/generate_sbom.py --site-packages build/voice-python/Lib/site-packages --output build/DjGoo-Voice-win-x64/sbom.cdx.json --version $env:DJGOO_VERSION --name "DjGoo Voice"
+          if ($LASTEXITCODE -ne 0) { throw "Voice SBOM generation failed with exit $LASTEXITCODE" }
 
       - name: Smoke-test portable Host
-        shell: pwsh
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           $root = Resolve-Path build/DjGoo-Host-win-x64
           & "$root/runtime/python/python.exe" "$root/tools/portable_red_setup.py" --project-root "$root" --non-interactive
+          if ($LASTEXITCODE -ne 0) { throw "Portable Music Core setup failed with exit $LASTEXITCODE" }
           & "$root/runtime/python/python.exe" "$root/tools/start_redbot_selector.py" --djgoo-check
+          if ($LASTEXITCODE -ne 0) { throw "Portable Music Core self-check failed with exit $LASTEXITCODE" }
           & "$root/runtime/python/python.exe" -c "import voice.command_parser, voice.connection_manager, tools.djgoo_stack; print('DjGoo Host imports OK')"
+          if ($LASTEXITCODE -ne 0) { throw "Portable Host import smoke test failed with exit $LASTEXITCODE" }
           if (!(Test-Path "$root/DjGoo.exe")) { throw "DjGoo.exe is missing" }
           if (!(Test-Path "$root/DjGoo Mini Player.exe")) { throw "DjGoo Mini Player.exe is missing" }
           if (!(Test-Path "build/DjGoo-Voice-win-x64/DjGoo Voice.exe")) { throw "DjGoo Voice.exe is missing" }
 
       - name: Build updater bundle and release archives
-        shell: pwsh
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           python tools/build_update_bundle.py --package-root build/DjGoo-Host-win-x64 --output-zip build/DjGoo-Host-update.zip --output-manifest build/DjGoo-Host-update.json --version $env:DJGOO_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "Updater bundle build failed with exit $LASTEXITCODE" }
           Compress-Archive -Path build/DjGoo-Host-win-x64 -DestinationPath build/DjGoo-Host-win-x64.zip -CompressionLevel Optimal -Force
           Compress-Archive -Path build/DjGoo-Voice-win-x64 -DestinationPath build/DjGoo-Voice-win-x64.zip -CompressionLevel Optimal -Force
           $assets = @("DjGoo-Host-win-x64.zip", "DjGoo-Voice-win-x64.zip", "DjGoo-Host-update.zip", "DjGoo-Host-update.json")
@@ -192,48 +203,22 @@ jobs:
           }
           $lines | Set-Content -Encoding ASCII build/SHA256SUMS.txt
           python -c "import json; from pathlib import Path; p=json.loads(Path('build/DjGoo-Host-update.json').read_text()); assert p['version']=='$env:DJGOO_VERSION'; assert p['release_tag']=='v$env:DJGOO_VERSION'; print('Updater manifest verified')"
+          if ($LASTEXITCODE -ne 0) { throw "Updater manifest verification failed with exit $LASTEXITCODE" }
 
-      - name: Upload validated release assets
-        uses: actions/upload-artifact@v4
+      - name: Publish updater-visible GitHub prerelease
+        if: steps.version.outputs.publish == 'true'
+        uses: softprops/action-gh-release@v2
         with:
-          name: DjGoo-${{ steps.version.outputs.version }}
-          path: |
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: DjGoo ${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          files: |
             build/DjGoo-Host-win-x64.zip
             build/DjGoo-Voice-win-x64.zip
             build/DjGoo-Host-update.zip
             build/DjGoo-Host-update.json
             build/SHA256SUMS.txt
-          if-no-files-found: error
-          retention-days: 30
-
-  release:
-    name: Publish updater-visible GitHub release
-    needs: build
-    if: needs.build.outputs.publish == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download validated assets
-        uses: actions/download-artifact@v4
-        with:
-          name: DjGoo-${{ needs.build.outputs.version }}
-          path: release-assets
-
-      - name: Create or replace prerelease
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.build.outputs.tag }}
-          VERSION: ${{ needs.build.outputs.version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
-          fi
-          gh release create "$TAG" release-assets/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "DjGoo $VERSION" \
-            --generate-notes \
-            --prerelease

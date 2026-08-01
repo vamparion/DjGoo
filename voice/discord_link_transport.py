@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import re
 import time
@@ -12,11 +13,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import aiohttp
 
-from voice.relay_crypto import (
-    decrypt_response,
-    encrypt_request,
-    public_key_fingerprint,
-)
+from voice.relay_crypto import decrypt_response, encrypt_request
 
 
 REQUEST_PREFIX = "DJGOO-LINK-1:"
@@ -50,6 +47,8 @@ def normalize_webhook_url(value: str) -> tuple[str, str]:
     parsed = urlparse(value.strip())
     if parsed.scheme.lower() != "https" or parsed.hostname not in DISCORD_HOSTS:
         raise ValueError("DjGoo Discord Link requires an official Discord HTTPS webhook")
+    if parsed.username or parsed.password or parsed.port not in {None, 443}:
+        raise ValueError("DjGoo Discord Link webhook URL is invalid")
     match = WEBHOOK_PATH_RE.fullmatch(parsed.path.rstrip("/"))
     if match is None:
         raise ValueError("DjGoo Discord Link webhook URL is invalid")
@@ -57,7 +56,7 @@ def normalize_webhook_url(value: str) -> tuple[str, str]:
     normalized = urlunparse(
         (
             "https",
-            parsed.netloc,
+            parsed.hostname,
             parsed.path.rstrip("/"),
             "",
             "",
@@ -67,6 +66,18 @@ def normalize_webhook_url(value: str) -> tuple[str, str]:
     return normalized, webhook_id
 
 
+def fingerprint_public_key(value: str) -> str:
+    encoded = str(value or "").strip()
+    padding = "=" * ((4 - len(encoded) % 4) % 4)
+    try:
+        raw = base64.urlsafe_b64decode(encoded + padding)
+    except (ValueError, base64.binascii.Error) as exc:
+        raise ValueError("DjGoo Link Host public key is invalid") from exc
+    if len(raw) != 32:
+        raise ValueError("DjGoo Link Host public key has an invalid length")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _with_query(url: str, **values: str) -> str:
     parsed = urlparse(url)
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
@@ -74,7 +85,7 @@ def _with_query(url: str, **values: str) -> str:
     return urlunparse(parsed._replace(query=urlencode(query)))
 
 
-def _encode_envelope(prefix: str, envelope: dict[str, Any]) -> str:
+def encode_discord_envelope(prefix: str, envelope: dict[str, Any]) -> str:
     raw = json.dumps(
         envelope,
         ensure_ascii=True,
@@ -87,7 +98,7 @@ def _encode_envelope(prefix: str, envelope: dict[str, Any]) -> str:
     return content
 
 
-def _decode_envelope(prefix: str, content: str) -> dict[str, Any]:
+def decode_discord_envelope(prefix: str, content: str) -> dict[str, Any]:
     if not content.startswith(prefix):
         raise ValueError("DjGoo Link response marker is missing")
     encoded = content[len(prefix) :].strip()
@@ -96,7 +107,12 @@ def _decode_envelope(prefix: str, content: str) -> dict[str, Any]:
         payload = json.loads(
             base64.urlsafe_b64decode(encoded + padding).decode("utf-8")
         )
-    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (
+        ValueError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        base64.binascii.Error,
+    ) as exc:
         raise ValueError("DjGoo Link encrypted response is corrupted") from exc
     if not isinstance(payload, dict):
         raise ValueError("DjGoo Link encrypted response is invalid")
@@ -115,16 +131,20 @@ class DiscordLinkTransport:
         webhook_url, webhook_id = normalize_webhook_url(credential.webhook_url)
         if webhook_id != str(credential.webhook_id):
             raise ValueError("Discord Link webhook identity changed")
-        fingerprint = public_key_fingerprint(
+        fingerprint = fingerprint_public_key(
             credential.host_encryption_public_key
         )
-        if fingerprint != credential.host_encryption_fingerprint_sha256:
+        expected_fingerprint = (
+            credential.host_encryption_fingerprint_sha256.strip().lower()
+        )
+        if fingerprint != expected_fingerprint:
             raise ValueError("Discord Link Host identity fingerprint does not match")
         self.credential = DiscordLinkCredential(
             **{
                 **credential.__dict__,
                 "webhook_url": webhook_url,
                 "webhook_id": webhook_id,
+                "host_encryption_fingerprint_sha256": expected_fingerprint,
             }
         )
         self.timeout_seconds = float(timeout_seconds)
@@ -140,14 +160,15 @@ class DiscordLinkTransport:
         device_name: str,
     ) -> DiscordLinkCredential:
         normalized_url, webhook_id = normalize_webhook_url(webhook_url)
-        if public_key_fingerprint(host_public_key) != host_fingerprint:
+        normalized_fingerprint = host_fingerprint.strip().lower()
+        if fingerprint_public_key(host_public_key) != normalized_fingerprint:
             raise ValueError("Discord Link Host identity fingerprint does not match")
         temporary = DiscordLinkCredential(
             transport="discord",
             webhook_url=normalized_url,
             webhook_id=webhook_id,
             host_encryption_public_key=host_public_key,
-            host_encryption_fingerprint_sha256=host_fingerprint,
+            host_encryption_fingerprint_sha256=normalized_fingerprint,
             device_id="",
             device_token="",
             discord_user_id="",
@@ -166,7 +187,7 @@ class DiscordLinkTransport:
             webhook_url=normalized_url,
             webhook_id=webhook_id,
             host_encryption_public_key=host_public_key,
-            host_encryption_fingerprint_sha256=host_fingerprint,
+            host_encryption_fingerprint_sha256=normalized_fingerprint,
             device_id=str(response["device_id"]),
             device_token=str(response["device_token"]),
             discord_user_id=str(response["discord_user_id"]),
@@ -179,14 +200,16 @@ class DiscordLinkTransport:
         payload: dict[str, Any],
     ) -> dict[str, Any]:
         request_id = str(uuid.uuid4())
-        envelope, private_key = encrypt_request(
+        envelope, request_key = encrypt_request(
             self.credential.host_encryption_public_key,
             self.credential.webhook_id,
             request_id,
-            action,
-            payload,
+            {
+                "action": action,
+                "payload": payload,
+            },
         )
-        content = _encode_envelope(REQUEST_PREFIX, envelope)
+        content = encode_discord_envelope(REQUEST_PREFIX, envelope)
         timeout = aiohttp.ClientTimeout(total=self.timeout_seconds + 5)
         message_id = ""
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -208,9 +231,7 @@ class DiscordLinkTransport:
             if not message_id:
                 raise RuntimeError("Discord Link did not return a message identifier")
 
-            message_url = (
-                f"{self.credential.webhook_url}/messages/{message_id}"
-            )
+            message_url = f"{self.credential.webhook_url}/messages/{message_id}"
             deadline = time.monotonic() + self.timeout_seconds
             try:
                 while time.monotonic() < deadline:
@@ -219,16 +240,29 @@ class DiscordLinkTransport:
                             message = await response.json()
                             response_content = str(message.get("content") or "")
                             if response_content.startswith(RESPONSE_PREFIX):
-                                response_envelope = _decode_envelope(
+                                response_envelope = decode_discord_envelope(
                                     RESPONSE_PREFIX,
                                     response_content,
                                 )
-                                return decrypt_response(
-                                    private_key,
+                                decrypted = decrypt_response(
+                                    request_key,
                                     response_envelope,
-                                    self.credential.webhook_id,
-                                    request_id,
                                 )
+                                if decrypted.get("ok") is not True:
+                                    status = int(decrypted.get("status") or 500)
+                                    error = str(
+                                        decrypted.get("error")
+                                        or "DjGoo Host rejected the encrypted request"
+                                    )
+                                    raise RuntimeError(
+                                        f"Discord Link request was rejected ({status}): {error}"
+                                    )
+                                result = decrypted.get("result")
+                                if not isinstance(result, dict):
+                                    raise RuntimeError(
+                                        "DjGoo Host returned an invalid encrypted response"
+                                    )
+                                return dict(result)
                         elif response.status == 404:
                             raise RuntimeError(
                                 "Discord Link message disappeared before the Host answered"
