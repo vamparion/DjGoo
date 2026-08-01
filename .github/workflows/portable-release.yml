@@ -61,7 +61,7 @@ jobs:
 
       - name: Resolve release version
         id: version
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           if ($env:GITHUB_REF_TYPE -eq "tag") {
@@ -103,7 +103,7 @@ jobs:
           java-version: "17"
 
       - name: Install build dependencies
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           python -m pip install --upgrade pip
@@ -112,7 +112,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Build dependency installation failed with exit $LASTEXITCODE" }
 
       - name: Compile and run complete tests
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           python -m compileall -q launcher voice tools local_cogs relay tests
@@ -121,7 +121,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Test suite failed with exit $LASTEXITCODE" }
 
       - name: Prepare embedded Python runtimes
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           $url = "https://www.python.org/ftp/python/$env:PYTHON_VERSION/python-$env:PYTHON_VERSION-embed-amd64.zip"
@@ -139,7 +139,7 @@ jobs:
           }
 
       - name: Install portable dependencies
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           python -m pip install --only-binary=:all: --target build/host-python/Lib/site-packages -r requirements-bot.txt -r requirements-voice.txt
@@ -148,7 +148,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Voice dependency installation failed with exit $LASTEXITCODE" }
 
       - name: Download Music Core Audio Engine
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           $pin = (& build/host-python/python.exe -c "from redbot.cogs.audio.managed_node.version_pins import JAR_VERSION; print(str(JAR_VERSION))").Trim()
@@ -162,7 +162,7 @@ jobs:
           if ($output -notmatch "(?m)^Version:\s+$([regex]::Escape($pin))\s*$") { throw "Audio Engine version mismatch: $output" }
 
       - name: Build Host and Voice packages
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           python tools/build_portable.py --output build/DjGoo-Host-win-x64 --runtime-python build/host-python --runtime-java "$env:JAVA_HOME" --lavalink-jar build/Lavalink.jar --version $env:DJGOO_VERSION
@@ -175,7 +175,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Voice SBOM generation failed with exit $LASTEXITCODE" }
 
       - name: Smoke-test portable Host
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           $root = Resolve-Path build/DjGoo-Host-win-x64
@@ -190,7 +190,7 @@ jobs:
           if (!(Test-Path "build/DjGoo-Voice-win-x64/DjGoo Voice.exe")) { throw "DjGoo Voice.exe is missing" }
 
       - name: Build updater bundle and release archives
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           python tools/build_update_bundle.py --package-root build/DjGoo-Host-win-x64 --output-zip build/DjGoo-Host-update.zip --output-manifest build/DjGoo-Host-update.json --version $env:DJGOO_VERSION
