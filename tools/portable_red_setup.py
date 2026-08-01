@@ -4,10 +4,10 @@ import argparse
 import json
 import os
 import shutil
-import sys
 import time
 import webbrowser
 from pathlib import Path
+from typing import Any
 
 
 DISCORD_APPS_URL = "https://discord.com/developers/applications"
@@ -17,36 +17,58 @@ INSTANCE_NAME = "discordbot"
 def red_config_dir(project_root: Path) -> Path:
     configured = os.environ.get("REDBOT_CONFIG_DIR", "").strip()
     if configured:
-        return Path(configured)
-    return project_root / ".localappdata" / "Red-DiscordBot" / "Red-DiscordBot"
+        return Path(configured).expanduser().resolve()
+    return (project_root / ".localappdata" / "Red-DiscordBot" / "Red-DiscordBot").resolve()
+
+
+def _load_config(config_path: Path) -> dict[str, Any]:
+    if not config_path.exists():
+        return {}
+    try:
+        loaded = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        backup = config_path.with_suffix(f".invalid-{int(time.time())}.json")
+        shutil.copy2(config_path, backup)
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _deduplicated_paths(values: object, required: Path) -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+    candidates = values if isinstance(values, list) else []
+    for value in [*candidates, str(required.resolve())]:
+        text = str(value).strip()
+        if not text:
+            continue
+        normalized = os.path.normcase(os.path.abspath(os.path.expanduser(text)))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        paths.append(str(Path(text).expanduser().resolve()))
+    return paths
 
 
 def ensure_instance(project_root: Path) -> Path:
+    project_root = project_root.resolve()
     config_dir = red_config_dir(project_root)
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "config.json"
-    data_path = project_root / "data" / INSTANCE_NAME
+    data_path = (project_root / "data" / INSTANCE_NAME).resolve()
+    local_cogs = (project_root / "local_cogs").resolve()
     data_path.mkdir(parents=True, exist_ok=True)
+    local_cogs.mkdir(parents=True, exist_ok=True)
 
-    payload: dict[str, object]
-    if config_path.exists():
-        try:
-            loaded = json.loads(config_path.read_text(encoding="utf-8"))
-            payload = loaded if isinstance(loaded, dict) else {}
-        except json.JSONDecodeError:
-            backup = config_path.with_suffix(f".invalid-{int(time.time())}.json")
-            shutil.copy2(config_path, backup)
-            payload = {}
-    else:
-        payload = {}
+    payload = _load_config(config_path)
+    existing = payload.get(INSTANCE_NAME)
+    instance = dict(existing) if isinstance(existing, dict) else {}
+    instance["DATA_PATH"] = str(data_path)
+    instance["COG_PATH_APPEND"] = _deduplicated_paths(instance.get("COG_PATH_APPEND"), local_cogs)
+    instance.setdefault("CORE_PATH_APPEND", [])
+    instance.setdefault("STORAGE_TYPE", "JSON")
+    instance.setdefault("STORAGE_DETAILS", {})
+    payload[INSTANCE_NAME] = instance
 
-    payload[INSTANCE_NAME] = {
-        "DATA_PATH": str(data_path),
-        "COG_PATH_APPEND": [],
-        "CORE_PATH_APPEND": [],
-        "STORAGE_TYPE": "JSON",
-        "STORAGE_DETAILS": {},
-    }
     temp = config_path.with_suffix(".json.tmp")
     temp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     temp.replace(config_path)
@@ -54,7 +76,15 @@ def ensure_instance(project_root: Path) -> Path:
 
 
 def ensure_project_files(project_root: Path) -> None:
-    for relative in ("config", "data", "logs", "data/models", "data/health", "data/pids"):
+    for relative in (
+        "config",
+        "data",
+        "logs",
+        "data/models",
+        "data/health",
+        "data/pids",
+        "local_cogs",
+    ):
         (project_root / relative).mkdir(parents=True, exist_ok=True)
 
     example = project_root / "config" / "secrets.example.json"
@@ -68,10 +98,12 @@ def write_marker(project_root: Path) -> None:
     marker.write_text(
         json.dumps(
             {
-                "schema": 1,
+                "schema": 2,
                 "instance": INSTANCE_NAME,
                 "created_at": time.time(),
                 "project_root": str(project_root),
+                "local_cog_path": str((project_root / "local_cogs").resolve()),
+                "startup_cogs": ["audio", "djgoowelcome"],
             },
             indent=2,
         )
@@ -100,6 +132,7 @@ def main() -> int:
     write_marker(project_root)
 
     print(f"Created or refreshed the Red instance configuration at:\n  {config_path}\n")
+    print(f"Registered bundled DjGoo cogs from:\n  {(project_root / 'local_cogs').resolve()}\n")
     print("Discord requires each host owner to create their own bot application.")
     print("Never send the bot token to another user and never put it in GitHub.")
     print("Enable the Server Members, Presence, and Message Content gateway intents.")
@@ -111,8 +144,9 @@ def main() -> int:
     print("1. Close this window.")
     print("2. In DjGoo, choose 'Test bot console'.")
     print("3. Red will ask for the bot token, command prefix, and owner information on first start.")
-    print("4. Invite the bot using the URL Red prints after it connects.")
-    print("5. Close the console and use the normal Start button.")
+    print("4. DjGoo automatically loads Red Audio and the bundled djgoowelcome cog.")
+    print("5. Invite the bot using the URL Red prints after it connects.")
+    print("6. Close the test console before using the normal Start button.")
     if not args.non_interactive:
         input("\nPress Enter to close setup...")
     return 0
