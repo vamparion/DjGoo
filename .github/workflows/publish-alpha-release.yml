@@ -1,0 +1,131 @@
+name: Publish Alpha Release
+
+on:
+  push:
+    branches:
+      - "release/v*"
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: alpha-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@v4
+
+      - name: Validate release branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$GITHUB_REF_NAME" in
+            release/v*-alpha.*|release/v*-beta.*|release/v*-rc.*) ;;
+            *)
+              echo "Release branch must use release/vX.Y.Z-alpha.N, -beta.N, or -rc.N" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Dispatch clean Windows package build
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "started_at=$started_at" >> "$GITHUB_OUTPUT"
+          gh workflow run portable-release.yml --ref "$GITHUB_REF_NAME"
+
+      - name: Wait for package build
+        id: packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STARTED_AT: ${{ steps.dispatch.outputs.started_at }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id=""
+          for attempt in $(seq 1 180); do
+            runs="$(gh run list \
+              --workflow portable-release.yml \
+              --branch "$GITHUB_REF_NAME" \
+              --event workflow_dispatch \
+              --limit 10 \
+              --json databaseId,status,conclusion,createdAt,headBranch)"
+            run_id="$(jq -r \
+              --arg branch "$GITHUB_REF_NAME" \
+              --arg started "$STARTED_AT" \
+              '[.[] | select(.headBranch == $branch and .createdAt >= $started)] | sort_by(.createdAt) | last | .databaseId // empty' \
+              <<<"$runs")"
+            if [[ -z "$run_id" ]]; then
+              sleep 10
+              continue
+            fi
+
+            status="$(jq -r --argjson id "$run_id" '.[] | select(.databaseId == $id) | .status' <<<"$runs")"
+            conclusion="$(jq -r --argjson id "$run_id" '.[] | select(.databaseId == $id) | .conclusion // empty' <<<"$runs")"
+            echo "Portable build run $run_id: $status ${conclusion:-}"
+
+            if [[ "$status" == "completed" ]]; then
+              if [[ "$conclusion" != "success" ]]; then
+                gh run view "$run_id"
+                exit 1
+              fi
+              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Timed out waiting for Portable Releases workflow" >&2
+          exit 1
+
+      - name: Download Host and Voice Remote packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.packages.outputs.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p downloaded/host downloaded/voice release-assets
+          gh run download "$RUN_ID" --name DjGoo-Host-win-x64 --dir downloaded/host
+          gh run download "$RUN_ID" --name DjGoo-Voice-win-x64 --dir downloaded/voice
+          find downloaded -type f -maxdepth 3 -exec cp {} release-assets/ \;
+          test -f release-assets/DjGoo-Host-win-x64.zip
+          test -f release-assets/DjGoo-Voice-win-x64.zip
+          test -f release-assets/SHA256SUMS-Host.txt
+          test -f release-assets/SHA256SUMS-Voice.txt
+
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#release/}"
+          cat > release-notes.md <<EOF
+          ## DjGoo alpha test release
+
+          This is an unsigned pre-release for Windows and Discord acceptance testing. Do not treat it as a stable public release yet.
+
+          ### Downloads
+
+          - **DjGoo-Host-win-x64.zip** — the Discord bot, Red Audio, Lavalink, portable runtimes, launcher, and optional local voice recognition.
+          - **DjGoo-Voice-win-x64.zip** — the paired local voice client for additional users.
+
+          Extract the selected ZIP before running its executable. The packages contain no PowerShell or VBScript entrypoints and require no separate Python or Java installation.
+
+          Verify the ZIP with its matching SHA-256 checksum file before testing.
+          EOF
+          gh release create "$tag" release-assets/* \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "DjGoo $tag (Alpha)" \
+            --notes-file release-notes.md
