@@ -62,29 +62,59 @@ def test_moved_install_copies_user_state_but_keeps_new_audio_engine(
     old_audio = old_data / "cogs" / "Audio"
     old_audio.mkdir(parents=True)
     (old_audio / "Lavalink.jar").write_bytes(b"old-managed-jar")
-    (old_audio / "application.yml").write_text("old-managed-yaml", encoding="utf-8")
+    (old_audio / "application.yml").write_text(
+        "old-managed-yaml",
+        encoding="utf-8",
+    )
     _write_instance_config(old_install, old_data)
 
     new_audio = new_install / "data" / "discordbot" / "cogs" / "Audio"
     new_audio.mkdir(parents=True)
     (new_audio / "Lavalink.jar").write_bytes(b"new-managed-jar")
-    (new_audio / "application.yml").write_text("new-managed-yaml", encoding="utf-8")
+    (new_audio / "application.yml").write_text(
+        "new-managed-yaml",
+        encoding="utf-8",
+    )
+    stale_marker = new_install / "data" / "portable-setup.json"
+    stale_marker.write_text(
+        json.dumps({"project_root": str(old_install)}),
+        encoding="utf-8",
+    )
 
     assert migrate_existing_music_core(new_install) is True
 
-    migrated_core = new_install / "data" / "discordbot" / "core" / "settings.json"
+    migrated_core = (
+        new_install / "data" / "discordbot" / "core" / "settings.json"
+    )
     assert json.loads(migrated_core.read_text(encoding="utf-8")) == {
         "token_sentinel": "from-old-install"
     }
     assert (new_audio / "Lavalink.jar").read_bytes() == b"new-managed-jar"
-    assert (new_audio / "application.yml").read_text(encoding="utf-8") == "new-managed-yaml"
+    assert (
+        new_audio / "application.yml"
+    ).read_text(encoding="utf-8") == "new-managed-yaml"
 
     current_config = json.loads(
-        (red_config_dir(new_install) / "config.json").read_text(encoding="utf-8")
+        (red_config_dir(new_install) / "config.json").read_text(
+            encoding="utf-8"
+        )
     )
     assert Path(current_config["discordbot"]["DATA_PATH"]).resolve() == (
         new_install / "data" / "discordbot"
     ).resolve()
+    repaired_marker = json.loads(stale_marker.read_text(encoding="utf-8"))
+    assert Path(repaired_marker["project_root"]).resolve() == new_install.resolve()
+
+
+def test_stale_marker_without_state_does_not_suppress_first_run(
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "data" / "portable-setup.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("{}", encoding="utf-8")
+
+    assert migrate_existing_music_core(tmp_path) is False
+    assert marker.exists() is False
 
 
 def test_empty_instance_is_not_mistaken_for_configured_music_core(
