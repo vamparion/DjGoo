@@ -1,14 +1,31 @@
 from __future__ import annotations
 
+import builtins
 import json
 from pathlib import Path
 
+from launcher.djgoo_launcher import Layout
+from tools.portable_environment import portable_environment, red_config_dir
 from tools.portable_red_setup import INSTANCE_NAME, ensure_instance
-from tools.start_redbot_selector import STARTUP_COGS, redbot_argv
+from tools import start_redbot_selector
+from tools.start_redbot_selector import CONSOLE_FLAG, STARTUP_COGS, redbot_argv
 
 
-def test_setup_registers_bundled_local_cogs_and_preserves_settings(tmp_path: Path) -> None:
-    config_dir = tmp_path / ".localappdata" / "Red-DiscordBot" / "Red-DiscordBot"
+def test_portable_environment_redirects_red_to_package_local_appdata(tmp_path: Path) -> None:
+    env = portable_environment(tmp_path, {"PATH": "test-path", "LOCALAPPDATA": "system-path"})
+
+    assert env["PATH"] == "test-path"
+    assert Path(env["DJGOO_HOME"]) == tmp_path.resolve()
+    assert Path(env["LOCALAPPDATA"]) == (tmp_path / ".localappdata").resolve()
+    assert Path(env["REDBOT_CONFIG_DIR"]) == red_config_dir(tmp_path)
+    assert red_config_dir(tmp_path) == (
+        tmp_path / ".localappdata" / "Red-DiscordBot" / "Red-DiscordBot"
+    ).resolve()
+
+
+def test_setup_registers_bundled_local_cogs_and_preserves_settings(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("REDBOT_CONFIG_DIR", str(red_config_dir(tmp_path)))
+    config_dir = red_config_dir(tmp_path)
     config_dir.mkdir(parents=True)
     config_path = config_dir / "config.json"
     existing_cog = tmp_path / "third-party-cogs"
@@ -44,8 +61,9 @@ def test_setup_registers_bundled_local_cogs_and_preserves_settings(tmp_path: Pat
     assert payload["another-instance"] == {"DATA_PATH": "leave-alone"}
 
 
-def test_setup_recovers_from_malformed_config(tmp_path: Path) -> None:
-    config_dir = tmp_path / ".localappdata" / "Red-DiscordBot" / "Red-DiscordBot"
+def test_setup_recovers_from_malformed_config(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("REDBOT_CONFIG_DIR", str(red_config_dir(tmp_path)))
+    config_dir = red_config_dir(tmp_path)
     config_dir.mkdir(parents=True)
     config_path = config_dir / "config.json"
     config_path.write_text("not valid json", encoding="utf-8")
@@ -64,3 +82,35 @@ def test_startup_forces_audio_and_djgoo_cogs_from_absolute_path(tmp_path: Path) 
 
     assert Path(argv[cog_path_index]) == (tmp_path / "local_cogs").resolve()
     assert tuple(argv[load_index:]) == STARTUP_COGS == ("audio", "djgoowelcome")
+
+
+def test_launcher_layout_exposes_packaged_console_helper(tmp_path: Path) -> None:
+    layout = Layout(tmp_path)
+    assert layout.bot_console_script == tmp_path / "tools" / "start_redbot_selector.py"
+
+
+def test_console_mode_keeps_nonzero_red_exit_visible(monkeypatch) -> None:
+    prompts: list[str] = []
+
+    def fail(_project_root: Path) -> None:
+        raise SystemExit(78)
+
+    monkeypatch.setattr(start_redbot_selector, "run_redbot", fail)
+    monkeypatch.setattr(builtins, "input", lambda prompt: prompts.append(prompt) or "")
+
+    assert start_redbot_selector.main([CONSOLE_FLAG]) == 78
+    assert prompts == ["\nPress Enter to close this window..."]
+
+
+def test_supervisor_mode_never_waits_for_console_input(monkeypatch) -> None:
+    def fail(_project_root: Path) -> None:
+        raise SystemExit(78)
+
+    monkeypatch.setattr(start_redbot_selector, "run_redbot", fail)
+    monkeypatch.setattr(
+        builtins,
+        "input",
+        lambda _prompt: (_ for _ in ()).throw(AssertionError("supervisor must not pause")),
+    )
+
+    assert start_redbot_selector.main([]) == 78
