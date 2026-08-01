@@ -43,9 +43,9 @@ def test_remote_credential_is_dpapi_protected_on_windows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Exercise the Windows envelope without requiring the Linux CI runner to
-    # expose the Windows CryptProtectData API.
-    monkeypatch.setattr(secure_store.os, "name", "nt")
+    # Exercise the Windows envelope without changing process-wide os.name on the
+    # Linux CI runner or requiring CryptProtectData to exist there.
+    monkeypatch.setattr(secure_store, "_is_windows", lambda: True)
     monkeypatch.setattr(secure_store, "_protect_windows", lambda value: value[::-1])
     monkeypatch.setattr(secure_store, "_unprotect_windows", lambda value: value[::-1])
 
