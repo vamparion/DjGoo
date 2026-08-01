@@ -22,6 +22,9 @@ DjGoo follows Semantic Versioning. Dates use ISO 8601.
 - Verified incremental Host update ZIPs and external file manifests.
 - A **Check for updates** launcher action with automatic backup, rollback, restart, and stack-resume behavior.
 - Windows-DPAPI encryption for private-repository update credentials.
+- Verified incremental updates inside `DjGoo Voice`, with recipient-specific release manifests and rollback.
+- **Bind a button** capture for keyboard, mouse, function, navigation, and media buttons on both Host and recipient.
+- One shared visual palette for Host and recipient control centers.
 
 ### Fixed
 
@@ -29,6 +32,9 @@ DjGoo follows Semantic Versioning. Dates use ISO 8601.
 - Bound Red's configuration module directly to the package-local `config.json` instead of relying on Windows environment path overrides.
 - Made Windows package jobs fail when native Python smoke tests return nonzero exit codes.
 - Kept Red console startup errors visible for diagnosis.
+- Preserved and recognized existing Discord/Music Core state when upgrading or moving a portable DjGoo folder.
+- Stopped treating the idle background supervisor as an active Music Core process when changing Discord configuration.
+- Kept newly bundled Audio Engine files when migrating older user configuration.
 
 ### Changed
 
@@ -39,6 +45,8 @@ DjGoo follows Semantic Versioning. Dates use ISO 8601.
 - Voice Remote clients perform speech recognition locally and send structured commands rather than microphone audio.
 - Normal Host updates preserve Java, models, user data, logs, settings, and secrets instead of replacing the complete package.
 - Windows package smoke tests now verify portable Red configuration, bundled `pip`, DPAPI credential storage, and incremental-update scope.
+- Host and recipient updater assets are published together from one validated Windows build.
+- Recipient incremental updates preserve the active embedded Python runtime, pairing credential, local settings, and logs.
 
 ## [0.1.0] - 2026-07-31
 
