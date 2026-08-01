@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "djgoo"
-version = "0.3.0"
-description = "Game-first Discord music control with paired local voice clients"
+version = "0.4.0"
+description = "Game-first Discord music control with paired local and encrypted relay voice clients"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 license = {text = "GPL-3.0-or-later"}
@@ -23,6 +23,7 @@ classifiers = [
 [project.scripts]
 djgoo = "launcher.djgoo_launcher:main"
 djgoo-voice = "voice.djgoo_voice_remote:main"
+djgoo-relay = "relay.server:main"
 djgoo-build-portable = "tools.build_portable:main"
 djgoo-build-voice = "tools.build_voice_remote:main"
 
@@ -34,11 +35,12 @@ djgoo-voice-gui = "launcher.djgoo_voice_launcher:main"
 py-modules = []
 
 [tool.setuptools.packages.find]
-include = ["launcher*", "voice*", "tools*", "local_cogs*"]
+include = ["launcher*", "voice*", "tools*", "local_cogs*", "relay*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+asyncio_mode = "strict"
 
 [tool.ruff]
 target-version = "py311"
