@@ -1,0 +1,90 @@
+name: Bug report
+description: Report a reproducible DjGoo defect
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include Discord tokens, device credentials, pairing codes, private keys, or unredacted logs. Security vulnerabilities belong in the private process described in SECURITY.md.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      options:
+        - Host launcher or portable package
+        - Redbot / Discord integration
+        - Lavalink or playback
+        - Local F12 voice recognition
+        - Voice Remote direct connection
+        - Voice Remote encrypted relay
+        - Relay container or deployment
+        - Radio, recommendations, or track selection
+        - Build, CI, release, or documentation
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Release tag, artifact workflow run, or commit SHA.
+      placeholder: v0.4.0 or 294ab6b
+    validations:
+      required: true
+
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11 x64
+        - Windows 10 x64
+        - Linux relay host
+        - GitHub Actions runner
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: State the observed behavior and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Include the smallest reliable sequence that triggers the problem.
+      placeholder: |
+        1. Extract package to...
+        2. Start DjGoo...
+        3. Say or type...
+        4. Observe...
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      description: Relevant log lines, component status, microphone details, or screenshots. Remove all credentials and private identifiers.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues and pull requests for this problem.
+          required: true
+        - label: I removed tokens, device credentials, pairing codes, private keys, and private URLs.
+          required: true
+        - label: I can reproduce this on the version named above.
+          required: true
