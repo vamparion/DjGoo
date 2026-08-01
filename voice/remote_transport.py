@@ -11,6 +11,8 @@ from urllib.parse import urljoin
 
 import aiohttp
 
+from voice.secure_store import load_protected_json, save_protected_json
+
 
 @dataclass(frozen=True)
 class RemoteCredential:
@@ -20,6 +22,7 @@ class RemoteCredential:
     device_token: str
     discord_user_id: str
     guild_id: str
+    transport: str = "direct"
 
     def redacted(self) -> dict[str, str]:
         payload = asdict(self)
@@ -28,24 +31,54 @@ class RemoteCredential:
 
 
 def normalize_fingerprint(value: str) -> str:
-    normalized = "".join(character for character in value.lower() if character in "0123456789abcdef")
+    normalized = "".join(
+        character
+        for character in value.lower()
+        if character in "0123456789abcdef"
+    )
     if len(normalized) != 64:
-        raise ValueError("TLS fingerprint must contain 64 hexadecimal characters")
+        raise ValueError(
+            "TLS fingerprint must contain 64 hexadecimal characters"
+        )
     return normalized
 
 
 def normalize_gateway_url(value: str) -> str:
     url = value.strip().rstrip("/") + "/"
     if not url.lower().startswith("https://"):
-        raise ValueError("DjGoo Voice Gateway URLs must use https://")
+        raise ValueError("DjGoo Link direct URLs must use https://")
     return url
 
 
+def _timeout(total: float, *, connect: float | None = None) -> aiohttp.ClientTimeout:
+    connect_timeout = min(total, connect if connect is not None else total)
+    return aiohttp.ClientTimeout(
+        total=total,
+        connect=connect_timeout,
+        sock_connect=connect_timeout,
+        sock_read=total,
+    )
+
+
 class RemoteGatewayTransport:
-    def __init__(self, credential: RemoteCredential, timeout_seconds: float = 12.0) -> None:
+    def __init__(
+        self,
+        credential: RemoteCredential,
+        timeout_seconds: float = 8.0,
+    ) -> None:
+        if credential.transport not in {"", "direct"}:
+            raise ValueError(
+                "Direct transport received a non-direct credential"
+            )
         self.credential = credential
         self.timeout_seconds = float(timeout_seconds)
-        self._fingerprint = aiohttp.Fingerprint(bytes.fromhex(normalize_fingerprint(credential.tls_fingerprint_sha256)))
+        self._fingerprint = aiohttp.Fingerprint(
+            bytes.fromhex(
+                normalize_fingerprint(
+                    credential.tls_fingerprint_sha256
+                )
+            )
+        )
 
     @classmethod
     async def pair(
@@ -57,11 +90,20 @@ class RemoteGatewayTransport:
     ) -> RemoteCredential:
         normalized_url = normalize_gateway_url(gateway_url)
         fingerprint = normalize_fingerprint(tls_fingerprint_sha256)
-        ssl_fingerprint = aiohttp.Fingerprint(bytes.fromhex(fingerprint))
-        timeout = aiohttp.ClientTimeout(total=15)
+        ssl_fingerprint = aiohttp.Fingerprint(
+            bytes.fromhex(fingerprint)
+        )
+        # A direct LAN path should connect quickly. A short bounded timeout lets
+        # the one-field pairing flow move to its independent encrypted relay code
+        # without making the recipient guess which transport to choose.
+        timeout = _timeout(6.0, connect=3.0)
         payload = {
             "code": pairing_code,
-            "device_name": device_name or socket.gethostname() or "DjGoo Voice Remote",
+            "device_name": (
+                device_name
+                or socket.gethostname()
+                or "DjGoo Voice"
+            ),
         }
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(
@@ -71,11 +113,18 @@ class RemoteGatewayTransport:
             ) as response:
                 text = await response.text()
                 if response.status not in {200, 201}:
-                    raise RuntimeError(f"Pairing failed ({response.status}): {text[:300]}")
+                    raise RuntimeError(
+                        f"Pairing failed ({response.status}): "
+                        f"{text[:300]}"
+                    )
                 data = json.loads(text)
-        returned_fingerprint = normalize_fingerprint(str(data.get("tls_fingerprint_sha256") or fingerprint))
+        returned_fingerprint = normalize_fingerprint(
+            str(data.get("tls_fingerprint_sha256") or fingerprint)
+        )
         if returned_fingerprint != fingerprint:
-            raise RuntimeError("Gateway fingerprint changed during pairing")
+            raise RuntimeError(
+                "DjGoo Link identity changed during pairing"
+            )
         return RemoteCredential(
             gateway_url=normalized_url.rstrip("/"),
             tls_fingerprint_sha256=fingerprint,
@@ -83,51 +132,100 @@ class RemoteGatewayTransport:
             device_token=str(data["device_token"]),
             discord_user_id=str(data["discord_user_id"]),
             guild_id=str(data["guild_id"]),
+            transport="direct",
         )
 
-    async def send_async(self, item: dict[str, Any]) -> dict[str, Any]:
+    async def send_async(
+        self,
+        item: dict[str, Any],
+    ) -> dict[str, Any]:
         payload = dict(item)
         payload.setdefault("command_id", str(uuid.uuid4()))
         payload["guild_id"] = self.credential.guild_id
-        headers = {"Authorization": f"Bearer {self.credential.device_token}"}
-        timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
+        headers = {
+            "Authorization": f"Bearer {self.credential.device_token}"
+        }
+        timeout = _timeout(self.timeout_seconds, connect=3.0)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(
-                urljoin(normalize_gateway_url(self.credential.gateway_url), "v1/command"),
+                urljoin(
+                    normalize_gateway_url(
+                        self.credential.gateway_url
+                    ),
+                    "v1/command",
+                ),
                 json=payload,
                 headers=headers,
                 ssl=self._fingerprint,
             ) as response:
                 text = await response.text()
                 if response.status not in {200, 202}:
-                    raise RuntimeError(f"Command rejected ({response.status}): {text[:300]}")
+                    raise RuntimeError(
+                        f"Command rejected ({response.status}): "
+                        f"{text[:300]}"
+                    )
                 data = json.loads(text)
-                return data if isinstance(data, dict) else {"accepted": False}
+                return (
+                    data
+                    if isinstance(data, dict)
+                    else {"accepted": False}
+                )
+
+    async def status_async(self) -> dict[str, Any]:
+        headers = {
+            "Authorization": f"Bearer {self.credential.device_token}"
+        }
+        timeout = _timeout(self.timeout_seconds, connect=3.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(
+                urljoin(
+                    normalize_gateway_url(
+                        self.credential.gateway_url
+                    ),
+                    "v1/device",
+                ),
+                headers=headers,
+                ssl=self._fingerprint,
+            ) as response:
+                text = await response.text()
+                if response.status != 200:
+                    raise RuntimeError(
+                        f"Connection check failed ({response.status}): "
+                        f"{text[:300]}"
+                    )
+                data = json.loads(text)
+                if not isinstance(data, dict):
+                    raise RuntimeError(
+                        "Connection check returned invalid data"
+                    )
+                return data
 
     def send(self, item: dict[str, Any]) -> dict[str, Any]:
         return asyncio.run(self.send_async(item))
 
+    def status(self) -> dict[str, Any]:
+        return asyncio.run(self.status_async())
 
-def save_credential(path: Path, credential: RemoteCredential) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(".tmp")
-    temp.write_text(json.dumps(asdict(credential), indent=2) + "\n", encoding="utf-8")
-    temp.replace(path)
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+
+def save_credential(
+    path: Path,
+    credential: RemoteCredential,
+) -> None:
+    save_protected_json(path, asdict(credential))
 
 
 def load_credential(path: Path) -> RemoteCredential:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise ValueError("Remote credential file is invalid")
+    data = load_protected_json(path)
     return RemoteCredential(
-        gateway_url=normalize_gateway_url(str(data["gateway_url"])).rstrip("/"),
-        tls_fingerprint_sha256=normalize_fingerprint(str(data["tls_fingerprint_sha256"])),
+        gateway_url=normalize_gateway_url(
+            str(data["gateway_url"])
+        ).rstrip("/"),
+        tls_fingerprint_sha256=normalize_fingerprint(
+            str(data["tls_fingerprint_sha256"])
+        ),
         device_id=str(data["device_id"]),
         device_token=str(data["device_token"]),
         discord_user_id=str(data["discord_user_id"]),
         guild_id=str(data["guild_id"]),
+        transport=str(data.get("transport") or "direct"),
     )

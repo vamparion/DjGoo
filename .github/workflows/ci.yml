@@ -36,7 +36,24 @@ jobs:
           python -m pip install --requirement requirements-dev.txt
 
       - name: Compile Python sources
-        run: python -m compileall -q launcher voice tools local_cogs tests
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m compileall -q launcher voice tools local_cogs relay tests 2>&1 | tee compile.log
 
       - name: Run complete test suite
-        run: python -m pytest -q
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q 2>&1 | tee pytest.log
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: djgoo-ci-diagnostics
+          path: |
+            compile.log
+            pytest.log
+          if-no-files-found: warn
+          retention-days: 7

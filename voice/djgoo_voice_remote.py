@@ -6,12 +6,12 @@ import math
 import sys
 from pathlib import Path
 
-import numpy as np
 from faster_whisper import WhisperModel
 
 from voice.audio_capture import PushToTalkAudioCapture, audio_metrics, prepare_for_whisper
 from voice.command_parser import parse_command
 from voice.command_queue import command_to_queue_item
+from voice.connection_manager import load_recipient_transport, pair_from_invite
 from voice.corrections import apply_corrections, correction_hotwords, load_corrections
 from voice.djgoo_voice_listener import (
     HotkeyWaiter,
@@ -22,7 +22,7 @@ from voice.djgoo_voice_listener import (
 )
 from voice.listener_settings import voice_settings
 from voice.operational_log import log_event
-from voice.remote_transport import RemoteGatewayTransport, load_credential, save_credential
+from voice.pairing_bundle import build_invite, parse_invite
 
 
 def remote_config_path(project_root: Path) -> Path:
@@ -42,17 +42,16 @@ def load_remote_settings(project_root: Path) -> dict:
     return voice_settings(voice_config, project_root)
 
 
-async def pair_device(project_root: Path, gateway_url: str, code: str, fingerprint: str, device_name: str) -> None:
-    credential = await RemoteGatewayTransport.pair(
-        gateway_url,
-        code,
-        fingerprint,
+async def pair_device(project_root: Path, invite_text: str, device_name: str) -> None:
+    invite = parse_invite(invite_text)
+    credential, selected_transport = await pair_from_invite(
+        invite,
         device_name=device_name,
+        credential_path=remote_config_path(project_root),
     )
-    save_credential(remote_config_path(project_root), credential)
     print(
-        f"Paired as Discord user {credential.discord_user_id} in guild {credential.guild_id}. "
-        f"Device ID: {credential.device_id}",
+        f"Paired through {selected_transport} as Discord user {credential.discord_user_id} "
+        f"in server {credential.guild_id}. Device ID: {credential.device_id}",
         flush=True,
     )
 
@@ -60,21 +59,25 @@ async def pair_device(project_root: Path, gateway_url: str, code: str, fingerpri
 def run_remote(project_root: Path) -> None:
     credential_path = remote_config_path(project_root)
     if not credential_path.exists():
-        raise RuntimeError("This Voice Remote is not paired. Open DjGoo Voice and enter a pairing code first.")
-    credential = load_credential(credential_path)
-    transport = RemoteGatewayTransport(credential)
+        raise RuntimeError(
+            "This DjGoo Voice device is not paired. Paste a DjGoo Link invite first."
+        )
+    transport = load_recipient_transport(credential_path)
+    credential = transport.credential
     settings = load_remote_settings(project_root)
     input_device = resolve_input_device(settings["input_device"])
     corrections = load_corrections(project_root, settings["corrections"])
     dynamic_hotwords = " ".join(
-        part for part in (settings["hotwords"], correction_hotwords(corrections)) if part.strip()
+        part
+        for part in (settings["hotwords"], correction_hotwords(corrections))
+        if part.strip()
     )
 
     log_event(
         "voice.remote.starting",
         device_id=credential.device_id,
         guild_id=credential.guild_id,
-        gateway_url=credential.gateway_url,
+        transport=credential.transport,
         model=settings["model_name"],
         device=settings["device"],
         compute_type=settings["compute_type"],
@@ -82,15 +85,21 @@ def run_remote(project_root: Path) -> None:
         input_device=input_device_summary(input_device),
     )
     print(
-        f"Loading Whisper model {settings['model_name']} "
+        f"Loading speech model {settings['model_name']} "
         f"({settings['device']}/{settings['compute_type']})...",
         flush=True,
     )
-    model_kwargs = {"device": settings["device"], "compute_type": settings["compute_type"]}
+    model_kwargs = {
+        "device": settings["device"],
+        "compute_type": settings["compute_type"],
+    }
     if settings["cpu_threads"] > 0:
         model_kwargs["cpu_threads"] = settings["cpu_threads"]
     model = WhisperModel(settings["model_name"], **model_kwargs)
-    waiter = HotkeyWaiter(settings["hotkey"], poll_seconds=settings["hotkey_poll_seconds"])
+    waiter = HotkeyWaiter(
+        settings["hotkey"],
+        poll_seconds=settings["hotkey_poll_seconds"],
+    )
 
     with PushToTalkAudioCapture(
         device=input_device,
@@ -98,8 +107,16 @@ def run_remote(project_root: Path) -> None:
         preroll_seconds=settings["preroll_seconds"],
         release_tail_seconds=settings["release_tail_seconds"],
     ) as capture:
-        print(f"DjGoo Voice is ready. Hold {settings['hotkey']} while speaking.", flush=True)
-        log_event("voice.remote.ready", device_id=credential.device_id, sample_rate=capture.sample_rate)
+        print(
+            f"DjGoo Voice is ready. Hold {settings['hotkey']} while speaking.",
+            flush=True,
+        )
+        log_event(
+            "voice.remote.ready",
+            device_id=credential.device_id,
+            transport=credential.transport,
+            sample_rate=capture.sample_rate,
+        )
         while True:
             waiter.wait_for_press()
             raw_audio = waiter.capture_while_held(
@@ -128,7 +145,10 @@ def run_remote(project_root: Path) -> None:
             if not result.text:
                 feedback_sound("rejected", settings["feedback_beeps"])
                 continue
-            if result.avg_logprob < settings["min_avg_logprob"] or result.no_speech_prob > settings["max_no_speech_prob"]:
+            if (
+                result.avg_logprob < settings["min_avg_logprob"]
+                or result.no_speech_prob > settings["max_no_speech_prob"]
+            ):
                 log_event(
                     "voice.remote.transcript.rejected",
                     avg_logprob=result.avg_logprob,
@@ -144,12 +164,20 @@ def run_remote(project_root: Path) -> None:
                 feedback_sound("rejected", settings["feedback_beeps"])
                 continue
 
-            item = command_to_queue_item(command, transcript=transcript, source="voice_remote")
+            item = command_to_queue_item(
+                command,
+                transcript=transcript,
+                source="voice_remote",
+            )
             item["confidence"] = round(math.exp(min(0.0, result.avg_logprob)), 4)
             try:
                 response = transport.send(item)
             except Exception as exc:
-                log_event("voice.remote.command.failed", error=type(exc).__name__, detail=str(exc))
+                log_event(
+                    "voice.remote.command.failed",
+                    error=type(exc).__name__,
+                    detail=str(exc),
+                )
                 print(f"Command failed: {exc}", file=sys.stderr, flush=True)
                 feedback_sound("rejected", settings["feedback_beeps"])
                 continue
@@ -162,21 +190,41 @@ def run_remote(project_root: Path) -> None:
             feedback_sound("accepted", settings["feedback_beeps"])
 
 
+def _legacy_direct_invite(args: argparse.Namespace) -> str:
+    invite = build_invite(
+        code=args.code,
+        expires_at=4_102_444_800,
+        direct_url=args.gateway,
+        direct_fingerprint=args.fingerprint,
+    )
+    return invite.to_uri()
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="DjGoo Voice Remote")
-    parser.add_argument("--project-root", default=str(Path(__file__).resolve().parents[1]))
+    parser = argparse.ArgumentParser(description="DjGoo Voice")
+    parser.add_argument(
+        "--project-root",
+        default=str(Path(__file__).resolve().parents[1]),
+    )
     subparsers = parser.add_subparsers(dest="action", required=True)
     pair_parser = subparsers.add_parser("pair")
-    pair_parser.add_argument("--gateway", required=True)
-    pair_parser.add_argument("--code", required=True)
-    pair_parser.add_argument("--fingerprint", required=True)
-    pair_parser.add_argument("--device-name", default="DjGoo Voice Remote")
+    pair_parser.add_argument("--invite")
+    pair_parser.add_argument("--device-name", default="DjGoo Voice")
+    # Backward-compatible direct fields for existing packages and scripts.
+    pair_parser.add_argument("--gateway")
+    pair_parser.add_argument("--code")
+    pair_parser.add_argument("--fingerprint")
     subparsers.add_parser("run")
     args = parser.parse_args()
     project_root = Path(args.project_root).resolve()
 
     if args.action == "pair":
-        asyncio.run(pair_device(project_root, args.gateway, args.code, args.fingerprint, args.device_name))
+        invite_text = str(args.invite or "").strip()
+        if not invite_text:
+            if not all((args.gateway, args.code, args.fingerprint)):
+                pair_parser.error("--invite is required")
+            invite_text = _legacy_direct_invite(args)
+        asyncio.run(pair_device(project_root, invite_text, args.device_name))
         return 0
     if args.action == "run":
         run_remote(project_root)

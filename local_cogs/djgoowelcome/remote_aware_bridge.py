@@ -5,14 +5,17 @@ from typing import Any, Dict
 
 from voice.operational_log import log_event
 
-from .resilient_game_first_bridge import ResilientGameFirstDjGooAudioBridge
+from .profile_audio_bridge import ProfileDjGooAudioBridge
 
 
-_CURRENT_COMMAND: ContextVar[Dict[str, Any] | None] = ContextVar("djgoo_current_command", default=None)
+_CURRENT_COMMAND: ContextVar[Dict[str, Any] | None] = ContextVar(
+    "djgoo_current_command",
+    default=None,
+)
 
 
-class RemoteAwareDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
-    """Resolve a remote command's Red context to its paired Discord member."""
+class RemoteAwareDjGooAudioBridge(ProfileDjGooAudioBridge):
+    """Resolve a recipient command to its paired Discord member."""
 
     async def handle(self, item: Dict[str, Any]) -> str:
         token = _CURRENT_COMMAND.set(item)
@@ -37,7 +40,10 @@ class RemoteAwareDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                 guild is not None
                 and member is not None
                 and voice_channel is not None
-                and (not expected_voice_channel_id or int(voice_channel.id) == expected_voice_channel_id)
+                and (
+                    not expected_voice_channel_id
+                    or int(voice_channel.id) == expected_voice_channel_id
+                )
             ):
                 channel = self._best_text_channel(guild)
                 if channel is not None:

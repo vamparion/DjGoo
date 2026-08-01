@@ -21,20 +21,22 @@ classifiers = [
 ]
 
 [project.scripts]
-djgoo = "launcher.djgoo_launcher:main"
+djgoo = "launcher.djgoo_host_experience:main"
 djgoo-voice = "voice.djgoo_voice_remote:main"
+djgoo-relay = "relay.server:main"
 djgoo-build-portable = "tools.build_portable:main"
 djgoo-build-voice = "tools.build_voice_remote:main"
 
 [project.gui-scripts]
-djgoo-gui = "launcher.djgoo_launcher:main"
+djgoo-gui = "launcher.djgoo_host_experience:main"
 djgoo-voice-gui = "launcher.djgoo_voice_launcher:main"
+djgoo-mini-player = "launcher.djgoo_overlay:main"
 
 [tool.setuptools]
 py-modules = []
 
 [tool.setuptools.packages.find]
-include = ["launcher*", "voice*", "tools*", "local_cogs*"]
+include = ["launcher*", "voice*", "tools*", "local_cogs*", "relay*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -19,6 +19,7 @@ DIRECTORY_PREFIXES = (
 )
 ROOT_FILES = (
     "DjGoo.exe",
+    "DjGoo Mini Player.exe",
     "LICENSE",
     "README.md",
     "THIRD_PARTY_NOTICES.md",
@@ -66,14 +67,25 @@ def sha256_file(path: Path) -> str:
 
 
 def _eligible(path: Path) -> bool:
-    return not any(part in EXCLUDED_PARTS for part in path.parts) and path.suffix.lower() not in EXCLUDED_SUFFIXES
+    return (
+        not any(part in EXCLUDED_PARTS for part in path.parts)
+        and path.suffix.lower() not in EXCLUDED_SUFFIXES
+    )
 
 
-def _directory_files(package_root: Path, relative_directory: str) -> Iterable[Path]:
+def _directory_files(
+    package_root: Path,
+    relative_directory: str,
+) -> Iterable[Path]:
     directory = package_root / relative_directory
     if not directory.exists():
         return ()
-    return (path for path in directory.rglob("*") if path.is_file() and _eligible(path.relative_to(package_root)))
+    return (
+        path
+        for path in directory.rglob("*")
+        if path.is_file()
+        and _eligible(path.relative_to(package_root))
+    )
 
 
 def collect_update_files(package_root: Path) -> list[Path]:
@@ -104,16 +116,23 @@ def collect_update_files(package_root: Path) -> list[Path]:
 
     site_packages = root / "runtime" / "python" / "Lib" / "site-packages"
     pip_package = site_packages / "pip"
-    for path in _directory_files(root, pip_package.relative_to(root).as_posix()):
+    for path in _directory_files(
+        root,
+        pip_package.relative_to(root).as_posix(),
+    ):
         add(path)
     if site_packages.exists():
         for dist_info in site_packages.glob("pip-*.dist-info"):
             if dist_info.is_dir():
-                for path in _directory_files(root, dist_info.relative_to(root).as_posix()):
+                for path in _directory_files(
+                    root,
+                    dist_info.relative_to(root).as_posix(),
+                ):
                     add(path)
 
     required = {
         "DjGoo.exe",
+        "DjGoo Mini Player.exe",
         "data/installed-version.json",
         "data/lavalink-contract.json",
         "data/discordbot/cogs/Audio/Lavalink.jar",
@@ -121,9 +140,16 @@ def collect_update_files(package_root: Path) -> list[Path]:
     }
     missing = sorted(required.difference(collected))
     if missing:
-        raise UpdateBundleError(f"The package is missing required update files: {missing}")
-    if not any(name.startswith("runtime/python/Lib/site-packages/pip/") for name in collected):
-        raise UpdateBundleError("The package does not contain the bundled pip module")
+        raise UpdateBundleError(
+            f"The package is missing required update files: {missing}"
+        )
+    if not any(
+        name.startswith("runtime/python/Lib/site-packages/pip/")
+        for name in collected
+    ):
+        raise UpdateBundleError(
+            "The package does not contain the bundled pip module"
+        )
     return [collected[name] for name in sorted(collected)]
 
 
@@ -147,7 +173,12 @@ def build_update_bundle(
         pass
 
     entries: list[dict[str, object]] = []
-    with zipfile.ZipFile(output_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+    with zipfile.ZipFile(
+        output_zip,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=9,
+    ) as archive:
         for path in files:
             relative = path.relative_to(root).as_posix()
             archive.write(path, relative)
@@ -172,17 +203,36 @@ def build_update_bundle(
         "files": entries,
         "deletes": [],
     }
-    temporary = output_manifest.with_suffix(output_manifest.suffix + ".tmp")
-    temporary.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    temporary = output_manifest.with_suffix(
+        output_manifest.suffix + ".tmp"
+    )
+    temporary.write_text(
+        json.dumps(manifest, indent=2) + "\n",
+        encoding="utf-8",
+    )
     os.replace(temporary, output_manifest)
     return manifest
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build a verified incremental DjGoo Host update.")
-    parser.add_argument("--package-root", type=Path, required=True)
-    parser.add_argument("--output-zip", type=Path, required=True)
-    parser.add_argument("--output-manifest", type=Path, required=True)
+    parser = argparse.ArgumentParser(
+        description="Build a verified incremental DjGoo Host update."
+    )
+    parser.add_argument(
+        "--package-root",
+        type=Path,
+        required=True,
+    )
+    parser.add_argument(
+        "--output-zip",
+        type=Path,
+        required=True,
+    )
+    parser.add_argument(
+        "--output-manifest",
+        type=Path,
+        required=True,
+    )
     parser.add_argument("--version", required=True)
     args = parser.parse_args()
     build_update_bundle(

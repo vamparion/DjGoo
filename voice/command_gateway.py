@@ -81,6 +81,7 @@ class VoiceCommandGateway:
     def application(self) -> web.Application:
         app = web.Application(client_max_size=MAX_BODY_BYTES)
         app.router.add_get("/v1/health", self.health)
+        app.router.add_get("/v1/device", self.device)
         app.router.add_post("/v1/pair", self.pair)
         app.router.add_post("/v1/command", self.command)
         return app
@@ -109,10 +110,29 @@ class VoiceCommandGateway:
     async def health(self, request: web.Request) -> web.Response:
         return web.json_response(
             {
-                "service": "djgoo-voice-gateway",
+                "service": "djgoo-link",
                 "status": "ok",
-                "protocol": 1,
+                "protocol": 2,
                 "tls_fingerprint_sha256": self.fingerprint,
+            }
+        )
+
+    async def device(self, request: web.Request) -> web.Response:
+        token = self._bearer_token(request)
+        identity = await asyncio.to_thread(self.pairing_store.authenticate, token)
+        if identity is None:
+            raise web.HTTPUnauthorized(text="Unknown or revoked DjGoo device")
+        return web.json_response(
+            {
+                "service": "djgoo-link",
+                "status": "connected",
+                "protocol": 2,
+                "device_id": identity.device_id,
+                "device_name": identity.device_name,
+                "discord_user_id": str(identity.user_id),
+                "guild_id": str(identity.guild_id),
+                "last_seen_at": identity.last_seen_at,
+                "certificate_pinned": True,
             }
         )
 
@@ -131,13 +151,17 @@ class VoiceCommandGateway:
         payload = await self._json(request)
         code = str(payload.get("code") or "")
         device_name = str(payload.get("device_name") or "DjGoo Voice Remote")
-        redeemed = await asyncio.to_thread(self.pairing_store.redeem_pairing_code, code, device_name)
+        redeemed = await asyncio.to_thread(
+            self.pairing_store.redeem_pairing_code,
+            code,
+            device_name,
+        )
         if redeemed is None:
             raise web.HTTPUnauthorized(text="Pairing code is invalid or expired")
         identity, token = redeemed
         return web.json_response(
             {
-                "protocol": 1,
+                "protocol": 2,
                 "device_id": identity.device_id,
                 "device_token": token,
                 "discord_user_id": str(identity.user_id),
@@ -173,7 +197,7 @@ class VoiceCommandGateway:
         if not intent or len(intent) > 64:
             raise web.HTTPBadRequest(text="A valid intent is required")
         if str(payload.get("guild_id") or identity.guild_id) != str(identity.guild_id):
-            raise web.HTTPForbidden(text="Device is not paired to that guild")
+            raise web.HTTPForbidden(text="Device is not paired to that server")
 
         now = time.time()
         try:
@@ -197,7 +221,9 @@ class VoiceCommandGateway:
             identity.device_id,
         )
         if not claimed:
-            return web.json_response({"accepted": True, "duplicate": True, "command_id": command_id})
+            return web.json_response(
+                {"accepted": True, "duplicate": True, "command_id": command_id}
+            )
 
         item = {
             "type": "command",
@@ -217,4 +243,7 @@ class VoiceCommandGateway:
         }
         with self._queue_lock:
             append_queue_item(self.remote_queue_path, item)
-        return web.json_response({"accepted": True, "duplicate": False, "command_id": command_id}, status=202)
+        return web.json_response(
+            {"accepted": True, "duplicate": False, "command_id": command_id},
+            status=202,
+        )
