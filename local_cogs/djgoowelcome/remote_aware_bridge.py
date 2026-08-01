@@ -5,13 +5,13 @@ from typing import Any, Dict
 
 from voice.operational_log import log_event
 
-from .game_first_audio_bridge import GameFirstDjGooAudioBridge
+from .resilient_game_first_bridge import ResilientGameFirstDjGooAudioBridge
 
 
 _CURRENT_COMMAND: ContextVar[Dict[str, Any] | None] = ContextVar("djgoo_current_command", default=None)
 
 
-class RemoteAwareDjGooAudioBridge(GameFirstDjGooAudioBridge):
+class RemoteAwareDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
     """Resolve a remote command's Red context to its paired Discord member."""
 
     async def handle(self, item: Dict[str, Any]) -> str:
