@@ -1,87 +1,55 @@
 # DjGoo
 
-DjGoo is a private, game-first Discord music bot built on Red-DiscordBot Audio.
-Its local F12 listener lets people control music without leaving a game.
+DjGoo is a game-first Discord music controller built around Red-DiscordBot Audio. It provides local push-to-talk voice control, clean track selection, radio profiles, and resilient process supervision without requiring players to leave a full-screen game.
 
-## What this build changes
+> Project status: alpha. The source implementation works, but public binary releases still require Windows and Discord acceptance testing before the repository should be announced broadly.
 
-- A hidden single-instance supervisor owns Lavalink, Redbot, and the voice listener.
-- Start, stop, and reset shortcuts return immediately instead of holding a console open.
-- Each component has PID, process-creation-time, and command-line ownership checks.
-- A crashed component is restarted independently instead of resetting the entire stack.
-- Voice capture uses one continuous microphone stream with pre-roll and release-tail audio.
-- The default recognition profile uses `distil-large-v3`, Whisper VAD, beam search, and confidence rejection.
-- Artist and title corrections live in JSON instead of hard-coded Python replacements.
-- Song selection is ranked against canonical title, artist, ISRC, and duration metadata.
-- Obvious albums, playlists, mixes, loops, repeats, tutorials, interviews, and overlong tracks are rejected.
-- Radio memory uses SQLite and ordinary skips are negative feedback, not permanent bans.
-- Queue seek, removal, shuffle, repeat, autoplay, favorites, and ban undo are exposed to voice/chat commands.
+## Download and run
 
-## Install
+Portable Windows builds are produced by the **Portable Host** GitHub Actions workflow.
 
-DjGoo expects Python 3.11, Java 17, and an existing Red-DiscordBot instance in this project directory.
+1. Download `DjGoo-Host-win-x64.zip` from a tagged GitHub Release or a pull-request workflow artifact.
+2. Verify the ZIP against `SHA256SUMS.txt`.
+3. Extract it to any writable folder.
+4. Run `DjGoo.exe`.
+5. Choose **First-run setup**, create your Discord bot application, and then use **Test bot console** once to enter the bot token and prefix.
+6. Return to the launcher and choose **Start**.
 
-Install or refresh the bot environment using `requirements-bot.txt` and install the voice environment with:
+No Python, Java, Node, PowerShell, installer, or administrator access is required for the portable package. Configuration, Red data, downloaded voice models, and logs remain beside the application so the folder can be moved, backed up, or removed cleanly.
 
-```powershell
-.\install-voice-deps.ps1
+```text
+DjGoo-Host-win-x64/
+├── DjGoo.exe
+├── config/
+├── data/
+├── logs/
+├── runtime/
+│   ├── java/
+│   └── python/
+├── local_cogs/
+├── tools/
+├── voice/
+├── manifest.json
+└── sbom.cdx.json
 ```
 
-Copy the configuration example:
+The public package intentionally contains no `.ps1` or `.vbs` entrypoints. Source-only maintenance scripts may remain in the repository for development compatibility.
 
-```powershell
-Copy-Item .\config\secrets.example.json .\config\secrets.json
-```
+## What DjGoo does
 
-Then place the Discord webhook and channel values in `config\secrets.json`.
-Secrets and runtime data are ignored by Git.
+- Runs Lavalink, Redbot, and the local voice listener under one hidden supervisor.
+- Validates process identity and fresh component health instead of trusting stale PID files or log phrases.
+- Restarts failed components independently.
+- Captures F12 voice commands from one continuous microphone stream with pre-roll and release-tail audio.
+- Uses Faster-Whisper, Silero VAD, confidence rejection, and configurable phrase corrections.
+- Preserves canonical title, artist, duration, and ISRC metadata during song selection.
+- Rejects obvious albums, loops, repeats, mixes, tutorials, interviews, and overlong uploads.
+- Scores radio recommendations using station feedback, artist cooldown, result quality, and duration matching.
+- Exposes seek, queue removal, shuffle, repeat, autoplay, favorites, and station controls through the same intent path.
 
-The first accurate-mode voice start downloads the `distil-large-v3` model. A lower-resource machine can set:
-
-```json
-{
-  "voice": {
-    "model": "small.en",
-    "beam_size": 5
-  }
-}
-```
-
-Accuracy is lower with that fallback.
-
-## Shortcuts and startup task
-
-Create portable desktop shortcuts:
-
-```powershell
-cscript.exe .\tools\create_djgoo_shortcuts.vbs
-```
-
-Install or update automatic startup:
-
-```powershell
-cscript.exe .\tools\update_djgoo_startup_task.vbs
-```
-
-The scripts derive the installation directory from their own path. They do not contain a user-specific `C:\Users\...` location.
-
-Available actions:
-
-```powershell
-.\.venv\Scripts\python.exe .\tools\djgoo_stack.py start
-.\.venv\Scripts\python.exe .\tools\djgoo_stack.py stop
-.\.venv\Scripts\python.exe .\tools\djgoo_stack.py reset
-.\.venv\Scripts\python.exe .\tools\djgoo_stack.py status
-.\.venv\Scripts\python.exe .\tools\djgoo_stack.py shutdown
-```
-
-`start`, `stop`, and `reset` send a short request to the hidden supervisor and exit. Logs are written under `logs\`.
-
-## Voice control
+## Voice commands
 
 Hold F12 while speaking and release it after the command.
-
-Examples:
 
 ```text
 play Sandstorm
@@ -98,11 +66,13 @@ queue
 what is playing
 ```
 
-Accepted commands play a Windows confirmation sound. Low-confidence or silent captures play an error sound and are not sent to the bot. Set `feedback_beeps` to `false` to disable those sounds.
+Accepted commands play a confirmation sound. Silent, weak, or low-confidence captures are rejected locally.
+
+The accurate default profile downloads `distil-large-v3` on first use. Lower-resource computers can set `small.en` in `config/secrets.json` at the cost of recognition accuracy.
 
 ### Correcting names
 
-Copy `config\voice-corrections.example.json` to `data\voice-corrections.json`, then add phrases Whisper commonly mishears:
+Copy `config/voice-corrections.example.json` to `data/voice-corrections.json` and add phrases that Whisper commonly mishears:
 
 ```json
 {
@@ -112,11 +82,7 @@ Copy `config\voice-corrections.example.json` to `data\voice-corrections.json`, t
 }
 ```
 
-The default correction file is local runtime data and is not committed.
-
 ## Radio
-
-Radio modes are selected as part of the spoken or typed seed:
 
 ```text
 radio bangers Metallica
@@ -125,12 +91,10 @@ radio discovery Lindsey Stirling
 radio throwbacks pop
 ```
 
-- **Bangers** favors the strongest early YouTube Music recommendations and official/Topic uploads.
-- **Balanced** mixes strong matches with feedback-guided variety.
-- **Discovery** avoids always selecting the safest first recommendation.
-- **Throwbacks** prefers recommendations dated 2012 or earlier when year metadata is available.
-
-Station controls:
+- **Bangers** favors the strongest early recommendations and official/Topic uploads.
+- **Balanced** combines strong matches with feedback-guided variety.
+- **Discovery** avoids repeatedly selecting the safest first result.
+- **Throwbacks** prefers older recommendations when year metadata is available.
 
 ```text
 like this
@@ -142,48 +106,60 @@ station status
 stop radio
 ```
 
-A normal `skip` lowers a track and artist's radio score and prevents an immediate repeat. Only `don't play this again` creates a persistent station ban.
+A normal skip produces temporary negative feedback. Only an explicit ban creates a persistent station block.
 
-## Track safety policy
+## Multiple voice users
 
-DjGoo rejects tracks longer than ten minutes by default and compares playable candidates with canonical song duration when available. The allowed difference is approximately eight percent, bounded to 18–45 seconds. This blocks most one-hour loops, extended uploads, album videos, and videos substantially longer than the actual recording before they enter the queue.
+DjGoo keeps one Discord bot and one playback authority per guild. Additional players will use the separate **DjGoo Voice Remote** package, which recognizes speech on each player's computer and submits authenticated commands to the Host. Remote clients never receive the Discord bot token or run another music bot.
 
-YouTube watch-radio links are expanded into individually skippable clean tracks. Standard playlist links remain under Red Audio's playlist loader, which normally queues their entries as separate tracks.
+The multi-user transport and pairing implementation is developed separately so it can be security-reviewed without destabilizing Host packaging.
 
-## Control panel
+## Develop from source
 
-Build the web interface after frontend changes:
-
-```powershell
-cd control_panel_ui
-npm install
-npm run build
-cd ..
-```
-
-Start it with:
+Source development currently targets Windows 10/11 x64 and Python 3.11.
 
 ```powershell
-.\Start-DjGoo-ControlPanel.ps1
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -U pip
+.\.venv\Scripts\python.exe -m pip install -r requirements-bot.txt -r requirements-dev.txt
+
+py -3.11 -m venv .voice-venv
+.\.voice-venv\Scripts\python.exe -m pip install -U pip
+.\.voice-venv\Scripts\python.exe -m pip install -r requirements-voice.txt -r requirements-dev.txt
 ```
 
-Then open `http://127.0.0.1:8765`.
-
-## Validation
-
-GitHub Actions compiles the Python source and runs tests for voice parsing, audio preprocessing, process ownership, canonical media selection, radio scoring, and SQLite station migration.
-
-Locally:
+Run tests:
 
 ```powershell
-.\.voice-venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.voice-venv\Scripts\python.exe -m pytest
+.\.voice-venv\Scripts\python.exe -m pytest -q
 ```
+
+Run the source launcher:
+
+```powershell
+.\.venv\Scripts\python.exe -m launcher.djgoo_launcher
+```
+
+Legacy root scripts are compatibility entrypoints for existing source checkouts. New user-facing functionality belongs in the launcher or importable Python modules.
+
+## Release engineering
+
+The Windows release workflow:
+
+- compiles the Python source and runs the complete test suite;
+- assembles redistributable Python and Java runtimes;
+- installs Windows dependencies into the portable runtime;
+- bundles the Red-compatible Lavalink jar;
+- builds `DjGoo.exe` with PyInstaller;
+- smoke-tests clean-package imports and setup;
+- rejects `.ps1` and `.vbs` files from the public package;
+- creates a per-file SHA-256 manifest, CycloneDX SBOM, ZIP checksum, and GitHub artifact;
+- publishes tagged builds through GitHub Releases.
+
+See `docs/ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`, and `CHANGELOG.md`.
 
 ## Licensing
 
-DjGoo is licensed under `GPL-3.0-or-later` because it is designed as an extension of the GPL-licensed Red-DiscordBot ecosystem. See `LICENSE` and `THIRD_PARTY_NOTICES.md`.
+DjGoo is licensed under `GPL-3.0-or-later`. The complete license is in `LICENSE`; dependency and design-reference notices are in `THIRD_PARTY_NOTICES.md`.
 
-Muse, JMusicBot, LavaSrc, and SponsorBlock were reviewed as design references. This branch does not copy their source code. Any future code port must receive a separate compatibility and attribution review.
-
-Version-dependent follow-up work is tracked in GitHub issues for the Lavalink/LavaSrc/SponsorBlock migration, in-game transcript choices, and privacy-safe voice ducking.
+Muse, JMusicBot, LavaSrc, and SponsorBlock were reviewed as design references. Their source code is not included unless a future change explicitly documents the port, license compatibility, and required attribution.
