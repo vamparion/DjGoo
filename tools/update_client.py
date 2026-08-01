@@ -4,11 +4,13 @@ import hashlib
 import json
 import os
 import re
+import ssl
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Mapping
+from urllib.parse import urlsplit
 
 
 OWNER = "vamparion"
@@ -41,7 +43,7 @@ class Version:
     patch: int
     channel_rank: int
     channel_number: int
-    text: str
+    text: str = field(compare=False)
 
     @property
     def is_prerelease(self) -> bool:
@@ -67,6 +69,35 @@ class UpdateOffer:
 
 
 ProgressCallback = Callable[[int, int], None]
+
+
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Drop private API credentials when GitHub redirects to object storage."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is None:
+            return None
+        old_host = urlsplit(req.full_url).netloc.lower()
+        new_host = urlsplit(newurl).netloc.lower()
+        if old_host != new_host:
+            redirected.remove_header("Authorization")
+        return redirected
+
+
+def _ssl_context() -> ssl.SSLContext:
+    try:
+        import certifi
+    except ImportError:
+        return ssl.create_default_context()
+    return ssl.create_default_context(cafile=certifi.where())
+
+
+def _opener() -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(
+        _SafeRedirectHandler(),
+        urllib.request.HTTPSHandler(context=_ssl_context()),
+    )
 
 
 def parse_version(value: str) -> Version | None:
@@ -115,7 +146,7 @@ def _headers(token: str | None, *, binary: bool = False) -> dict[str, str]:
 def _open(url: str, token: str | None, *, binary: bool = False, timeout: int = 30):
     request = urllib.request.Request(url, headers=_headers(token, binary=binary))
     try:
-        return urllib.request.urlopen(request, timeout=timeout)
+        return _opener().open(request, timeout=timeout)
     except urllib.error.HTTPError as exc:
         if exc.code in {401, 403, 404}:
             raise AuthenticationRequired(
@@ -239,6 +270,10 @@ def download_asset(
             raise UpdateError(
                 f"Downloaded {downloaded} bytes for {asset.name}; GitHub reported {asset.size}."
             )
+        if asset.digest and asset.digest.lower().startswith("sha256:"):
+            expected_asset_hash = asset.digest.split(":", 1)[1].lower()
+            if _sha256(temporary) != expected_asset_hash:
+                raise UpdateError(f"GitHub asset digest verification failed for {asset.name}")
         os.replace(temporary, destination)
     except BaseException:
         try:
