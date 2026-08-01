@@ -86,6 +86,23 @@ class RequestLedger:
             self._write(guilds)
             return dict(selected) if isinstance(selected, dict) else None
 
+    def pending_keys(self, guild_id: int) -> set[str]:
+        with self._lock:
+            entries = self._read().get(str(int(guild_id)), [])
+            return {
+                str(entry.get("track_key") or "")
+                for entry in entries
+                if str(entry.get("track_key") or "")
+            }
+
+    def entries(self, guild_id: int) -> list[dict[str, Any]]:
+        with self._lock:
+            return [
+                dict(entry)
+                for entry in self._read().get(str(int(guild_id)), [])
+                if isinstance(entry, dict)
+            ]
+
     def count(self, guild_id: int) -> int:
         with self._lock:
             return len(self._read().get(str(int(guild_id)), []))
@@ -94,7 +111,11 @@ class RequestLedger:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temp = self.path.with_suffix(self.path.suffix + ".tmp")
         temp.write_text(
-            json.dumps({"schema": 1, "guilds": guilds}, indent=2, ensure_ascii=True)
+            json.dumps(
+                {"schema": 1, "guilds": guilds},
+                indent=2,
+                ensure_ascii=True,
+            )
             + "\n",
             encoding="utf-8",
         )
