@@ -1,14 +1,19 @@
+from pathlib import Path
+
 from redbot.core.bot import Red
 
 from . import djgoowelcome as cog_module
+from .relay_cog import DjGooRelay
 from .remote_aware_bridge import RemoteAwareDjGooAudioBridge
 
-# Keep the cog constructor stable while selecting the bridge implementation at the
-# package boundary. This also lets source checkouts disable the remote transport
-# without introducing a second playback authority.
+# Select the requester-aware bridge at the package boundary while retaining one
+# Red Audio/Lavalink playback authority.
 cog_module.EnhancedDjGooAudioBridge = RemoteAwareDjGooAudioBridge
 DjGooWelcome = cog_module.DjGooWelcome
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 async def setup(bot: Red) -> None:
-    await bot.add_cog(DjGooWelcome(bot))
+    djgoo = DjGooWelcome(bot)
+    await bot.add_cog(djgoo)
+    await bot.add_cog(DjGooRelay(bot, djgoo, PROJECT_ROOT))
