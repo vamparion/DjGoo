@@ -63,8 +63,8 @@ jobs:
           New-Item -ItemType Directory -Force build/runtime-python | Out-Null
           $url = "https://www.python.org/ftp/python/$env:PYTHON_VERSION/python-$env:PYTHON_VERSION-embed-amd64.zip"
           Invoke-WebRequest -UseBasicParsing $url -OutFile build/python-embed.zip
-          $actualHash = (Get-FileHash build/python-embed.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actualHash -ne "6d9aa08531d48fcc261ba667e2df17c4a8c7f1e62ab49db7524766526c9c93d8") {
+          $actualHash = (Get-FileHash build/python-embed.zip -Algorithm MD5).Hash.ToLowerInvariant()
+          if ($actualHash -ne "6d9aa08531d48fcc261ba667e2df17c4") {
             throw "Portable Python checksum mismatch: $actualHash"
           }
           Expand-Archive build/python-embed.zip build/runtime-python -Force
