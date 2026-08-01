@@ -148,7 +148,7 @@ A normal `skip` lowers a track and artist's radio score and prevents an immediat
 
 DjGoo rejects tracks longer than ten minutes by default and compares playable candidates with canonical song duration when available. The allowed difference is approximately eight percent, bounded to 18–45 seconds. This blocks most one-hour loops, extended uploads, album videos, and videos substantially longer than the actual recording before they enter the queue.
 
-YouTube playlist links are still expanded into individually skippable tracks when possible. Normal playlists remain capped to prevent accidental queue flooding.
+YouTube watch-radio links are expanded into individually skippable clean tracks. Standard playlist links remain under Red Audio's playlist loader, which normally queues their entries as separate tracks.
 
 ## Control panel
 
@@ -171,7 +171,7 @@ Then open `http://127.0.0.1:8765`.
 
 ## Validation
 
-GitHub Actions compiles the Python source and runs tests for voice parsing, audio preprocessing, canonical media selection, radio scoring, and SQLite station migration.
+GitHub Actions compiles the Python source and runs tests for voice parsing, audio preprocessing, process ownership, canonical media selection, radio scoring, and SQLite station migration.
 
 Locally:
 
@@ -185,3 +185,5 @@ Locally:
 DjGoo is licensed under `GPL-3.0-or-later` because it is designed as an extension of the GPL-licensed Red-DiscordBot ecosystem. See `LICENSE` and `THIRD_PARTY_NOTICES.md`.
 
 Muse, JMusicBot, LavaSrc, and SponsorBlock were reviewed as design references. This branch does not copy their source code. Any future code port must receive a separate compatibility and attribution review.
+
+Version-dependent follow-up work is tracked in GitHub issues for the Lavalink/LavaSrc/SponsorBlock migration, in-game transcript choices, and privacy-safe voice ducking.
