@@ -1,0 +1,68 @@
+name: Feature request
+description: Propose a focused DjGoo improvement
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        DjGoo keeps one Red Audio/Lavalink playback authority. Feature proposals should preserve that boundary and remain usable without leaving a full-screen game.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Product area
+      options:
+        - Host setup and packaging
+        - Playback and queue controls
+        - Voice recognition
+        - Voice Remote and pairing
+        - Relay and networking
+        - Radio and discovery
+        - Discord interface and permissions
+        - In-game or phone interface
+        - Developer experience
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Describe the concrete problem or repeated manual work this feature should solve.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain the user-visible flow, including voice/chat/button behavior where relevant.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing Red Audio capabilities, workarounds, or other designs you considered.
+
+  - type: textarea
+    id: security
+    attributes:
+      label: Security, privacy, or permission impact
+      description: Note new credentials, network access, destructive actions, stored data, or user attribution requirements.
+
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Architecture checks
+      options:
+        - label: This proposal does not introduce a second playback queue or player.
+          required: true
+        - label: This proposal identifies how failures remain visible and recoverable.
+          required: true
+        - label: I searched existing issues and the roadmap for similar work.
+          required: true
