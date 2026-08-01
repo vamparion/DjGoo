@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from tools.portable_environment import bind_red_data_manager, red_config_dir
+from tools.portable_red_setup import ensure_instance, verify_red_instance_runtime
 
 
 INSTANCE_NAME = "discordbot"
@@ -63,14 +64,15 @@ def redbot_argv(project_root: Path = PROJECT_ROOT) -> list[str]:
 
 
 def check_portable_red(project_root: Path = PROJECT_ROOT) -> None:
-    """Verify that Red and DjGoo resolve the same portable instance file."""
+    """Repair and exercise DjGoo's real portable Red instance."""
 
+    prepared = ensure_instance(project_root)
     actual = bind_red_data_manager(project_root).resolve()
     expected = (red_config_dir(project_root) / "config.json").resolve()
-    if actual != expected:
+    if actual != expected or prepared.resolve() != expected:
         raise RuntimeError(
             "Red configuration path mismatch. "
-            f"DjGoo prepared {expected}, but Red resolved {actual}."
+            f"DjGoo prepared {prepared.resolve()}, but Red resolved {actual}."
         )
     try:
         payload = json.loads(actual.read_text(encoding="utf-8"))
@@ -81,9 +83,22 @@ def check_portable_red(project_root: Path = PROJECT_ROOT) -> None:
     if not isinstance(payload, dict) or INSTANCE_NAME not in payload:
         raise RuntimeError(f"Red instance '{INSTANCE_NAME}' is missing from {actual}")
 
+    instance = payload[INSTANCE_NAME]
+    if not isinstance(instance, dict):
+        raise RuntimeError(f"Red instance '{INSTANCE_NAME}' is not an object in {actual}")
+    for key in ("COG_PATH_APPEND", "CORE_PATH_APPEND"):
+        value = instance.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise RuntimeError(f"Red instance field {key} must be a non-empty string in {actual}")
+
+    core_path, cog_path = verify_red_instance_runtime(project_root)
+
     import pip
 
     print(f"DjGoo portable Red configuration OK: {actual}")
+    print(f"Red core data path OK: {core_path}")
+    print(f"Red cog data path OK: {cog_path}")
+    print("Red core JSON driver initialization OK")
     print(f"Bundled pip import OK: {pip.__version__}")
 
 
@@ -108,6 +123,8 @@ def _pause_after_error() -> None:
 
 
 def run_redbot(project_root: Path = PROJECT_ROOT) -> None:
+    # Always migrate early portable configurations before Red reads them.
+    ensure_instance(project_root)
     bind_red_data_manager(project_root)
     apply_runtime_patches()
     sys.argv = redbot_argv(project_root)

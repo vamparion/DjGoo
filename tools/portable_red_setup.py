@@ -20,6 +20,8 @@ from tools.portable_environment import bind_red_data_manager, red_config_dir as 
 
 DISCORD_APPS_URL = "https://discord.com/developers/applications"
 INSTANCE_NAME = "discordbot"
+COG_PATH_APPEND_DEFAULT = "cogs"
+CORE_PATH_APPEND_DEFAULT = "core"
 
 
 def red_config_dir(project_root: Path) -> Path:
@@ -41,23 +43,19 @@ def _load_config(config_path: Path) -> dict[str, Any]:
     return loaded if isinstance(loaded, dict) else {}
 
 
-def _deduplicated_paths(values: object, required: Path) -> list[str]:
-    paths: list[str] = []
-    seen: set[str] = set()
-    candidates = values if isinstance(values, list) else []
-    for value in [*candidates, str(required.resolve())]:
-        text = str(value).strip()
-        if not text:
-            continue
-        normalized = os.path.normcase(os.path.abspath(os.path.expanduser(text)))
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        paths.append(str(Path(text).expanduser().resolve()))
-    return paths
+def _path_append(value: object, default: str) -> str:
+    """Return a Red-compatible path suffix, migrating invalid old values."""
+
+    if isinstance(value, str):
+        text = value.strip()
+        if text:
+            return text
+    return default
 
 
 def ensure_instance(project_root: Path) -> Path:
+    """Create or repair DjGoo's portable Red instance configuration."""
+
     project_root = project_root.resolve()
     config_dir = red_config_dir(project_root)
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -71,10 +69,22 @@ def ensure_instance(project_root: Path) -> Path:
     existing = payload.get(INSTANCE_NAME)
     instance = dict(existing) if isinstance(existing, dict) else {}
     instance["DATA_PATH"] = str(data_path)
-    instance["COG_PATH_APPEND"] = _deduplicated_paths(instance.get("COG_PATH_APPEND"), local_cogs)
-    instance.setdefault("CORE_PATH_APPEND", [])
-    instance.setdefault("STORAGE_TYPE", "JSON")
-    instance.setdefault("STORAGE_DETAILS", {})
+
+    # Red's bootstrap schema requires these to be strings relative to DATA_PATH.
+    # Early portable builds wrote lists here, so every setup/startup repairs them.
+    instance["COG_PATH_APPEND"] = _path_append(
+        instance.get("COG_PATH_APPEND"), COG_PATH_APPEND_DEFAULT
+    )
+    instance["CORE_PATH_APPEND"] = _path_append(
+        instance.get("CORE_PATH_APPEND"), CORE_PATH_APPEND_DEFAULT
+    )
+
+    storage_type = instance.get("STORAGE_TYPE")
+    if not isinstance(storage_type, str) or not storage_type.strip():
+        instance["STORAGE_TYPE"] = "JSON"
+    if not isinstance(instance.get("STORAGE_DETAILS"), dict):
+        instance["STORAGE_DETAILS"] = {}
+
     payload[INSTANCE_NAME] = instance
 
     temp = config_path.with_suffix(".json.tmp")
@@ -94,6 +104,23 @@ def verify_red_config_resolution(project_root: Path, prepared_config: Path) -> P
             f"DjGoo prepared {expected}, but Red resolved {actual}."
         )
     return actual
+
+
+def verify_red_instance_runtime(project_root: Path) -> tuple[Path, Path]:
+    """Exercise Red's real data paths and core JSON driver configuration."""
+
+    from redbot.core import data_manager
+    from redbot.core.config import Config
+
+    bind_red_data_manager(project_root, data_manager)
+    data_manager.load_basic_configuration(INSTANCE_NAME)
+    core_path = data_manager.core_data_path()
+    cog_path = data_manager.cog_data_path()
+
+    # This is the same initialization path that previously failed only after
+    # Red's bot object was constructed.
+    Config.get_core_conf(force_registration=False)
+    return core_path, cog_path
 
 
 def verify_update_credentials() -> bool:
@@ -135,7 +162,7 @@ def write_marker(project_root: Path) -> None:
     marker.write_text(
         json.dumps(
             {
-                "schema": 4,
+                "schema": 5,
                 "instance": INSTANCE_NAME,
                 "created_at": time.time(),
                 "project_root": str(project_root),
@@ -169,6 +196,7 @@ def main() -> int:
     ensure_project_files(project_root)
     config_path = ensure_instance(project_root)
     verify_red_config_resolution(project_root, config_path)
+    core_path, cog_path = verify_red_instance_runtime(project_root)
     dpapi_verified = verify_update_credentials()
     write_marker(project_root)
 
@@ -176,6 +204,9 @@ def main() -> int:
 
     print(f"Created or refreshed the Red instance configuration at:\n  {config_path}\n")
     print("Verified that Red resolves this same portable configuration file.")
+    print(f"Verified Red core data path:\n  {core_path}")
+    print(f"Verified Red cog data path:\n  {cog_path}")
+    print("Verified Red core JSON driver initialization.")
     print(f"Verified bundled pip {pip.__version__}.")
     if dpapi_verified:
         print("Verified Windows-encrypted update credential storage.")
