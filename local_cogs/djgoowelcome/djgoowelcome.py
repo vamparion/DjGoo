@@ -21,7 +21,8 @@ from voice.command_queue import command_to_queue_item
 from voice.command_queue import drain_queue
 from voice.operational_log import log_event
 
-from .audio_bridge import DjGooAudioBridge, PlaybackControlsView
+from .audio_bridge import PlaybackControlsView
+from .enhanced_audio_bridge import EnhancedDjGooAudioBridge
 from .helpers import (
     build_fast_control_payload,
     build_voice_command_payload,
@@ -41,6 +42,9 @@ FAST_CONTROL_INTENTS = {
     "toggle_pause",
     "volume_up",
     "volume_down",
+    "seek",
+    "remove_queue",
+    "shuffle_queue",
 }
 
 
@@ -51,7 +55,7 @@ class DjGooWelcome(commands.Cog):
         self.bot = bot
         self._last_sent: Dict[Tuple[int, int], float] = {}
         self._cooldown_seconds = 300
-        self._audio_bridge = DjGooAudioBridge(
+        self._audio_bridge = EnhancedDjGooAudioBridge(
             bot=self.bot,
             project_root=PROJECT_ROOT,
             send_payload=self._send_webhook_payload,
@@ -79,8 +83,9 @@ class DjGooWelcome(commands.Cog):
         secrets = load_secrets(self._secrets_path())
         configured = secrets.get("voice", {}).get("queue_path", "")
         if configured:
-            return Path(configured)
-        return Path.cwd() / "data" / "voice-command-queue.jsonl"
+            configured_path = Path(configured)
+            return configured_path if configured_path.is_absolute() else PROJECT_ROOT / configured_path
+        return PROJECT_ROOT / "data" / "voice-command-queue.jsonl"
 
     def _is_on_cooldown(self, member, channel) -> bool:
         key = self._cooldown_key(member, channel)
@@ -93,14 +98,15 @@ class DjGooWelcome(commands.Cog):
 
     async def _send_webhook_payload(self, payload: Dict[str, Any]) -> None:
         secrets = load_secrets(self._secrets_path())
-        webhook_url = secrets["webhook_url"]
+        webhook_url = secrets.get("webhook_url", "")
         if not webhook_url:
             log.warning("DjGoo webhook is not configured. Edit config/secrets.json.")
             log_event("discord.webhook.missing")
             return
 
         try:
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(webhook_url, json=payload) as response:
                     log_event(
                         "discord.webhook.sent",
@@ -110,11 +116,7 @@ class DjGooWelcome(commands.Cog):
                     )
                     if response.status >= 400:
                         body = await response.text()
-                        log.warning(
-                            "DjGoo webhook failed with HTTP %s: %s",
-                            response.status,
-                            body[:500],
-                        )
+                        log.warning("DjGoo webhook failed with HTTP %s: %s", response.status, body[:500])
                         log_event("discord.webhook.failed", status=response.status, body=body[:500])
         except (aiohttp.ClientError, asyncio.TimeoutError):
             log.exception("DjGoo webhook request failed.")
@@ -170,11 +172,9 @@ class DjGooWelcome(commands.Cog):
     async def on_voice_state_update(self, member, before, after):
         if not should_send_welcome(member, before, after):
             return
-
         channel = after.channel
         if self._is_on_cooldown(member, channel):
             return
-
         payload = build_welcome_payload(member.display_name, channel.name)
         await self._send_webhook_payload(payload)
 
@@ -222,6 +222,13 @@ class DjGooWelcome(commands.Cog):
             "volume_up",
             "volume_down",
             "remove_current",
+            "seek",
+            "remove_queue",
+            "shuffle_queue",
+            "repeat",
+            "autoplay",
+            "favorite_current",
+            "undo_station_ban",
         }
         if parsed.intent in bridge_intents:
             result = await self._audio_bridge.handle(
