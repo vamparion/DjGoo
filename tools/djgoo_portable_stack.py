@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -13,6 +14,7 @@ import psutil
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CORE_PATH = Path(__file__).with_name("djgoo_stack_core.py")
+LAVALINK_HOST = "::1"
 LAVALINK_PORT = 2333
 
 
@@ -48,6 +50,11 @@ def _process_matches_spec(process: Any, spec: Any) -> bool:
     return all(str(marker).lower() in cmdline for marker in tuple(spec.command_markers))
 
 
+def _process_is_package_lavalink(process: Any, project_root: Path) -> bool:
+    command = " ".join(_process_cmdline(process)).lower()
+    return "lavalink.jar" in command and str(project_root.resolve()).lower() in command
+
+
 def _connection_port(connection: Any) -> int | None:
     local_address = getattr(connection, "laddr", None)
     value = getattr(local_address, "port", None)
@@ -60,6 +67,13 @@ def _connection_port(connection: Any) -> int | None:
 
 
 def _process_listens_on(process: Any, port: int) -> bool:
+    """Return true when psutil can prove this process owns the listener.
+
+    Windows can deny or omit per-process connection data for a non-elevated
+    process. Callers must treat ``False`` as "not proven" rather than proof that
+    the process does not own the socket.
+    """
+
     try:
         connection_reader = getattr(process, "net_connections", None)
         if connection_reader is None:
@@ -78,6 +92,14 @@ def _process_listens_on(process: Any, port: int) -> bool:
     return False
 
 
+def _lavalink_port_ready(timeout: float = 0.4) -> bool:
+    try:
+        with socket.create_connection((LAVALINK_HOST, LAVALINK_PORT), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def _matching_processes(spec: Any) -> list[Any]:
     matches: list[Any] = []
     for process in psutil.process_iter():
@@ -89,6 +111,32 @@ def _matching_processes(spec: Any) -> list[Any]:
         except (psutil.Error, OSError, TypeError, ValueError):
             continue
     return matches
+
+
+def _matching_package_lavalink_processes(project_root: Path) -> list[Any]:
+    matches: list[Any] = []
+    for process in psutil.process_iter():
+        try:
+            if int(process.pid) == os.getpid():
+                continue
+            if _process_is_package_lavalink(process, project_root):
+                matches.append(process)
+        except (psutil.Error, OSError, TypeError, ValueError):
+            continue
+    return matches
+
+
+def _process_age(process: Any) -> float:
+    try:
+        return float(process.create_time())
+    except (psutil.Error, OSError, TypeError, ValueError):
+        return float("inf")
+
+
+def _oldest_process(processes: list[Any]) -> Any | None:
+    if not processes:
+        return None
+    return min(processes, key=_process_age)
 
 
 def _terminate_process_tree(process: Any) -> None:
@@ -112,27 +160,34 @@ def _terminate_process_tree(process: Any) -> None:
 
 
 def _adopt_lavalink_listener(core: Any, spec: Any) -> bool:
-    listeners = [
-        process
-        for process in _matching_processes(spec)
-        if _process_listens_on(process, LAVALINK_PORT)
+    matches = _matching_processes(spec)
+    exact_listeners = [
+        process for process in matches if _process_listens_on(process, LAVALINK_PORT)
     ]
-    if not listeners:
+
+    if exact_listeners:
+        candidates = exact_listeners
+        reason = "matching-lavalink-listener"
+    elif matches and _lavalink_port_ready():
+        # On Windows, non-elevated per-process socket enumeration can return no
+        # listener even though the bundled Lavalink process is reachable. An
+        # older package-matching Java process is then the real listener; newer
+        # matching Java processes are failed bind attempts waiting to exit.
+        candidates = matches
+        reason = "reachable-lavalink-fallback"
+    else:
         return False
 
-    def process_age(process: Any) -> float:
-        try:
-            return float(process.create_time())
-        except (psutil.Error, OSError, TypeError, ValueError):
-            return float("inf")
+    listener = _oldest_process(candidates)
+    if listener is None:
+        return False
 
-    listener = min(listeners, key=process_age)
     core.write_component_record(spec, listener)
     core.LOG.event(
         "component.adopted",
         component=spec.name,
         pid=int(listener.pid),
-        reason="matching-lavalink-listener",
+        reason=reason,
     )
 
     for duplicate in _matching_processes(spec):
@@ -162,10 +217,18 @@ def _portable_lavalink_ready(core: Any) -> bool:
     if recorded_create_time and abs(create_time - recorded_create_time) > 1.0:
         return False
 
-    command = " ".join(_process_cmdline(process)).lower()
-    if "lavalink.jar" not in command or str(core.PROJECT_ROOT).lower() not in command:
+    if not _process_is_package_lavalink(process, core.PROJECT_ROOT):
         return False
-    return _process_listens_on(process, LAVALINK_PORT)
+    if _process_listens_on(process, LAVALINK_PORT):
+        return True
+    if not _lavalink_port_ready():
+        return False
+
+    # Socket ownership was unavailable. Only accept the recorded PID when it is
+    # the oldest package-matching Lavalink process. This prevents a newer Java
+    # process that failed to bind from borrowing readiness from the real node.
+    oldest = _oldest_process(_matching_package_lavalink_processes(core.PROJECT_ROOT))
+    return oldest is not None and int(oldest.pid) == pid
 
 
 def _portable_redbot_ready(core: Any) -> bool:
