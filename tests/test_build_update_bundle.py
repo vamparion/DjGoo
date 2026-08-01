@@ -22,6 +22,7 @@ def test_update_bundle_excludes_large_runtimes_and_user_state(tmp_path: Path) ->
     pip_info.mkdir(parents=True)
 
     (package / "DjGoo.exe").write_bytes(b"launcher")
+    (package / "DjGoo Mini Player.exe").write_bytes(b"mini-player")
     (package / "tools" / "worker.py").write_text("print('updated')", encoding="utf-8")
     (package / "data" / "history.json").write_text("private history", encoding="utf-8")
     (package / "data" / "installed-version.json").write_text(
@@ -51,6 +52,7 @@ def test_update_bundle_excludes_large_runtimes_and_user_state(tmp_path: Path) ->
     with zipfile.ZipFile(output_zip) as archive:
         names = set(archive.namelist())
         assert "DjGoo.exe" in names
+        assert "DjGoo Mini Player.exe" in names
         assert "tools/worker.py" in names
         assert "config/secrets.example.json" in names
         assert "data/installed-version.json" in names
