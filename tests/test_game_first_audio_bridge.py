@@ -36,6 +36,31 @@ async def test_active_radio_play_uses_request_lane() -> None:
     )
 
 
+def test_request_detection_ignores_preexisting_radio_tracks() -> None:
+    bridge = object.__new__(GameFirstDjGooAudioBridge)
+    current = SimpleNamespace(track_identifier="current")
+    old_radio = SimpleNamespace(track_identifier="old-radio")
+    request = SimpleNamespace(track_identifier="request")
+    player = SimpleNamespace(current=current, queue=[request, old_radio])
+
+    assert bridge._new_track_from_player(
+        player,
+        {id(current), id(old_radio)},
+    ) is request
+
+
+def test_failed_enqueue_does_not_relabel_existing_radio_track() -> None:
+    bridge = object.__new__(GameFirstDjGooAudioBridge)
+    current = SimpleNamespace(track_identifier="current")
+    old_radio = SimpleNamespace(track_identifier="old-radio")
+    player = SimpleNamespace(current=current, queue=[old_radio])
+
+    assert bridge._new_track_from_player(
+        player,
+        {id(current), id(old_radio)},
+    ) is None
+
+
 def test_bumped_track_is_classified_as_radio_request() -> None:
     bridge = object.__new__(GameFirstDjGooAudioBridge)
     bridge._radio_request_counts = {}
