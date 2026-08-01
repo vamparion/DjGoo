@@ -89,10 +89,13 @@ class GameFirstDjGooAudioBridge(EnhancedDjGooAudioBridge):
             player_before = lavalink.get_player(ctx.guild.id)
         except (NodeNotFound, PlayerNotFound):
             player_before = None
-        had_current = bool(getattr(player_before, "current", None))
         prior_queue_ids = {
             id(track) for track in list(getattr(player_before, "queue", []) or [])
         }
+        prior_track_ids = set(prior_queue_ids)
+        prior_current = getattr(player_before, "current", None)
+        if prior_current is not None:
+            prior_track_ids.add(id(prior_current))
 
         bumpplay = getattr(audio, "command_bumpplay", None)
         if bumpplay is not None:
@@ -110,15 +113,23 @@ class GameFirstDjGooAudioBridge(EnhancedDjGooAudioBridge):
 
         requested_track = await self._requested_track_after_enqueue(
             ctx.guild.id,
-            had_current=had_current,
+            prior_track_ids=prior_track_ids,
         )
-        if requested_track is not None:
-            self._remember_radio_request(ctx.guild.id, requested_track)
-            track_data = self._track_data(requested_track)
-            display = track_data.get("title") or query
-        else:
-            display = query
+        if requested_track is None:
+            await self._notice(
+                "Red Audio did not add that request, so the radio queue was left unchanged."
+            )
+            log_event(
+                "radio.request.enqueue_failed",
+                guild_id=ctx.guild.id,
+                station=station_name,
+                query=query,
+            )
+            return "Radio request enqueue failed"
 
+        self._remember_radio_request(ctx.guild.id, requested_track)
+        track_data = self._track_data(requested_track)
+        display = track_data.get("title") or query
         self._persist_player_state(ctx.guild.id, reason="radio_request_enqueued")
         await self._notice(
             f"Queued `{display}` next. `{station_name}` will resume automatically afterward."
@@ -128,7 +139,7 @@ class GameFirstDjGooAudioBridge(EnhancedDjGooAudioBridge):
             guild_id=ctx.guild.id,
             station=station_name,
             query=query,
-            track=self._track_data(requested_track) if requested_track is not None else None,
+            track=self._track_data(requested_track),
         )
         return f"Queued request next: {display}"
 
@@ -145,11 +156,20 @@ class GameFirstDjGooAudioBridge(EnhancedDjGooAudioBridge):
         player.queue.clear()
         player.queue.extend([*added, *retained])
 
+    def _new_track_from_player(self, player: Any, prior_track_ids: set[int]):
+        current = getattr(player, "current", None)
+        if current is not None and id(current) not in prior_track_ids:
+            return current
+        for track in list(getattr(player, "queue", []) or []):
+            if id(track) not in prior_track_ids:
+                return track
+        return None
+
     async def _requested_track_after_enqueue(
         self,
         guild_id: int,
         *,
-        had_current: bool,
+        prior_track_ids: set[int],
         timeout: float = 5.0,
     ):
         deadline = asyncio.get_running_loop().time() + timeout
@@ -159,12 +179,9 @@ class GameFirstDjGooAudioBridge(EnhancedDjGooAudioBridge):
             except (NodeNotFound, PlayerNotFound):
                 player = None
             if player is not None:
-                if had_current and player.queue:
-                    return player.queue[0]
-                if not had_current and player.current is not None:
-                    return player.current
-                if player.queue:
-                    return player.queue[0]
+                requested = self._new_track_from_player(player, prior_track_ids)
+                if requested is not None:
+                    return requested
             if asyncio.get_running_loop().time() >= deadline:
                 return None
             await asyncio.sleep(0.1)
