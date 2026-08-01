@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any
 
@@ -8,12 +9,13 @@ from redbot.core import commands
 
 from voice.command_acceptance import AuthenticatedCommandProcessor
 from voice.operational_log import log_event
+from voice.pairing_bundle import build_invite
 from voice.relay_crypto import load_or_create_host_identity
 from voice.relay_host import RelayHostClient
 
 
 class DjGooRelay(commands.Cog):
-    """Optional outbound-only encrypted transport for DjGoo Link."""
+    """Secure direct and outbound-relay connections for DjGoo Link."""
 
     def __init__(self, bot, djgoo_cog, project_root: Path) -> None:
         self.bot = bot
@@ -33,10 +35,8 @@ class DjGooRelay(commands.Cog):
         relay_url = str(self.settings.get("url") or "").strip()
         if bool(self.settings.get("enabled", False)) and relay_url:
             self.client = RelayHostClient(relay_url, self.identity, self.processor)
-            self.djgoo_cog._relay_client = self.client
             self._startup_task = self.bot.loop.create_task(self._start())
         else:
-            self.djgoo_cog._relay_client = None
             log_event("voice.relay.disabled")
 
     def _settings(self) -> dict[str, Any]:
@@ -58,41 +58,89 @@ class DjGooRelay(commands.Cog):
     def cog_unload(self) -> None:
         if self._startup_task is not None:
             self._startup_task.cancel()
-        self.djgoo_cog._relay_client = None
         if self.client is not None:
             self.bot.loop.create_task(self.client.stop())
 
-    @commands.hybrid_group(name="djgoorelay", invoke_without_command=True)
-    async def relay_group(self, ctx: commands.Context) -> None:
-        """Manage DjGoo's encrypted internet connection."""
-        await ctx.send("Use `djgoorelay pair` or `djgoorelay status`.")
+    @commands.hybrid_group(
+        name="djgoolink",
+        aliases=("djgoorelay",),
+        invoke_without_command=True,
+    )
+    async def link_group(self, ctx: commands.Context) -> None:
+        """Pair and inspect DjGoo recipient devices."""
+        await ctx.send("Use `djgoolink pair` or `djgoolink status`.")
 
-    @relay_group.command(name="pair")
+    @link_group.command(name="pair")
     @commands.guild_only()
-    async def relay_pair(self, ctx: commands.Context) -> None:
-        """Send the same one-field invite with relay fallback included."""
-        if self.client is None:
+    async def link_pair(self, ctx: commands.Context) -> None:
+        """Send one secure invite containing every available connection path."""
+        gateway = self.djgoo_cog._gateway
+        if gateway is None and self.client is None:
+            await ctx.send("DjGoo Link is disabled on this Host.")
+            return
+
+        code = await asyncio.to_thread(
+            self.djgoo_cog._pairing_store.create_pairing_code,
+            int(ctx.author.id),
+            int(ctx.guild.id),
+            300,
+        )
+        direct_url = self.djgoo_cog._advertised_gateway_url() if gateway is not None else ""
+        invite = build_invite(
+            code=code,
+            expires_at=time.time() + 300,
+            direct_url=direct_url,
+            direct_fingerprint=gateway.fingerprint if gateway is not None else "",
+            relay_url=self.client.relay_url.rstrip("/") if self.client is not None else "",
+            relay_fingerprint=self.client.encryption_fingerprint if self.client is not None else "",
+            room_id=self.client.room_id if self.client is not None else "",
+            host_public_key=self.client.encryption_public_key if self.client is not None else "",
+            host_name="DjGoo Host",
+            guild_name=getattr(ctx.guild, "name", ""),
+        )
+        route_text = "same-network secure link"
+        if self.client is not None and gateway is not None:
+            route_text += " with encrypted internet fallback"
+        elif self.client is not None:
+            route_text = "end-to-end encrypted internet link"
+        message = (
+            "**DjGoo Link invite**\n\n"
+            "1. Open **DjGoo Voice**.\n"
+            "2. Copy the entire invite below.\n"
+            "3. Select **Paste and connect**.\n\n"
+            f"```\n{invite.to_uri()}\n```\n"
+            f"Safety number: `{invite.safety_number()}`\n"
+            f"Connection: {route_text}.\n\n"
+            "The invite expires in five minutes and works once. Microphone audio stays on the recipient computer."
+        )
+        try:
+            await ctx.author.send(message)
+        except Exception:
             await ctx.send(
-                "DjGoo's encrypted internet connection is not configured. "
-                "Use `djgoo pair` while on the same network."
+                "I could not send the private DjGoo Link invite. Enable direct messages from this server and try again."
             )
             return
-        await self.djgoo_cog._send_pairing_invite(ctx)
+        await ctx.send("Your private DjGoo Link invite was sent.", delete_after=12)
+        log_event(
+            "voice.link.pairing_invite_created",
+            user_id=ctx.author.id,
+            guild_id=ctx.guild.id,
+            direct_available=gateway is not None,
+            relay_available=self.client is not None,
+        )
 
-    @relay_group.command(name="status")
+    @link_group.command(name="status")
     @commands.guild_only()
     @commands.admin_or_permissions(manage_guild=True)
-    async def relay_status(self, ctx: commands.Context) -> None:
-        """Show non-secret DjGoo Link relay state."""
-        if self.client is None:
-            await ctx.send("DjGoo Link internet fallback is disabled.")
-            return
-        task = self.client._task
-        running = bool(task is not None and not task.done())
+    async def link_status(self, ctx: commands.Context) -> None:
+        """Show non-secret DjGoo Link state."""
+        gateway = self.djgoo_cog._gateway
+        direct_ready = gateway is not None
+        relay_task = self.client._task if self.client is not None else None
+        relay_ready = bool(relay_task is not None and not relay_task.done())
         await ctx.send(
-            "DjGoo Link internet fallback\n"
-            f"Connected/reconnecting: `{running}`\n"
-            f"Relay: `{self.client.relay_url.rstrip('/')}`\n"
-            f"Room: `{self.client.room_id}`\n"
-            f"Encryption fingerprint: `{self.client.encryption_fingerprint}`"
+            "DjGoo Link\n"
+            f"Same-network secure connection: `{direct_ready}`\n"
+            f"Encrypted internet fallback: `{relay_ready}`\n"
+            f"Paired devices are individually revocable with `djgoo revoke <device-id>`."
         )
