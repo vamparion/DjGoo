@@ -10,8 +10,6 @@ import time
 from pathlib import Path
 
 
-# GitHub Actions invokes this file by path, so add the repository root before
-# importing sibling modules through the ``tools`` package.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -22,7 +20,14 @@ from tools.red_lavalink_contract import (
 )
 
 
-COPY_DIRECTORIES = ("config", "control_panel_dist", "launcher", "local_cogs", "tools", "voice")
+COPY_DIRECTORIES = (
+    "config",
+    "control_panel_dist",
+    "launcher",
+    "local_cogs",
+    "tools",
+    "voice",
+)
 COPY_FILES = (
     "LICENSE",
     "README.md",
@@ -32,7 +37,14 @@ COPY_FILES = (
     "pyproject.toml",
 )
 EXCLUDED_SUFFIXES = {".ps1", ".vbs", ".pyc"}
-EXCLUDED_NAMES = {"__pycache__", ".git", ".github", ".venv", ".voice-venv", "node_modules"}
+EXCLUDED_NAMES = {
+    "__pycache__",
+    ".git",
+    ".github",
+    ".venv",
+    ".voice-venv",
+    "node_modules",
+}
 RUNTIME_GENERATION = 3
 
 
@@ -48,13 +60,24 @@ def ignore_copy(directory: str, names: list[str]) -> set[str]:
 def copy_tree(source: Path, destination: Path) -> None:
     if not source.exists():
         return
-    shutil.copytree(source, destination, dirs_exist_ok=True, ignore=ignore_copy)
+    shutil.copytree(
+        source,
+        destination,
+        dirs_exist_ok=True,
+        ignore=ignore_copy,
+    )
 
 
-def build_launcher(output: Path) -> Path:
-    dist = output.parent / "launcher-dist"
-    build = output.parent / "launcher-build"
-    spec = output.parent / "launcher-spec"
+def build_gui_executable(
+    output: Path,
+    *,
+    source: Path,
+    name: str,
+) -> Path:
+    key = "".join(character.lower() if character.isalnum() else "-" for character in name).strip("-")
+    dist = output.parent / f"{key}-dist"
+    build = output.parent / f"{key}-build"
+    spec = output.parent / f"{key}-spec"
     for path in (dist, build, spec):
         shutil.rmtree(path, ignore_errors=True)
     command = [
@@ -66,21 +89,38 @@ def build_launcher(output: Path) -> Path:
         "--onefile",
         "--windowed",
         "--name",
-        "DjGoo",
+        name,
         "--distpath",
         str(dist),
         "--workpath",
         str(build),
         "--specpath",
         str(spec),
-        str(PROJECT_ROOT / "launcher" / "djgoo_launcher.py"),
+        str(source),
     ]
     subprocess.run(command, cwd=PROJECT_ROOT, check=True)
-    launcher = dist / "DjGoo.exe"
-    if not launcher.exists():
-        raise FileNotFoundError("PyInstaller did not produce DjGoo.exe")
-    shutil.copy2(launcher, output / "DjGoo.exe")
-    return output / "DjGoo.exe"
+    executable = dist / f"{name}.exe"
+    if not executable.exists():
+        raise FileNotFoundError(f"PyInstaller did not produce {name}.exe")
+    destination = output / executable.name
+    shutil.copy2(executable, destination)
+    return destination
+
+
+def build_launcher(output: Path) -> Path:
+    return build_gui_executable(
+        output,
+        source=PROJECT_ROOT / "launcher" / "djgoo_launcher.py",
+        name="DjGoo",
+    )
+
+
+def build_mini_player(output: Path) -> Path:
+    return build_gui_executable(
+        output,
+        source=PROJECT_ROOT / "launcher" / "djgoo_overlay.py",
+        name="DjGoo Mini Player",
+    )
 
 
 def install_portable_supervisor(output: Path) -> None:
@@ -148,7 +188,13 @@ def write_manifest(output: Path, version: str) -> None:
     )
 
 
-def build(output: Path, runtime_python: Path, runtime_java: Path, lavalink_jar: Path, version: str) -> None:
+def build(
+    output: Path,
+    runtime_python: Path,
+    runtime_java: Path,
+    lavalink_jar: Path,
+    version: str,
+) -> None:
     shutil.rmtree(output, ignore_errors=True)
     output.mkdir(parents=True)
 
@@ -200,10 +246,15 @@ def build(output: Path, runtime_python: Path, runtime_java: Path, lavalink_jar: 
 
     write_lavalink_contract(output, contract)
     build_launcher(output)
+    build_mini_player(output)
     write_installed_version(output, version)
     write_manifest(output, version)
 
-    forbidden = [path for path in output.rglob("*") if path.suffix.lower() in {".ps1", ".vbs"}]
+    forbidden = [
+        path
+        for path in output.rglob("*")
+        if path.suffix.lower() in {".ps1", ".vbs"}
+    ]
     if forbidden:
         raise RuntimeError(f"Portable package contains forbidden scripts: {forbidden}")
 
