@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import runpy
 import socket
 import sys
@@ -12,12 +13,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools.portable_environment import apply_portable_environment
+from tools.portable_environment import apply_portable_environment, red_config_dir
 
 
 INSTANCE_NAME = "discordbot"
 STARTUP_COGS = ("audio", "djgoowelcome")
 CONSOLE_FLAG = "--djgoo-console"
+CHECK_FLAG = "--djgoo-check"
 
 
 def _ipv6_socketpair(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0):
@@ -60,6 +62,30 @@ def redbot_argv(project_root: Path = PROJECT_ROOT) -> list[str]:
     ]
 
 
+def check_portable_red(project_root: Path = PROJECT_ROOT) -> None:
+    """Verify that Red and DjGoo resolve the same portable instance file."""
+
+    apply_portable_environment(project_root)
+    from redbot.core import data_manager
+
+    expected = (red_config_dir(project_root) / "config.json").resolve()
+    actual = data_manager.config_file.resolve()
+    if actual != expected:
+        raise RuntimeError(
+            "Red configuration path mismatch. "
+            f"DjGoo prepared {expected}, but Red resolved {actual}."
+        )
+    try:
+        payload = json.loads(actual.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Portable Red configuration is missing: {actual}") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Portable Red configuration is invalid JSON: {actual}") from exc
+    if not isinstance(payload, dict) or INSTANCE_NAME not in payload:
+        raise RuntimeError(f"Red instance '{INSTANCE_NAME}' is missing from {actual}")
+    print(f"DjGoo portable Red configuration OK: {actual}")
+
+
 def _exit_code(value: object) -> int:
     if value is None:
         return 0
@@ -91,7 +117,10 @@ def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     console_mode = CONSOLE_FLAG in arguments
     try:
-        run_redbot(PROJECT_ROOT)
+        if CHECK_FLAG in arguments:
+            check_portable_red(PROJECT_ROOT)
+        else:
+            run_redbot(PROJECT_ROOT)
     except SystemExit as exc:
         code = _exit_code(exc.code)
         if console_mode and code != 0:
