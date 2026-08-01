@@ -1,0 +1,29 @@
+name: Temporary updater shutdown transaction patch
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/temporary-update-shutdown-transaction.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/restart-stale-supervisor-after-update
+          token: ${{ github.token }}
+          fetch-depth: 0
+      - run: python tools/patch_update_shutdown_transaction.py
+      - shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tools/apply_update.py
+          git commit -m "protect supervisor shutdown during updates"
+          git push origin HEAD:agent/restart-stale-supervisor-after-update
