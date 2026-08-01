@@ -14,6 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from tools.lavalink_process import cleanup_lavalink_processes
 from tools.portable_environment import bind_red_data_manager, red_config_dir
 from tools.portable_red_setup import ensure_instance, verify_red_instance_runtime
 
@@ -23,9 +24,6 @@ STARTUP_COGS = ("audio", "djgoowelcome")
 CONSOLE_FLAG = "--djgoo-console"
 CHECK_FLAG = "--djgoo-check"
 DUPLICATE_EXIT_CODE = 75
-LAVALINK_HOST = "::1"
-LAVALINK_PORT = 2333
-LAVALINK_PASSWORD = "youshallnotpass"
 
 
 class RedbotAlreadyRunning(RuntimeError):
@@ -109,49 +107,33 @@ def _ipv6_socketpair(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0):
     return client, server
 
 
-async def configure_external_lavalink(cog: Any) -> None:
-    """Point Red Audio at the single Lavalink process owned by DjGoo.
+async def configure_managed_lavalink(cog: Any) -> None:
+    """Return Red Audio to its native managed Lavalink lifecycle.
 
-    The portable supervisor starts and monitors Lavalink. Red Audio must therefore
-    run in unmanaged/external mode; otherwise it attempts to start a second Java
-    process on the same port and repeatedly reports managed-node startup failures.
+    Older DjGoo alpha builds persisted external-node mode while also launching
+    Lavalink from the supervisor. Force that setting off before Audio performs
+    its normal initialization so Red owns the Java node exactly as it did in the
+    originally working setup.
     """
 
-    settings = {
-        "use_external_lavalink": True,
-        "host": LAVALINK_HOST,
-        "rest_port": LAVALINK_PORT,
-        "ws_port": LAVALINK_PORT,
-        "password": LAVALINK_PASSWORD,
-        "secured_ws": False,
-    }
-    for name, value in settings.items():
-        await getattr(cog.config, name).set(value)
+    await cog.config.use_external_lavalink.set(False)
 
 
-def install_audio_runtime_patch(audio_package: Any, ll_server_config: Any) -> None:
-    """Configure Audio before its normal initializer connects to Lavalink.
+def install_audio_runtime_patch(audio_package: Any) -> None:
+    """Force managed-node mode before Red Audio initializes."""
 
-    Discord.py may re-execute the package-level extension module while loading a
-    cog, so replacing ``redbot.cogs.audio.setup`` is not durable. The Audio class
-    comes from the cached ``redbot.cogs.audio.core`` module; wrapping its
-    initializer survives the extension loader while preserving Red's normal
-    setup, migration, database, and task lifecycle.
-    """
-
-    ll_server_config.DEFAULT_LAVALINK_YAML["yaml__server__address"] = LAVALINK_HOST
     audio_class = audio_package.Audio
-    if bool(getattr(audio_class, "_djgoo_external_lavalink_patch", False)):
+    if bool(getattr(audio_class, "_djgoo_managed_lavalink_patch", False)):
         return
 
     original_initialize = audio_class.initialize
 
     async def djgoo_initialize(self: Any) -> None:
-        await configure_external_lavalink(self)
+        await configure_managed_lavalink(self)
         await original_initialize(self)
 
     audio_class.initialize = djgoo_initialize
-    audio_class._djgoo_external_lavalink_patch = True
+    audio_class._djgoo_managed_lavalink_patch = True
     audio_class._djgoo_original_initialize = original_initialize
 
 
@@ -161,9 +143,8 @@ def apply_runtime_patches() -> None:
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
     import redbot.cogs.audio as audio_package
-    from redbot.cogs.audio.managed_node import ll_server_config
 
-    install_audio_runtime_patch(audio_package, ll_server_config)
+    install_audio_runtime_patch(audio_package)
 
 
 def redbot_argv(project_root: Path = PROJECT_ROOT) -> list[str]:
@@ -245,6 +226,7 @@ def run_redbot(project_root: Path = PROJECT_ROOT) -> None:
         # Always migrate early portable configurations before Red reads them.
         ensure_instance(project_root)
         bind_red_data_manager(project_root)
+        cleanup_lavalink_processes(project_root)
         apply_runtime_patches()
         sys.argv = redbot_argv(project_root)
         runpy.run_module("redbot", run_name="__main__")

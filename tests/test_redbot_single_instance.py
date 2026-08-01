@@ -15,12 +15,9 @@ from tools import start_redbot_selector
 from tools.start_redbot_selector import (
     CONSOLE_FLAG,
     DUPLICATE_EXIT_CODE,
-    LAVALINK_HOST,
-    LAVALINK_PASSWORD,
-    LAVALINK_PORT,
     RedbotAlreadyRunning,
     SingleInstance,
-    configure_external_lavalink,
+    configure_managed_lavalink,
     duplicate_instance_message,
     install_audio_runtime_patch,
     redbot_lock_path,
@@ -142,22 +139,15 @@ class _FakeConfig:
         return _FakeSetting(name, self.values)
 
 
-def test_red_audio_is_configured_for_supervisor_owned_lavalink() -> None:
+def test_red_audio_is_returned_to_managed_lavalink() -> None:
     cog = SimpleNamespace(config=_FakeConfig())
 
-    asyncio.run(configure_external_lavalink(cog))
+    asyncio.run(configure_managed_lavalink(cog))
 
-    assert cog.config.values == {
-        "use_external_lavalink": True,
-        "host": LAVALINK_HOST,
-        "rest_port": LAVALINK_PORT,
-        "ws_port": LAVALINK_PORT,
-        "password": LAVALINK_PASSWORD,
-        "secured_ws": False,
-    }
+    assert cog.config.values == {"use_external_lavalink": False}
 
 
-def test_audio_initializer_is_wrapped_before_normal_startup() -> None:
+def test_audio_initializer_forces_managed_mode_before_normal_startup() -> None:
     class FakeAudio:
         async def initialize(self) -> None:
             self.calls.append("original")
@@ -167,16 +157,13 @@ def test_audio_initializer_is_wrapped_before_normal_startup() -> None:
             self.calls: list[str] = []
 
     audio_package = SimpleNamespace(Audio=FakeAudio)
-    server_config = SimpleNamespace(DEFAULT_LAVALINK_YAML={})
 
-    install_audio_runtime_patch(audio_package, server_config)
+    install_audio_runtime_patch(audio_package)
     instance = FakeAudio()
     asyncio.run(instance.initialize())
 
     assert instance.calls == ["original"]
-    assert instance.config.values["use_external_lavalink"] is True
-    assert instance.config.values["host"] == LAVALINK_HOST
-    assert server_config.DEFAULT_LAVALINK_YAML["yaml__server__address"] == LAVALINK_HOST
+    assert instance.config.values["use_external_lavalink"] is False
 
 
 def test_audio_runtime_patch_is_idempotent() -> None:
@@ -185,10 +172,32 @@ def test_audio_runtime_patch_is_idempotent() -> None:
             return None
 
     audio_package = SimpleNamespace(Audio=FakeAudio)
-    server_config = SimpleNamespace(DEFAULT_LAVALINK_YAML={})
 
-    install_audio_runtime_patch(audio_package, server_config)
+    install_audio_runtime_patch(audio_package)
     first_initialize = FakeAudio.initialize
-    install_audio_runtime_patch(audio_package, server_config)
+    install_audio_runtime_patch(audio_package)
 
     assert FakeAudio.initialize is first_initialize
+
+
+def test_run_redbot_cleans_stale_lavalink_before_loading_red(
+    tmp_path: Path, monkeypatch
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(start_redbot_selector, "ensure_instance", lambda _root: calls.append("ensure"))
+    monkeypatch.setattr(start_redbot_selector, "bind_red_data_manager", lambda _root: calls.append("bind"))
+    monkeypatch.setattr(
+        start_redbot_selector,
+        "cleanup_lavalink_processes",
+        lambda _root: calls.append("cleanup") or [],
+    )
+    monkeypatch.setattr(start_redbot_selector, "apply_runtime_patches", lambda: calls.append("patch"))
+    monkeypatch.setattr(
+        start_redbot_selector.runpy,
+        "run_module",
+        lambda *_args, **_kwargs: calls.append("red"),
+    )
+
+    start_redbot_selector.run_redbot(tmp_path)
+
+    assert calls == ["ensure", "bind", "cleanup", "patch", "red"]

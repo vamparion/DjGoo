@@ -185,7 +185,7 @@ def test_child_process_receives_explicit_component_identity(tmp_path) -> None:
     assert observed["DJGOO_COMPONENT_NAME"] == "redbot"
 
 
-def test_existing_package_lavalink_listener_is_adopted(tmp_path, monkeypatch) -> None:
+def test_existing_lavalink_listener_is_not_adopted_by_supervisor(tmp_path, monkeypatch) -> None:
     root = tmp_path.resolve()
     listener = FakeProcess(
         4321,
@@ -201,8 +201,8 @@ def test_existing_package_lavalink_listener_is_adopted(tmp_path, monkeypatch) ->
     )
 
     assert core.component_running(spec) is True
-    assert core._records["lavalink"]["pid"] == listener.pid
-    assert any(name == "component.adopted" for name, _ in core.LOG.events)
+    assert "lavalink" not in core._records
+    assert not any(name == "component.adopted" for name, _ in core.LOG.events)
 
 
 def test_lavalink_readiness_is_bound_to_recorded_listener(tmp_path, monkeypatch) -> None:
@@ -240,3 +240,23 @@ def test_initial_redbot_ready_event_gets_bounded_startup_grace(monkeypatch) -> N
     assert adapter._portable_redbot_ready(core) is True
     heartbeat["event"] = "redbot.heartbeat"
     assert adapter._portable_redbot_ready(core) is False
+
+
+def test_supervisor_delegates_lavalink_to_red_audio(tmp_path, monkeypatch) -> None:
+    touch(tmp_path / "runtime" / "python" / "python.exe")
+    touch(tmp_path / "runtime" / "python" / "pythonw.exe")
+    touch(tmp_path / "runtime" / "java" / "bin" / "java.exe")
+    cleaned: list[Path] = []
+    monkeypatch.setattr(
+        adapter,
+        "cleanup_lavalink_processes",
+        lambda root: cleaned.append(Path(root)) or [],
+    )
+
+    core = adapter.configure_core(make_fake_core(), tmp_path)
+    spec = SimpleNamespace(name="lavalink", command_markers=("lavalink.jar", str(tmp_path)))
+
+    assert core.component_running(spec) is True
+    assert core.lavalink_ready() is True
+    core.terminate_component(spec, "test-stop")
+    assert cleaned == [tmp_path.resolve()]
