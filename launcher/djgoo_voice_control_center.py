@@ -11,9 +11,17 @@ import launcher.djgoo_voice_launcher as voice_base
 from launcher.djgoo_theme import (
     ACCENT,
     ACCENT_2,
+    ACTIVE_ACCENT,
+    ACTIVE_DANGER,
+    ACTIVE_PANEL,
     BG,
+    BORDER,
+    COACH,
     DANGER,
+    ENTRY,
     GOOD,
+    LOG_BG,
+    LOG_TEXT,
     MUTED,
     PANEL,
     PANEL_ALT,
@@ -22,7 +30,7 @@ from launcher.djgoo_theme import (
 )
 
 
-# The Host and recipient intentionally use the exact same palette.
+# The Host and recipient intentionally use one shared palette module.
 voice_base.BG = BG
 voice_base.PANEL = PANEL
 voice_base.PANEL_ALT = PANEL_ALT
@@ -36,7 +44,7 @@ voice_base.DANGER = DANGER
 
 from launcher.djgoo_voice_experience import DjGooVoiceExperience
 from tools.update_auth import clear_token, load_token, save_token
-from tools.update_client import AuthenticationRequired, UpdateError, UpdateOffer, read_installed_version
+from tools.update_client import AuthenticationRequired, UpdateOffer, read_installed_version
 from tools.voice_update_client import check_for_voice_update, download_voice_update
 from voice.input_binding import capture_next_button, normalize_button_name
 
@@ -54,6 +62,45 @@ class DjGooVoiceControlCenter(DjGooVoiceExperience):
         super().__init__(root, project_root)
         self._report_update_result()
 
+    def _button(
+        self,
+        parent,
+        text: str,
+        command,
+        *,
+        accent: bool = False,
+        danger: bool = False,
+        width: int | None = None,
+    ):
+        button = super()._button(
+            parent,
+            text,
+            command,
+            accent=accent,
+            danger=danger,
+            width=width,
+        )
+        button.configure(
+            bg=DANGER if danger else ACCENT if accent else PANEL_ALT,
+            activebackground=(
+                ACTIVE_DANGER if danger else ACTIVE_ACCENT if accent else ACTIVE_PANEL
+            ),
+            fg=TEXT,
+            activeforeground=TEXT,
+        )
+        return button
+
+    def _entry(self, parent, variable, *, show: str | None = None):
+        entry = super()._entry(parent, variable, show=show)
+        entry.configure(
+            bg=ENTRY,
+            fg=TEXT,
+            insertbackground=TEXT,
+            highlightbackground=BORDER,
+            highlightcolor=ACCENT,
+        )
+        return entry
+
     def _field(self, parent: Frame, row: int, label: str, variable) -> None:
         if label != "Push-to-talk":
             super()._field(parent, row, label, variable)
@@ -68,7 +115,7 @@ class DjGooVoiceControlCenter(DjGooVoiceExperience):
             parent,
             textvariable=variable,
             anchor="w",
-            bg="#0f131a",
+            bg=ENTRY,
             fg=TEXT,
             padx=8,
             pady=6,
@@ -83,6 +130,8 @@ class DjGooVoiceControlCenter(DjGooVoiceExperience):
 
     def _build(self) -> None:
         super()._build()
+        self.root.configure(bg=BG)
+        self.activity.configure(bg=LOG_BG, fg=LOG_TEXT, insertbackground=TEXT)
         version = read_installed_version(self.project_root).text
         manage = Frame(self.root, bg=PANEL, padx=18, pady=12)
         manage.pack(fill=X, padx=20, pady=(0, 10), before=self.activity)
@@ -93,10 +142,13 @@ class DjGooVoiceControlCenter(DjGooVoiceExperience):
             bg=PANEL,
             fg=TEXT,
         ).pack(side=LEFT)
-        self._button(manage, "Check for updates", self.check_updates).pack(side=LEFT, padx=(14, 0))
+        self._button(manage, "Check for updates", self.check_updates).pack(
+            side=LEFT,
+            padx=(14, 0),
+        )
         Label(
             manage,
-            text="Same theme and verified updater as the DjGoo Host.",
+            text="Same visual scheme and verified updater as the DjGoo Host.",
             bg=PANEL,
             fg=MUTED,
         ).pack(side=LEFT, padx=(12, 0))
@@ -105,22 +157,43 @@ class DjGooVoiceControlCenter(DjGooVoiceExperience):
         if self._binding_button:
             return
         self._binding_button = True
-        self.log("Button binding armed. Release the mouse, then press the desired keyboard or mouse button.")
-        threading.Thread(target=self._capture_button_worker, name="djgoo-voice-bind", daemon=True).start()
+        self.log(
+            "Button binding armed. Release the mouse, then press the desired keyboard or mouse button."
+        )
+        threading.Thread(
+            target=self._capture_button_worker,
+            name="djgoo-voice-bind",
+            daemon=True,
+        ).start()
 
     def _capture_button_worker(self) -> None:
         try:
             captured = capture_next_button()
         except Exception as exc:
-            self.root.after(0, lambda: self._finish_button_binding(None, str(exc)))
+            error = str(exc)
+            self.root.after(
+                0,
+                lambda message=error: self._finish_button_binding(None, message),
+            )
             return
-        self.root.after(0, lambda: self._finish_button_binding(captured, None))
+        self.root.after(
+            0,
+            lambda button=captured: self._finish_button_binding(button, None),
+        )
 
-    def _finish_button_binding(self, captured: str | None, error: str | None) -> None:
+    def _finish_button_binding(
+        self,
+        captured: str | None,
+        error: str | None,
+    ) -> None:
         self._binding_button = False
         if not captured:
             self.log(f"Button binding cancelled: {error or 'no input detected'}")
-            messagebox.showerror(APP_TITLE, error or "No button was detected.", parent=self.root)
+            messagebox.showerror(
+                APP_TITLE,
+                error or "No button was detected.",
+                parent=self.root,
+            )
             return
         normalized = normalize_button_name(captured)
         self.hotkey.set(normalized)
@@ -139,7 +212,10 @@ class DjGooVoiceControlCenter(DjGooVoiceExperience):
 
     def start(self) -> None:
         if not self.credential_path.exists():
-            messagebox.showerror(APP_TITLE, "Connect this device before starting voice control.")
+            messagebox.showerror(
+                APP_TITLE,
+                "Connect this device before starting voice control.",
+            )
             return
         if self._running_pid() is not None:
             self.log("Voice control is already listening.")
@@ -171,27 +247,49 @@ class DjGooVoiceControlCenter(DjGooVoiceExperience):
 
     def check_updates(self) -> None:
         if self._update_busy:
+            self.log("An update check is already running.")
             return
         self._update_busy = True
         self.log("Checking GitHub for a verified DjGoo Voice update…")
-        threading.Thread(target=self._check_update_worker, daemon=True).start()
+        threading.Thread(
+            target=self._check_update_worker,
+            name="djgoo-voice-update-check",
+            daemon=True,
+        ).start()
 
-    def _check_update_worker(self, token: str | None = None, prompted: bool = False) -> None:
+    def _check_update_worker(
+        self,
+        token: str | None = None,
+        prompted: bool = False,
+    ) -> None:
         resolved = token if token is not None else load_token(self.update_auth_path)
         try:
             offer = check_for_voice_update(self.project_root, resolved)
         except AuthenticationRequired:
             if resolved:
                 clear_token(self.update_auth_path)
-            self.root.after(0, lambda: self._request_update_token(prompted))
+            self.root.after(
+                0,
+                lambda was_prompted=prompted: self._request_update_token(was_prompted),
+            )
             return
-        except (UpdateError, Exception) as exc:
-            self.root.after(0, lambda: self._finish_update_error(str(exc)))
+        except Exception as exc:
+            error = str(exc)
+            self.root.after(
+                0,
+                lambda message=error: self._finish_update_error(message),
+            )
             return
         if offer is None:
             self.root.after(0, self._finish_no_update)
         else:
-            self.root.after(0, lambda: self._confirm_update(offer, resolved))
+            self.root.after(
+                0,
+                lambda selected=offer, credential=resolved: self._confirm_update(
+                    selected,
+                    credential,
+                ),
+            )
 
     def _request_update_token(self, already_prompted: bool) -> None:
         if already_prompted:
@@ -213,33 +311,61 @@ class DjGooVoiceControlCenter(DjGooVoiceExperience):
         try:
             save_token(self.update_auth_path, token)
         except Exception as exc:
-            self._finish_update_error(f"Could not securely save the update token: {exc}")
+            self._finish_update_error(
+                f"Could not securely save the update token: {exc}"
+            )
             return
-        threading.Thread(target=self._check_update_worker, args=(token, True), daemon=True).start()
+        threading.Thread(
+            target=self._check_update_worker,
+            args=(token, True),
+            name="djgoo-voice-update-authenticated",
+            daemon=True,
+        ).start()
 
     def _finish_no_update(self) -> None:
         self._update_busy = False
         self.log("DjGoo Voice is already up to date.")
-        messagebox.showinfo(APP_TITLE, "DjGoo Voice is already up to date.", parent=self.root)
+        messagebox.showinfo(
+            APP_TITLE,
+            "DjGoo Voice is already up to date.",
+            parent=self.root,
+        )
 
     def _finish_update_error(self, error: str) -> None:
         self._update_busy = False
         self.log("Update failed: " + error)
         messagebox.showerror(APP_TITLE, error, parent=self.root)
 
-    def _confirm_update(self, offer: UpdateOffer, token: str | None) -> None:
+    def _confirm_update(
+        self,
+        offer: UpdateOffer,
+        token: str | None,
+    ) -> None:
         installed = read_installed_version(self.project_root).text
         if not messagebox.askyesno(
             APP_TITLE,
-            f"DjGoo Voice {offer.version.text} is available.\n\nInstalled: {installed}\nAvailable: {offer.version.text}\n\nInstall it now?",
+            f"DjGoo Voice {offer.version.text} is available.\n\n"
+            f"Installed: {installed}\n"
+            f"Available: {offer.version.text}\n\n"
+            "Install it now?",
             parent=self.root,
         ):
             self._update_busy = False
+            self.log("Update declined.")
             return
         self.log(f"Downloading DjGoo Voice {offer.version.text}…")
-        threading.Thread(target=self._download_update_worker, args=(offer, token), daemon=True).start()
+        threading.Thread(
+            target=self._download_update_worker,
+            args=(offer, token),
+            name="djgoo-voice-update-download",
+            daemon=True,
+        ).start()
 
-    def _download_update_worker(self, offer: UpdateOffer, token: str | None) -> None:
+    def _download_update_worker(
+        self,
+        offer: UpdateOffer,
+        token: str | None,
+    ) -> None:
         progress_bucket = -10
 
         def progress(downloaded: int, total: int) -> None:
@@ -249,18 +375,44 @@ class DjGooVoiceControlCenter(DjGooVoiceExperience):
             bucket = min(100, int(downloaded * 100 / total)) // 10 * 10
             if bucket > progress_bucket:
                 progress_bucket = bucket
-                self.root.after(0, lambda b=bucket: self.log(f"Update download: {b}%"))
+                self.root.after(
+                    0,
+                    lambda value=bucket: self.log(f"Update download: {value}%"),
+                )
 
         try:
-            bundle, manifest, _ = download_voice_update(self.project_root, offer, token, progress)
+            bundle, manifest, _ = download_voice_update(
+                self.project_root,
+                offer,
+                token,
+                progress,
+            )
         except Exception as exc:
-            self.root.after(0, lambda: self._finish_update_error(str(exc)))
+            error = str(exc)
+            self.root.after(
+                0,
+                lambda message=error: self._finish_update_error(message),
+            )
             return
-        self.root.after(0, lambda: self._launch_update_worker(bundle, manifest, offer))
+        self.root.after(
+            0,
+            lambda archive=bundle, metadata=manifest, selected=offer: self._launch_update_worker(
+                archive,
+                metadata,
+                selected,
+            ),
+        )
 
-    def _launch_update_worker(self, bundle: Path, manifest: Path, offer: UpdateOffer) -> None:
+    def _launch_update_worker(
+        self,
+        bundle: Path,
+        manifest: Path,
+        offer: UpdateOffer,
+    ) -> None:
         if not self.update_worker_path.exists():
-            self._finish_update_error(f"Update worker is missing: {self.update_worker_path}")
+            self._finish_update_error(
+                f"Update worker is missing: {self.update_worker_path}"
+            )
             return
         if self._running_pid() is not None:
             self.stop()
@@ -286,27 +438,37 @@ class DjGooVoiceControlCenter(DjGooVoiceExperience):
                 close_fds=True,
             )
         except OSError as exc:
-            self._finish_update_error(f"Could not start the update worker: {exc}")
+            self._finish_update_error(
+                f"Could not start the update worker: {exc}"
+            )
             return
-        self.log(f"Installing DjGoo Voice {offer.version.text}; the controller will restart.")
+        self.log(
+            f"Installing DjGoo Voice {offer.version.text}; the controller will restart."
+        )
         self.root.after(300, self.root.destroy)
 
     def _report_update_result(self) -> None:
         if not self.update_result_path.exists():
             return
         try:
-            payload = json.loads(self.update_result_path.read_text(encoding="utf-8"))
+            payload = json.loads(
+                self.update_result_path.read_text(encoding="utf-8")
+            )
         except (OSError, json.JSONDecodeError):
             return
         self.update_result_path.unlink(missing_ok=True)
         if bool(payload.get("success")):
-            self.log(f"Update completed successfully: DjGoo Voice {payload.get('version') or 'new version'}.")
+            self.log(
+                "Update completed successfully: DjGoo Voice "
+                f"{payload.get('version') or 'new version'}."
+            )
             return
         error = str(payload.get("error") or "Unknown update error")
         self.log("Previous update failed: " + error)
         messagebox.showerror(
             APP_TITLE,
-            "The previous DjGoo Voice update failed and was rolled back.\n\n" + error,
+            "The previous DjGoo Voice update failed and was rolled back.\n\n"
+            + error,
             parent=self.root,
         )
 
