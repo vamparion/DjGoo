@@ -298,6 +298,26 @@ def _write_json(path: Path, payload: Mapping[str, object]) -> None:
     os.replace(temporary, path)
 
 
+def recorded_supervisor_pid(root: Path) -> int:
+    for path in (
+        root / "data" / "pids" / "supervisor.json",
+        root / "data" / "djgoo-supervisor-state.json",
+    ):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        try:
+            pid = int(payload.get("pid") or payload.get("supervisor_pid") or 0)
+        except (TypeError, ValueError):
+            continue
+        if pid > 0:
+            return pid
+    return 0
+
+
 def stack_was_running(root: Path) -> bool:
     try:
         payload = json.loads((root / "data" / "djgoo-supervisor-state.json").read_text(encoding="utf-8"))
@@ -360,8 +380,12 @@ def run_update(root: Path, bundle: Path, manifest_path: Path, parent_pid: int) -
 
     started_at = time.time()
     resume_stack = stack_was_running(root)
-    invoke_stack(root, "stop", log)
     try:
+        supervisor_pid = recorded_supervisor_pid(root)
+        invoke_stack(root, "shutdown", log)
+        if supervisor_pid:
+            wait_for_process_exit(supervisor_pid, timeout=PARENT_EXIT_TIMEOUT_SECONDS)
+            log(f"Supervisor PID {supervisor_pid} exited before file replacement.")
         manifest = load_manifest(manifest_path)
         expected = validate_bundle(bundle, manifest)
         version = str(manifest.get("version") or "unknown")
