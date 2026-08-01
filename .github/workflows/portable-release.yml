@@ -23,7 +23,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     env:
-      PYTHON_VERSION: "3.11.15"
+      # Python 3.11.9 is the final 3.11 release with official Windows binaries.
+      PYTHON_VERSION: "3.11.9"
       PACKAGE_NAME: "DjGoo-Host-win-x64"
     steps:
       - name: Check out source
@@ -62,6 +63,10 @@ jobs:
           New-Item -ItemType Directory -Force build/runtime-python | Out-Null
           $url = "https://www.python.org/ftp/python/$env:PYTHON_VERSION/python-$env:PYTHON_VERSION-embed-amd64.zip"
           Invoke-WebRequest -UseBasicParsing $url -OutFile build/python-embed.zip
+          $actualHash = (Get-FileHash build/python-embed.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne "6d9aa08531d48fcc261ba667e2df17c4a8c7f1e62ab49db7524766526c9c93d8") {
+            throw "Portable Python checksum mismatch: $actualHash"
+          }
           Expand-Archive build/python-embed.zip build/runtime-python -Force
           New-Item -ItemType Directory -Force build/runtime-python/Lib/site-packages | Out-Null
           $pth = Get-ChildItem build/runtime-python -Filter "python*._pth" | Select-Object -First 1
@@ -94,7 +99,6 @@ jobs:
             --runtime-java "$env:JAVA_HOME" `
             --lavalink-jar build/Lavalink.jar `
             --version $version
-          Copy-Item config/lavalink.application.yml "build/$env:PACKAGE_NAME/data/discordbot/cogs/Audio/application.yml" -Force
           python tools/generate_sbom.py `
             --site-packages build/runtime-python/Lib/site-packages `
             --output "build/$env:PACKAGE_NAME/sbom.cdx.json" `
