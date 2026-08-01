@@ -7,7 +7,7 @@ import socket
 import sys
 import traceback
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +23,9 @@ STARTUP_COGS = ("audio", "djgoowelcome")
 CONSOLE_FLAG = "--djgoo-console"
 CHECK_FLAG = "--djgoo-check"
 DUPLICATE_EXIT_CODE = 75
+LAVALINK_HOST = "::1"
+LAVALINK_PORT = 2333
+LAVALINK_PASSWORD = "youshallnotpass"
 
 
 class RedbotAlreadyRunning(RuntimeError):
@@ -106,14 +109,61 @@ def _ipv6_socketpair(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0):
     return client, server
 
 
+async def configure_external_lavalink(cog: Any) -> None:
+    """Point Red Audio at the single Lavalink process owned by DjGoo.
+
+    The portable supervisor starts and monitors Lavalink. Red Audio must therefore
+    run in unmanaged/external mode; otherwise it attempts to start a second Java
+    process on the same port and repeatedly reports managed-node startup failures.
+    """
+
+    settings = {
+        "use_external_lavalink": True,
+        "host": LAVALINK_HOST,
+        "rest_port": LAVALINK_PORT,
+        "ws_port": LAVALINK_PORT,
+        "password": LAVALINK_PASSWORD,
+        "secured_ws": False,
+    }
+    for name, value in settings.items():
+        await getattr(cog.config, name).set(value)
+
+
+def install_audio_runtime_patch(audio_package: Any, ll_server_config: Any) -> None:
+    """Configure Audio before its normal initializer connects to Lavalink.
+
+    Discord.py may re-execute the package-level extension module while loading a
+    cog, so replacing ``redbot.cogs.audio.setup`` is not durable. The Audio class
+    comes from the cached ``redbot.cogs.audio.core`` module; wrapping its
+    initializer survives the extension loader while preserving Red's normal
+    setup, migration, database, and task lifecycle.
+    """
+
+    ll_server_config.DEFAULT_LAVALINK_YAML["yaml__server__address"] = LAVALINK_HOST
+    audio_class = audio_package.Audio
+    if bool(getattr(audio_class, "_djgoo_external_lavalink_patch", False)):
+        return
+
+    original_initialize = audio_class.initialize
+
+    async def djgoo_initialize(self: Any) -> None:
+        await configure_external_lavalink(self)
+        await original_initialize(self)
+
+    audio_class.initialize = djgoo_initialize
+    audio_class._djgoo_external_lavalink_patch = True
+    audio_class._djgoo_original_initialize = original_initialize
+
+
 def apply_runtime_patches() -> None:
     socket.socketpair = _ipv6_socketpair
     if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+    import redbot.cogs.audio as audio_package
     from redbot.cogs.audio.managed_node import ll_server_config
 
-    ll_server_config.DEFAULT_LAVALINK_YAML["yaml__server__address"] = "::1"
+    install_audio_runtime_patch(audio_package, ll_server_config)
 
 
 def redbot_argv(project_root: Path = PROJECT_ROOT) -> list[str]:

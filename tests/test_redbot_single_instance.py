@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import builtins
 import json
 import os
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,9 +15,14 @@ from tools import start_redbot_selector
 from tools.start_redbot_selector import (
     CONSOLE_FLAG,
     DUPLICATE_EXIT_CODE,
+    LAVALINK_HOST,
+    LAVALINK_PASSWORD,
+    LAVALINK_PORT,
     RedbotAlreadyRunning,
     SingleInstance,
+    configure_external_lavalink,
     duplicate_instance_message,
+    install_audio_runtime_patch,
     redbot_lock_path,
 )
 
@@ -116,3 +123,72 @@ def test_duplicate_message_points_to_current_log(tmp_path: Path) -> None:
 
     assert "already using this package" in message
     assert str(tmp_path / "data" / "discordbot" / "core" / "logs" / "latest.log") in message
+
+
+class _FakeSetting:
+    def __init__(self, name: str, values: dict[str, object]) -> None:
+        self.name = name
+        self.values = values
+
+    async def set(self, value: object) -> None:
+        self.values[self.name] = value
+
+
+class _FakeConfig:
+    def __init__(self) -> None:
+        self.values: dict[str, object] = {}
+
+    def __getattr__(self, name: str) -> _FakeSetting:
+        return _FakeSetting(name, self.values)
+
+
+def test_red_audio_is_configured_for_supervisor_owned_lavalink() -> None:
+    cog = SimpleNamespace(config=_FakeConfig())
+
+    asyncio.run(configure_external_lavalink(cog))
+
+    assert cog.config.values == {
+        "use_external_lavalink": True,
+        "host": LAVALINK_HOST,
+        "rest_port": LAVALINK_PORT,
+        "ws_port": LAVALINK_PORT,
+        "password": LAVALINK_PASSWORD,
+        "secured_ws": False,
+    }
+
+
+def test_audio_initializer_is_wrapped_before_normal_startup() -> None:
+    class FakeAudio:
+        async def initialize(self) -> None:
+            self.calls.append("original")
+
+        def __init__(self) -> None:
+            self.config = _FakeConfig()
+            self.calls: list[str] = []
+
+    audio_package = SimpleNamespace(Audio=FakeAudio)
+    server_config = SimpleNamespace(DEFAULT_LAVALINK_YAML={})
+
+    install_audio_runtime_patch(audio_package, server_config)
+    instance = FakeAudio()
+    asyncio.run(instance.initialize())
+
+    assert instance.calls == ["original"]
+    assert instance.config.values["use_external_lavalink"] is True
+    assert instance.config.values["host"] == LAVALINK_HOST
+    assert server_config.DEFAULT_LAVALINK_YAML["yaml__server__address"] == LAVALINK_HOST
+
+
+def test_audio_runtime_patch_is_idempotent() -> None:
+    class FakeAudio:
+        async def initialize(self) -> None:
+            return None
+
+    audio_package = SimpleNamespace(Audio=FakeAudio)
+    server_config = SimpleNamespace(DEFAULT_LAVALINK_YAML={})
+
+    install_audio_runtime_patch(audio_package, server_config)
+    first_initialize = FakeAudio.initialize
+    install_audio_runtime_patch(audio_package, server_config)
+
+    assert FakeAudio.initialize is first_initialize
