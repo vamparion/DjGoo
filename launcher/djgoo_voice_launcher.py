@@ -8,7 +8,22 @@ import sys
 import threading
 import time
 from pathlib import Path
-from tkinter import BOTH, END, LEFT, RIGHT, X, Button, Entry, Frame, Label, StringVar, Text, Tk, messagebox
+from tkinter import (
+    BOTH,
+    END,
+    LEFT,
+    RIGHT,
+    X,
+    Button,
+    Entry,
+    Frame,
+    Label,
+    OptionMenu,
+    StringVar,
+    Text,
+    Tk,
+    messagebox,
+)
 
 
 APP_TITLE = "DjGoo Voice Remote"
@@ -37,9 +52,12 @@ class VoiceRemoteLauncher:
         self.credential_path = project_root / "data" / "voice-remote-credential.json"
         self.settings_path = project_root / "config" / "voice-remote.json"
         self.pid_path = project_root / "data" / "voice-remote.pid"
-        self.gateway = StringVar()
+        self.transport_mode = StringVar(value="direct")
+        self.endpoint = StringVar()
         self.code = StringVar()
-        self.fingerprint = StringVar()
+        self.security_value = StringVar()
+        self.room_id = StringVar()
+        self.host_public_key = StringVar()
         self.device_name = StringVar(value=os.environ.get("COMPUTERNAME", "DjGoo Voice Remote"))
         self.hotkey = StringVar(value="F12")
         self.model = StringVar(value="distil-large-v3")
@@ -56,8 +74,8 @@ class VoiceRemoteLauncher:
 
     def _build(self) -> None:
         self.root.title(APP_TITLE)
-        self.root.geometry("760x620")
-        self.root.minsize(700, 560)
+        self.root.geometry("820x720")
+        self.root.minsize(740, 650)
 
         header = Frame(self.root, padx=18, pady=14)
         header.pack(fill=X)
@@ -70,22 +88,39 @@ class VoiceRemoteLauncher:
 
         pairing = Frame(self.root, padx=18, pady=8)
         pairing.pack(fill=X)
-        Label(pairing, text="Pairing", font=("Segoe UI", 11, "bold")).grid(row=0, column=0, columnspan=3, sticky="w")
-        self._field(pairing, 1, "Gateway URL", self.gateway)
-        self._field(pairing, 2, "Pairing code", self.code)
-        self._field(pairing, 3, "TLS fingerprint", self.fingerprint)
-        self._field(pairing, 4, "Device name", self.device_name)
-        Button(pairing, text="Pair device", command=self.pair).grid(row=5, column=1, sticky="w", pady=(8, 0))
+        Label(pairing, text="Pairing", font=("Segoe UI", 11, "bold")).grid(
+            row=0, column=0, columnspan=3, sticky="w"
+        )
+        Label(pairing, text="Connection", width=22, anchor="w").grid(row=1, column=0, sticky="w", pady=3)
+        OptionMenu(pairing, self.transport_mode, "direct", "relay").grid(row=1, column=1, sticky="w", pady=3)
+        self._field(pairing, 2, "Gateway or relay URL", self.endpoint)
+        self._field(pairing, 3, "Pairing code", self.code)
+        self._field(pairing, 4, "TLS/key fingerprint", self.security_value)
+        self._field(pairing, 5, "Relay room ID", self.room_id)
+        self._field(pairing, 6, "Host encryption key", self.host_public_key)
+        self._field(pairing, 7, "Device name", self.device_name)
+        Label(
+            pairing,
+            text="Direct uses URL + code + TLS fingerprint. Relay also requires room ID and Host encryption key.",
+            font=("Segoe UI", 8),
+        ).grid(row=8, column=1, columnspan=2, sticky="w", pady=(2, 5))
+        Button(pairing, text="Pair device", command=self.pair).grid(row=9, column=1, sticky="w", pady=(5, 0))
         pairing.columnconfigure(1, weight=1)
 
         settings = Frame(self.root, padx=18, pady=8)
         settings.pack(fill=X)
-        Label(settings, text="Voice settings", font=("Segoe UI", 11, "bold")).grid(row=0, column=0, columnspan=3, sticky="w")
+        Label(settings, text="Voice settings", font=("Segoe UI", 11, "bold")).grid(
+            row=0, column=0, columnspan=3, sticky="w"
+        )
         self._field(settings, 1, "Push-to-talk key", self.hotkey)
         self._field(settings, 2, "Whisper model", self.model)
         self._field(settings, 3, "Microphone name", self.microphone)
-        Button(settings, text="Save settings", command=self.save_settings).grid(row=4, column=1, sticky="w", pady=(8, 0))
-        Button(settings, text="List microphones", command=self.list_microphones).grid(row=4, column=1, sticky="w", padx=(110, 0), pady=(8, 0))
+        Button(settings, text="Save settings", command=self.save_settings).grid(
+            row=4, column=1, sticky="w", pady=(8, 0)
+        )
+        Button(settings, text="List microphones", command=self.list_microphones).grid(
+            row=4, column=1, sticky="w", padx=(110, 0), pady=(8, 0)
+        )
         settings.columnconfigure(1, weight=1)
 
         controls = Frame(self.root, padx=18, pady=10)
@@ -96,13 +131,13 @@ class VoiceRemoteLauncher:
         Button(controls, text="Stop voice", width=14, command=self.stop).pack(side=LEFT, padx=(0, 8))
         Button(controls, text="Open logs", command=self.open_logs).pack(side=RIGHT)
 
-        self.activity = Text(self.root, height=12, wrap="word", font=("Consolas", 9))
+        self.activity = Text(self.root, height=10, wrap="word", font=("Consolas", 9))
         self.activity.pack(fill=BOTH, expand=True, padx=18, pady=(0, 18))
         self.log("Voice Remote launcher ready.")
 
     @staticmethod
     def _field(parent: Frame, row: int, label: str, variable: StringVar) -> None:
-        Label(parent, text=label, width=18, anchor="w").grid(row=row, column=0, sticky="w", pady=3)
+        Label(parent, text=label, width=22, anchor="w").grid(row=row, column=0, sticky="w", pady=3)
         Entry(parent, textvariable=variable).grid(row=row, column=1, columnspan=2, sticky="ew", pady=3)
 
     def log(self, message: str) -> None:
@@ -138,9 +173,15 @@ class VoiceRemoteLauncher:
         self.log("Voice settings saved.")
 
     def pair(self) -> None:
-        values = (self.gateway.get().strip(), self.code.get().strip(), self.fingerprint.get().strip())
-        if not all(values):
-            messagebox.showerror(APP_TITLE, "Gateway URL, pairing code, and TLS fingerprint are required.")
+        mode = self.transport_mode.get().strip() or "direct"
+        endpoint = self.endpoint.get().strip()
+        code = self.code.get().strip()
+        security = self.security_value.get().strip()
+        if not endpoint or not code or not security:
+            messagebox.showerror(APP_TITLE, "Endpoint URL, pairing code, and fingerprint are required.")
+            return
+        if mode == "relay" and (not self.room_id.get().strip() or not self.host_public_key.get().strip()):
+            messagebox.showerror(APP_TITLE, "Relay pairing also requires room ID and Host encryption key.")
             return
         self.status.set("Pairing…")
 
@@ -152,15 +193,26 @@ class VoiceRemoteLauncher:
                 "--project-root",
                 str(self.project_root),
                 "pair",
-                "--gateway",
-                values[0],
+                "--transport",
+                mode,
+                "--endpoint",
+                endpoint,
                 "--code",
-                values[1],
-                "--fingerprint",
-                values[2],
+                code,
+                "--security",
+                security,
                 "--device-name",
                 self.device_name.get().strip() or "DjGoo Voice Remote",
             ]
+            if mode == "relay":
+                command.extend(
+                    [
+                        "--room-id",
+                        self.room_id.get().strip(),
+                        "--host-public-key",
+                        self.host_public_key.get().strip(),
+                    ]
+                )
             result = subprocess.run(command, cwd=self.project_root, capture_output=True, text=True)
             self.root.after(0, lambda: self._pair_finished(result))
 
@@ -266,7 +318,12 @@ class VoiceRemoteLauncher:
         elif self._running_pid() is not None:
             self.status.set("Paired — listening for F12")
         else:
-            self.status.set("Paired — stopped")
+            try:
+                credential = json.loads(self.credential_path.read_text(encoding="utf-8"))
+                mode = str(credential.get("transport") or "direct")
+            except (OSError, json.JSONDecodeError):
+                mode = "unknown"
+            self.status.set(f"Paired through {mode} — stopped")
 
     def _poll(self) -> None:
         self.refresh_status()
