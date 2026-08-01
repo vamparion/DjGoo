@@ -124,6 +124,7 @@ jobs:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build | Out-Null
           $url = "https://www.python.org/ftp/python/$env:PYTHON_VERSION/python-$env:PYTHON_VERSION-embed-amd64.zip"
           Invoke-WebRequest -UseBasicParsing $url -OutFile build/python-embed.zip
           $actual = (Get-FileHash build/python-embed.zip -Algorithm MD5).Hash.ToLowerInvariant()
