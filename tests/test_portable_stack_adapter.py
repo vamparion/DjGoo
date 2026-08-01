@@ -16,16 +16,80 @@ class RecordingLogger:
         self.events.append((name, fields))
 
 
+class FakeConnection:
+    def __init__(self, port: int, status: str = "LISTEN") -> None:
+        self.laddr = ("::1", port)
+        self.status = status
+
+
+class FakeProcess:
+    def __init__(
+        self,
+        pid: int,
+        command: list[str],
+        *,
+        created: float = 100.0,
+        listening_port: int | None = None,
+    ) -> None:
+        self.pid = pid
+        self._command = command
+        self._created = created
+        self._listening_port = listening_port
+        self.terminated = False
+        self.killed = False
+
+    def cmdline(self) -> list[str]:
+        return list(self._command)
+
+    def create_time(self) -> float:
+        return self._created
+
+    def net_connections(self, *, kind: str) -> list[FakeConnection]:
+        assert kind == "tcp"
+        if self._listening_port is None:
+            return []
+        return [FakeConnection(self._listening_port)]
+
+    def children(self, *, recursive: bool) -> list[FakeProcess]:
+        assert recursive is True
+        return []
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+
+    def is_running(self) -> bool:
+        return not self.terminated and not self.killed
+
+
 def make_fake_core() -> SimpleNamespace:
     logger = RecordingLogger()
-    return SimpleNamespace(
-        Logger=lambda: logger,
-        start_component=lambda spec, *, resume_playback=False: True,
-        run_supervisor=lambda: 0,
-        control_request=lambda action, timeout=0.35: {"ok": True},
-        WINDOWS_DETACHED_FLAGS=0,
-        LOG=logger,
+    records: dict[str, dict[str, object]] = {}
+    core = SimpleNamespace()
+    core.Logger = lambda: logger
+    core.LOG = logger
+    core.WINDOWS_DETACHED_FLAGS = 0
+    core.control_request = lambda action, timeout=0.35: {"ok": True}
+    core.component_running = lambda spec: False
+    core.terminate_component = lambda spec, reason: None
+    core.component_environment = lambda resume_playback=False: {"BASE": "1"}
+    core.start_component = lambda spec, *, resume_playback=False: True
+    core.run_supervisor = lambda: 0
+    core.component_record = lambda name: records.get(name)
+    core.read_json = lambda path: None
+    core.health_path = lambda name: Path(f"{name}.health.json")
+    core.pid_path = lambda name: Path(f"{name}.pid.json")
+    core.write_component_record = lambda spec, process: records.__setitem__(
+        spec.name,
+        {
+            "pid": int(process.pid),
+            "create_time": float(process.create_time()),
+        },
     )
+    core._records = records
+    return core
 
 
 def touch(path: Path) -> Path:
@@ -89,22 +153,90 @@ def test_component_launch_errors_are_logged_instead_of_crashing(tmp_path) -> Non
     touch(tmp_path / "runtime" / "python" / "python.exe")
     touch(tmp_path / "runtime" / "python" / "pythonw.exe")
     touch(tmp_path / "runtime" / "java" / "bin" / "java.exe")
-    logger = RecordingLogger()
+    core = make_fake_core()
 
     def failing_start(spec, *, resume_playback=False):
         raise OSError(87, "The parameter is incorrect")
 
-    core = SimpleNamespace(
-        Logger=lambda: logger,
-        start_component=failing_start,
-        run_supervisor=lambda: 0,
-        control_request=lambda action, timeout=0.35: {"ok": True},
-        WINDOWS_DETACHED_FLAGS=0,
-        LOG=logger,
-    )
+    core.start_component = failing_start
     configured = adapter.configure_core(core, tmp_path)
 
     spec = SimpleNamespace(name="lavalink", command=["java.exe"])
     assert configured.start_component(spec) is False
-    assert logger.events[-1][0] == "component.start_failed"
-    assert "parameter is incorrect" in str(logger.events[-1][1]["error"]).lower()
+    assert configured.LOG.events[-1][0] == "component.start_failed"
+    assert "parameter is incorrect" in str(configured.LOG.events[-1][1]["error"]).lower()
+
+
+def test_child_process_receives_explicit_component_identity(tmp_path) -> None:
+    touch(tmp_path / "runtime" / "python" / "python.exe")
+    touch(tmp_path / "runtime" / "python" / "pythonw.exe")
+    touch(tmp_path / "runtime" / "java" / "bin" / "java.exe")
+    core = make_fake_core()
+    observed: dict[str, str] = {}
+
+    def capture_environment(spec, *, resume_playback=False):
+        observed.update(core.component_environment(resume_playback=resume_playback))
+        return True
+
+    core.start_component = capture_environment
+    configured = adapter.configure_core(core, tmp_path)
+
+    assert configured.start_component(SimpleNamespace(name="redbot", command=[])) is True
+    assert observed["DJGOO_COMPONENT_NAME"] == "redbot"
+
+
+def test_existing_package_lavalink_listener_is_adopted(tmp_path, monkeypatch) -> None:
+    root = tmp_path.resolve()
+    listener = FakeProcess(
+        4321,
+        ["java.exe", "-jar", str(root / "data" / "discordbot" / "cogs" / "Audio" / "Lavalink.jar")],
+        listening_port=adapter.LAVALINK_PORT,
+    )
+    monkeypatch.setattr(adapter.psutil, "process_iter", lambda: [listener])
+
+    core = adapter.configure_core(make_fake_core(), root)
+    spec = SimpleNamespace(
+        name="lavalink",
+        command_markers=("lavalink.jar", str(root)),
+    )
+
+    assert core.component_running(spec) is True
+    assert core._records["lavalink"]["pid"] == listener.pid
+    assert any(name == "component.adopted" for name, _ in core.LOG.events)
+
+
+def test_lavalink_readiness_is_bound_to_recorded_listener(tmp_path, monkeypatch) -> None:
+    root = tmp_path.resolve()
+    listener = FakeProcess(
+        6789,
+        ["java.exe", "-jar", str(root / "data" / "discordbot" / "cogs" / "Audio" / "Lavalink.jar")],
+        created=55.0,
+        listening_port=adapter.LAVALINK_PORT,
+    )
+    monkeypatch.setattr(adapter.psutil, "Process", lambda pid: listener)
+    core = make_fake_core()
+    core.PROJECT_ROOT = root
+    core._records["lavalink"] = {"pid": listener.pid, "create_time": listener.create_time()}
+
+    assert adapter._portable_lavalink_ready(core) is True
+    listener._listening_port = None
+    assert adapter._portable_lavalink_ready(core) is False
+
+
+def test_initial_redbot_ready_event_gets_bounded_startup_grace(monkeypatch) -> None:
+    core = make_fake_core()
+    core._records["redbot"] = {"pid": 101}
+    heartbeat = {
+        "pid": 101,
+        "timestamp": 970.0,
+        "ready": True,
+        "event": "redbot.ready",
+        "audio_loaded": True,
+        "discord_ready": True,
+    }
+    core.read_json = lambda path: heartbeat
+    monkeypatch.setattr(adapter.time, "time", lambda: 1000.0)
+
+    assert adapter._portable_redbot_ready(core) is True
+    heartbeat["event"] = "redbot.heartbeat"
+    assert adapter._portable_redbot_ready(core) is False

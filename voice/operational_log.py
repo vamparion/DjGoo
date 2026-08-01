@@ -33,11 +33,31 @@ def _safe_value(value: Any) -> Any:
     return text
 
 
+def _configured_component() -> str:
+    value = os.environ.get("DJGOO_COMPONENT_NAME", "").strip().lower()
+    return value if value in {"voice", "redbot"} else ""
+
+
 def _event_component(event: str) -> str:
-    if event.startswith("voice."):
-        return "voice"
+    """Return the process that owns a heartbeat-producing event.
+
+    Redbot emits many events whose names begin with ``voice.`` for its gateway,
+    queue, and playback bridge. Those events must never overwrite the separate
+    microphone-listener heartbeat. Portable child processes identify their owner
+    explicitly through ``DJGOO_COMPONENT_NAME``.
+    """
+
+    configured = _configured_component()
+    if configured == "redbot":
+        return "redbot" if event.startswith("redbot.") else ""
+    if configured == "voice":
+        return "voice" if event.startswith("voice.") else ""
+
+    # Development and direct-test fallback when no supervisor environment exists.
     if event.startswith("redbot."):
         return "redbot"
+    if event.startswith("voice.listener.") or event.startswith("voice.hotkey."):
+        return "voice"
     return ""
 
 
