@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import secrets
 import time
 from typing import Any
@@ -26,7 +27,10 @@ class RelayHostClient:
         processor: AuthenticatedCommandProcessor,
     ) -> None:
         normalized = relay_url.strip().rstrip("/") + "/"
-        if not normalized.lower().startswith("wss://"):
+        allow_insecure = os.environ.get("DJGOO_RELAY_ALLOW_INSECURE", "").strip() == "1"
+        if not normalized.lower().startswith("wss://") and not (
+            allow_insecure and normalized.lower().startswith("ws://")
+        ):
             raise ValueError("Public DjGoo relay URLs must use wss://")
         self.relay_url = normalized
         self.identity = identity
