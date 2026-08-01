@@ -4,12 +4,20 @@ import asyncio
 import runpy
 import socket
 import sys
+import traceback
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from tools.portable_environment import apply_portable_environment
+
+
 INSTANCE_NAME = "discordbot"
 STARTUP_COGS = ("audio", "djgoowelcome")
+CONSOLE_FLAG = "--djgoo-console"
 
 
 def _ipv6_socketpair(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0):
@@ -52,11 +60,50 @@ def redbot_argv(project_root: Path = PROJECT_ROOT) -> list[str]:
     ]
 
 
-def main() -> None:
+def _exit_code(value: object) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, int):
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 1
+
+
+def _pause_after_error() -> None:
+    print("\nDjGoo could not keep Redbot running.")
+    print("The error above has been left visible so it can be diagnosed.")
+    try:
+        input("\nPress Enter to close this window...")
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+
+def run_redbot(project_root: Path = PROJECT_ROOT) -> None:
+    apply_portable_environment(project_root)
     apply_runtime_patches()
-    sys.argv = redbot_argv(PROJECT_ROOT)
+    sys.argv = redbot_argv(project_root)
     runpy.run_module("redbot", run_name="__main__")
 
 
+def main(argv: list[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    console_mode = CONSOLE_FLAG in arguments
+    try:
+        run_redbot(PROJECT_ROOT)
+    except SystemExit as exc:
+        code = _exit_code(exc.code)
+        if console_mode and code != 0:
+            _pause_after_error()
+        return code
+    except BaseException:
+        traceback.print_exc()
+        if console_mode:
+            _pause_after_error()
+        return 1
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
