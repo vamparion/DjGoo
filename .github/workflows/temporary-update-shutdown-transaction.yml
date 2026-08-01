@@ -1,5 +1,6 @@
 name: Temporary updater shutdown transaction patch
 
+# Second commit triggers the registered workflow.
 on:
   push:
     branches:
