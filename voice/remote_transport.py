@@ -11,6 +11,8 @@ from urllib.parse import urljoin
 
 import aiohttp
 
+from voice.secure_store import load_protected_json, save_protected_json
+
 
 @dataclass(frozen=True)
 class RemoteCredential:
@@ -20,6 +22,7 @@ class RemoteCredential:
     device_token: str
     discord_user_id: str
     guild_id: str
+    transport: str = "direct"
 
     def redacted(self) -> dict[str, str]:
         payload = asdict(self)
@@ -43,9 +46,13 @@ def normalize_gateway_url(value: str) -> str:
 
 class RemoteGatewayTransport:
     def __init__(self, credential: RemoteCredential, timeout_seconds: float = 12.0) -> None:
+        if credential.transport not in {"", "direct"}:
+            raise ValueError("Direct transport received a non-direct credential")
         self.credential = credential
         self.timeout_seconds = float(timeout_seconds)
-        self._fingerprint = aiohttp.Fingerprint(bytes.fromhex(normalize_fingerprint(credential.tls_fingerprint_sha256)))
+        self._fingerprint = aiohttp.Fingerprint(
+            bytes.fromhex(normalize_fingerprint(credential.tls_fingerprint_sha256))
+        )
 
     @classmethod
     async def pair(
@@ -73,7 +80,9 @@ class RemoteGatewayTransport:
                 if response.status not in {200, 201}:
                     raise RuntimeError(f"Pairing failed ({response.status}): {text[:300]}")
                 data = json.loads(text)
-        returned_fingerprint = normalize_fingerprint(str(data.get("tls_fingerprint_sha256") or fingerprint))
+        returned_fingerprint = normalize_fingerprint(
+            str(data.get("tls_fingerprint_sha256") or fingerprint)
+        )
         if returned_fingerprint != fingerprint:
             raise RuntimeError("Gateway fingerprint changed during pairing")
         return RemoteCredential(
@@ -83,6 +92,7 @@ class RemoteGatewayTransport:
             device_token=str(data["device_token"]),
             discord_user_id=str(data["discord_user_id"]),
             guild_id=str(data["guild_id"]),
+            transport="direct",
         )
 
     async def send_async(self, item: dict[str, Any]) -> dict[str, Any]:
@@ -104,25 +114,36 @@ class RemoteGatewayTransport:
                 data = json.loads(text)
                 return data if isinstance(data, dict) else {"accepted": False}
 
+    async def status_async(self) -> dict[str, Any]:
+        headers = {"Authorization": f"Bearer {self.credential.device_token}"}
+        timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(
+                urljoin(normalize_gateway_url(self.credential.gateway_url), "v1/device"),
+                headers=headers,
+                ssl=self._fingerprint,
+            ) as response:
+                text = await response.text()
+                if response.status != 200:
+                    raise RuntimeError(f"Connection check failed ({response.status}): {text[:300]}")
+                data = json.loads(text)
+                if not isinstance(data, dict):
+                    raise RuntimeError("Connection check returned invalid data")
+                return data
+
     def send(self, item: dict[str, Any]) -> dict[str, Any]:
         return asyncio.run(self.send_async(item))
 
+    def status(self) -> dict[str, Any]:
+        return asyncio.run(self.status_async())
+
 
 def save_credential(path: Path, credential: RemoteCredential) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(".tmp")
-    temp.write_text(json.dumps(asdict(credential), indent=2) + "\n", encoding="utf-8")
-    temp.replace(path)
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+    save_protected_json(path, asdict(credential))
 
 
 def load_credential(path: Path) -> RemoteCredential:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise ValueError("Remote credential file is invalid")
+    data = load_protected_json(path)
     return RemoteCredential(
         gateway_url=normalize_gateway_url(str(data["gateway_url"])).rstrip("/"),
         tls_fingerprint_sha256=normalize_fingerprint(str(data["tls_fingerprint_sha256"])),
@@ -130,4 +151,5 @@ def load_credential(path: Path) -> RemoteCredential:
         device_token=str(data["device_token"]),
         discord_user_id=str(data["discord_user_id"]),
         guild_id=str(data["guild_id"]),
+        transport=str(data.get("transport") or "direct"),
     )
