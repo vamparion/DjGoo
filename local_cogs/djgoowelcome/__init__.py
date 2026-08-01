@@ -3,6 +3,7 @@ from pathlib import Path
 from redbot.core.bot import Red
 
 from . import djgoowelcome as cog_module
+from .guide_cog import DjGooGuide
 from .relay_cog import DjGooRelay
 from .remote_aware_bridge import RemoteAwareDjGooAudioBridge
 
@@ -16,4 +17,5 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 async def setup(bot: Red) -> None:
     djgoo = DjGooWelcome(bot)
     await bot.add_cog(djgoo)
+    await bot.add_cog(DjGooGuide())
     await bot.add_cog(DjGooRelay(bot, djgoo, PROJECT_ROOT))
