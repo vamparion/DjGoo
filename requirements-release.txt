@@ -1,2 +1,1 @@
 PyInstaller==6.21.0
-cyclonedx-bom>=6,<7
