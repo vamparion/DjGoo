@@ -5,6 +5,34 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
+_PYINSTALLER_LEGACY_KEYS = {"_MEIPASS2"}
+
+
+def clean_subprocess_environment(
+    base: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Return an environment safe for a new standalone DjGoo process.
+
+    A PyInstaller one-file launcher exports private ``_PYI_*`` variables that
+    tell its child process to reuse the launcher's temporary ``_MEI...``
+    extraction directory. Those variables must not cross into DjGoo's update
+    worker or the replacement launcher: the old directory is removed when the
+    original launcher exits, which otherwise makes the replacement fail to find
+    ``python311.dll``.
+
+    ``PYINSTALLER_RESET_ENVIRONMENT`` is also set for the next standalone
+    executable as a defense in depth supported by current PyInstaller releases.
+    Normal Python, Java, and Redbot child processes simply ignore it.
+    """
+
+    env = dict(os.environ if base is None else base)
+    for key in list(env):
+        if key.startswith("_PYI_") or key in _PYINSTALLER_LEGACY_KEYS:
+            env.pop(key, None)
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
 def portable_local_appdata(project_root: Path) -> Path:
     """Return the LocalAppData root owned by the portable package."""
 
@@ -35,7 +63,7 @@ def portable_environment(
     local_appdata.mkdir(parents=True, exist_ok=True)
     config_dir.mkdir(parents=True, exist_ok=True)
 
-    env = dict(os.environ if base is None else base)
+    env = clean_subprocess_environment(base)
     env["DJGOO_HOME"] = str(root)
     env["LOCALAPPDATA"] = str(local_appdata)
     env["REDBOT_CONFIG_DIR"] = str(config_dir)
@@ -46,6 +74,7 @@ def apply_portable_environment(project_root: Path) -> dict[str, str]:
     """Apply DjGoo's portable environment to the current process."""
 
     env = portable_environment(project_root)
+    os.environ.clear()
     os.environ.update(env)
     return env
 
