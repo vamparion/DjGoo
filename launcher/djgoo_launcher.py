@@ -35,6 +35,7 @@ if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
 from tools.portable_environment import portable_environment
+from tools.supervisor_lifecycle import restart_stale_supervisor
 from tools.update_auth import clear_token, load_token, save_token
 from tools.update_client import (
     AuthenticationRequired,
@@ -177,9 +178,34 @@ class DjGooLauncher:
         self._ui_queue: queue.SimpleQueue[Callable[[], None]] = queue.SimpleQueue()
         self._build()
         self._report_update_result()
+        self._replace_stale_supervisor()
         self.refresh_status()
         self.root.after(100, self._drain_ui_queue)
         self.root.after(2500, self._poll)
+
+    def _replace_stale_supervisor(self) -> None:
+        version = read_installed_version(self.layout.root).text
+        try:
+            replaced = restart_stale_supervisor(
+                self.layout.root,
+                installed_version=version,
+                runtime_python=self.layout.runtime_python,
+                runtime_pythonw=self.layout.runtime_pythonw,
+                stack_script=self.layout.stack_script,
+                environment=self._environment(),
+                log=self.log,
+            )
+        except BaseException as exc:
+            self.log(f"Could not replace the stale supervisor: {exc}")
+            messagebox.showerror(
+                APP_NAME,
+                "DjGoo updated its files but could not restart the old background supervisor.\n\n"
+                f"{exc}",
+            )
+            return
+        if replaced:
+            self._requested_desired = None
+            self._requested_at = 0.0
 
     def _build(self) -> None:
         version = read_installed_version(self.layout.root).text

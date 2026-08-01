@@ -129,6 +129,18 @@ class SingleInstance:
         self.handle = None
 
 
+def installed_version_text() -> str:
+    try:
+        payload = json.loads(
+            (PROJECT_ROOT / "data" / "installed-version.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        return "development"
+    if not isinstance(payload, dict):
+        return "development"
+    return str(payload.get("version") or "development").strip() or "development"
+
+
 class SupervisorState:
     def __init__(self) -> None:
         self.lock = threading.RLock()
@@ -137,6 +149,7 @@ class SupervisorState:
         self.shutdown_requested = False
         self.last_error = ""
         self.started_at = time.time()
+        self.version = installed_version_text()
         self.component_status: dict[str, dict[str, Any]] = {}
 
     def snapshot(self) -> dict[str, Any]:
@@ -148,6 +161,7 @@ class SupervisorState:
                 "shutdown_requested": self.shutdown_requested,
                 "last_error": self.last_error,
                 "started_at": self.started_at,
+                "supervisor_version": self.version,
                 "components": self.component_status,
             }
 
@@ -575,6 +589,7 @@ def write_supervisor_pid() -> None:
             "create_time": create_time,
             "port": CONTROL_PORT,
             "project_root": str(PROJECT_ROOT),
+            "version": STATE.version,
         },
     )
 
