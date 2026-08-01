@@ -23,6 +23,10 @@ def test_update_bundle_excludes_large_runtimes_and_user_state(tmp_path: Path) ->
     (package / "DjGoo.exe").write_bytes(b"launcher")
     (package / "tools" / "worker.py").write_text("print('updated')", encoding="utf-8")
     (package / "data" / "history.json").write_text("private history", encoding="utf-8")
+    (package / "data" / "installed-version.json").write_text(
+        json.dumps({"version": "0.3.0-alpha.2"}),
+        encoding="utf-8",
+    )
     (package / "logs" / "bot.log").write_text("private log", encoding="utf-8")
     (package / "config" / "secrets.json").write_text("secret", encoding="utf-8")
     (package / "config" / "secrets.example.json").write_text("example", encoding="utf-8")
@@ -39,10 +43,12 @@ def test_update_bundle_excludes_large_runtimes_and_user_state(tmp_path: Path) ->
         assert "DjGoo.exe" in names
         assert "tools/worker.py" in names
         assert "config/secrets.example.json" in names
+        assert "data/installed-version.json" in names
         assert "runtime/python/Lib/site-packages/pip/__init__.py" in names
         assert "runtime/python/Lib/site-packages/pip-26.0.dist-info/METADATA" in names
         assert "config/secrets.json" not in names
-        assert not any(name.startswith(("data/", "logs/", "runtime/java/")) for name in names)
+        assert "data/history.json" not in names
+        assert not any(name.startswith(("logs/", "runtime/java/")) for name in names)
 
     disk_manifest = json.loads(output_manifest.read_text(encoding="utf-8"))
     assert disk_manifest == manifest
@@ -51,7 +57,8 @@ def test_update_bundle_excludes_large_runtimes_and_user_state(tmp_path: Path) ->
     assert manifest["bundle_sha256"] == hashlib.sha256(output_zip.read_bytes()).hexdigest()
     listed = {entry["path"]: entry for entry in manifest["files"]}
     assert set(listed) == names
-    for name in names:
-        data = zipfile.ZipFile(output_zip).read(name)
-        assert listed[name]["size"] == len(data)
-        assert listed[name]["sha256"] == hashlib.sha256(data).hexdigest()
+    with zipfile.ZipFile(output_zip) as archive:
+        for name in names:
+            data = archive.read(name)
+            assert listed[name]["size"] == len(data)
+            assert listed[name]["sha256"] == hashlib.sha256(data).hexdigest()
