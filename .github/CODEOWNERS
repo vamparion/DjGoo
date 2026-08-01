@@ -1,0 +1,24 @@
+# Default project ownership
+* @vamparion
+
+# Security, identity, and network transports
+/voice/pairing_store.py @vamparion
+/voice/command_acceptance.py @vamparion
+/voice/command_gateway.py @vamparion
+/voice/remote_transport.py @vamparion
+/voice/relay_*.py @vamparion
+/relay/ @vamparion
+/SECURITY.md @vamparion
+
+# Playback authority and Discord integration
+/local_cogs/ @vamparion
+/tools/djgoo_stack.py @vamparion
+/tools/djgoo_portable_stack.py @vamparion
+
+# Releases, dependencies, and licensing
+/.github/workflows/ @vamparion
+/.github/dependabot.yml @vamparion
+/requirements*.txt @vamparion
+/pyproject.toml @vamparion
+/LICENSE @vamparion
+/THIRD_PARTY_NOTICES.md @vamparion
