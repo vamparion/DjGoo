@@ -92,7 +92,8 @@ jobs:
       - name: Build Host package
         shell: pwsh
         run: |
-          $version = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME.TrimStart("v") } else { "0.3.0-dev+$($env:GITHUB_SHA.Substring(0, 8))" }
+          $version = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME.TrimStart("v") } else { "0.4.0-dev+$($env:GITHUB_SHA.Substring(0, 8))" }
+          "DJGOO_BUILD_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           python tools/build_portable.py `
             --output "build/$env:PACKAGE_NAME" `
             --runtime-python build/runtime-python `
@@ -104,6 +105,51 @@ jobs:
             --output "build/$env:PACKAGE_NAME/sbom.cdx.json" `
             --version $version `
             --name "DjGoo Host"
+
+      - name: Require Authenticode certificate for stable tags
+        if: github.ref_type == 'tag' && !contains(github.ref_name, '-')
+        shell: pwsh
+        env:
+          SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+          SIGNING_TIMESTAMP_URL: ${{ vars.WINDOWS_SIGNING_TIMESTAMP_URL }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_BASE64) -or
+              [string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_PASSWORD) -or
+              [string]::IsNullOrWhiteSpace($env:SIGNING_TIMESTAMP_URL)) {
+            throw "Stable release tags require Authenticode certificate, password, and timestamp URL configuration."
+          }
+
+      - name: Authenticode-sign Host executable when configured
+        shell: pwsh
+        env:
+          SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+          SIGNING_TIMESTAMP_URL: ${{ vars.WINDOWS_SIGNING_TIMESTAMP_URL }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_BASE64)) {
+            Write-Host "::notice::Host executable is unsigned. Configure signing secrets before a stable release."
+            exit 0
+          }
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_PASSWORD) -or
+              [string]::IsNullOrWhiteSpace($env:SIGNING_TIMESTAMP_URL)) {
+            throw "Signing certificate is configured without its password or timestamp URL."
+          }
+          $certificate = Join-Path $env:RUNNER_TEMP "djgoo-signing.pfx"
+          [System.IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:SIGNING_CERTIFICATE_BASE64))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter signtool.exe -Recurse |
+            Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if ($null -eq $signtool) { throw "Windows SignTool was not found." }
+          $executable = Resolve-Path "build/$env:PACKAGE_NAME/DjGoo.exe"
+          & $signtool.FullName sign /f $certificate /p $env:SIGNING_CERTIFICATE_PASSWORD /fd SHA256 /tr $env:SIGNING_TIMESTAMP_URL /td SHA256 $executable
+          if ($LASTEXITCODE -ne 0) { throw "Host Authenticode signing failed." }
+          & $signtool.FullName verify /pa /all /v $executable
+          if ($LASTEXITCODE -ne 0) { throw "Host Authenticode verification failed." }
+          Remove-Item $certificate -Force
+          Remove-Item "build/$env:PACKAGE_NAME/manifest.json" -Force
+          python -c "from pathlib import Path; from tools.build_portable import write_manifest; write_manifest(Path(r'build/$env:PACKAGE_NAME'), '$env:DJGOO_BUILD_VERSION')"
 
       - name: Smoke-test Host package
         shell: pwsh
@@ -161,7 +207,7 @@ jobs:
         shell: pwsh
         run: |
           python -m compileall -q launcher voice tools tests
-          python -m pytest -q tests/test_pairing_store.py tests/test_voice_remote_security.py tests/test_voice_command_parser.py tests/test_voice_audio_processing.py
+          python -m pytest -q tests/test_pairing_store.py tests/test_voice_remote_security.py tests/test_voice_command_parser.py tests/test_voice_audio_processing.py tests/test_relay_crypto.py
 
       - name: Prepare portable Python runtime
         shell: pwsh
@@ -185,7 +231,8 @@ jobs:
       - name: Build Voice Remote package
         shell: pwsh
         run: |
-          $version = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME.TrimStart("v") } else { "0.3.0-dev+$($env:GITHUB_SHA.Substring(0, 8))" }
+          $version = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME.TrimStart("v") } else { "0.4.0-dev+$($env:GITHUB_SHA.Substring(0, 8))" }
+          "DJGOO_BUILD_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           python tools/build_voice_remote.py `
             --output "build/$env:PACKAGE_NAME" `
             --runtime-python build/voice-runtime-python `
@@ -196,11 +243,56 @@ jobs:
             --version $version `
             --name "DjGoo Voice Remote"
 
+      - name: Require Authenticode certificate for stable tags
+        if: github.ref_type == 'tag' && !contains(github.ref_name, '-')
+        shell: pwsh
+        env:
+          SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+          SIGNING_TIMESTAMP_URL: ${{ vars.WINDOWS_SIGNING_TIMESTAMP_URL }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_BASE64) -or
+              [string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_PASSWORD) -or
+              [string]::IsNullOrWhiteSpace($env:SIGNING_TIMESTAMP_URL)) {
+            throw "Stable release tags require Authenticode certificate, password, and timestamp URL configuration."
+          }
+
+      - name: Authenticode-sign Voice Remote executable when configured
+        shell: pwsh
+        env:
+          SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+          SIGNING_TIMESTAMP_URL: ${{ vars.WINDOWS_SIGNING_TIMESTAMP_URL }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_BASE64)) {
+            Write-Host "::notice::Voice Remote executable is unsigned. Configure signing secrets before a stable release."
+            exit 0
+          }
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_PASSWORD) -or
+              [string]::IsNullOrWhiteSpace($env:SIGNING_TIMESTAMP_URL)) {
+            throw "Signing certificate is configured without its password or timestamp URL."
+          }
+          $certificate = Join-Path $env:RUNNER_TEMP "djgoo-signing.pfx"
+          [System.IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:SIGNING_CERTIFICATE_BASE64))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter signtool.exe -Recurse |
+            Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if ($null -eq $signtool) { throw "Windows SignTool was not found." }
+          $executable = Resolve-Path "build/$env:PACKAGE_NAME/DjGoo Voice.exe"
+          & $signtool.FullName sign /f $certificate /p $env:SIGNING_CERTIFICATE_PASSWORD /fd SHA256 /tr $env:SIGNING_TIMESTAMP_URL /td SHA256 $executable
+          if ($LASTEXITCODE -ne 0) { throw "Voice Remote Authenticode signing failed." }
+          & $signtool.FullName verify /pa /all /v $executable
+          if ($LASTEXITCODE -ne 0) { throw "Voice Remote Authenticode verification failed." }
+          Remove-Item $certificate -Force
+          Remove-Item "build/$env:PACKAGE_NAME/manifest.json" -Force
+          python -c "from pathlib import Path; from tools.build_portable import write_manifest; write_manifest(Path(r'build/$env:PACKAGE_NAME'), '$env:DJGOO_BUILD_VERSION')"
+
       - name: Smoke-test Voice Remote package
         shell: pwsh
         run: |
           $root = Resolve-Path "build/$env:PACKAGE_NAME"
-          & "$root/runtime/python/python.exe" -c "import voice.djgoo_voice_remote, voice.remote_transport; print('Voice Remote imports OK')"
+          & "$root/runtime/python/python.exe" -c "import voice.djgoo_voice_remote, voice.remote_transport, voice.relay_transport; print('Voice Remote imports OK')"
           if (!(Test-Path "$root/DjGoo Voice.exe")) { throw "DjGoo Voice.exe is missing" }
           if (Get-ChildItem $root -Recurse -Include *.ps1,*.vbs) { throw "Voice Remote package contains legacy scripts" }
 
@@ -227,6 +319,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Download all release assets
         uses: actions/download-artifact@v4
@@ -234,6 +328,12 @@ jobs:
           pattern: DjGoo-*-win-x64
           path: release
           merge-multiple: true
+
+      - name: Generate public build provenance attestations
+        if: github.event.repository.visibility == 'public'
+        uses: actions/attest@v4
+        with:
+          subject-path: "release/*.zip"
 
       - name: Publish GitHub Release
         env:
