@@ -1,0 +1,68 @@
+name: Temporary alpha.8 status
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/temporary-alpha8-status.yml
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for alpha.8 publisher and report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id=""
+          run_status="not-found"
+          run_conclusion=""
+          run_url=""
+
+          for attempt in $(seq 1 60); do
+            row="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?branch=release%2Fv0.3.0-alpha.8&per_page=20" \
+              --jq '[.workflow_runs[] | select(.name == "Publish Alpha Release")] | sort_by(.created_at) | reverse | .[0] | if . == null then "" else [.id, .status, (.conclusion // ""), .html_url] | @tsv end')"
+            if [[ -n "${row}" ]]; then
+              IFS=$'\t' read -r run_id run_status run_conclusion run_url <<< "${row}"
+              if [[ "${run_status}" == "completed" ]]; then
+                break
+              fi
+            fi
+            sleep 15
+          done
+
+          release_status="missing"
+          release_url=""
+          assets=""
+          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v0.3.0-alpha.8" > /tmp/release.json 2>/dev/null; then
+            release_status="present"
+            release_url="$(jq -r '.html_url' /tmp/release.json)"
+            assets="$(jq -r '.assets[] | "- \(.name) — \(.size) bytes"' /tmp/release.json)"
+          fi
+
+          cat > /tmp/body.md <<EOF
+          Temporary verification for v0.3.0-alpha.8.
+
+          Publisher run ID: ${run_id:-not found}
+          Publisher status: ${run_status}
+          Publisher conclusion: ${run_conclusion:-pending}
+          Publisher URL: ${run_url:-not found}
+
+          Release status: ${release_status}
+          Release URL: ${release_url:-not found}
+
+          Assets:
+          ${assets:-none}
+          EOF
+
+          gh issue create \
+            --title "Temporary alpha.8 release status" \
+            --body-file /tmp/body.md
