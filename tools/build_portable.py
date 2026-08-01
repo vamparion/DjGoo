@@ -129,7 +129,7 @@ def build_mini_player(output: Path) -> Path:
 def install_portable_supervisor(output: Path) -> None:
     tools = output / "tools"
     source_core = tools / "djgoo_stack.py"
-    adapter = tools / "djgoo_portable_stack.py"
+    adapter = tools / "djgoo_portable_stack_entry.py"
     portable_core = tools / "djgoo_stack_core.py"
     if not source_core.exists() or not adapter.exists():
         raise FileNotFoundError("Portable supervisor sources are incomplete")
