@@ -17,11 +17,14 @@ DjGoo follows Semantic Versioning. Dates use ISO 8601.
 - Requester-aware Red Audio contexts for paired remote users.
 - GitHub Actions release artifacts, SHA-256 checksums, per-file manifests, and CycloneDX SBOMs.
 - Public architecture, multi-user voice, contribution, and security documentation.
+- Automated alpha prerelease publishing from versioned `release/v...` branches.
+- CI enforcement preventing PowerShell and VBScript files from being committed to the repository.
 
 ### Changed
 
 - Tagged releases build Host and Voice Remote in parallel and publish both together.
-- Public release packages no longer expose PowerShell or VBS entrypoints.
+- Launch, setup, supervision, and maintenance entrypoints are implemented as tested Python modules.
+- Removed the obsolete PowerShell and VBScript compatibility layer from the source repository.
 - Runtime-specific paths are handled by an explicit portable supervisor adapter.
 - Voice Remote clients perform speech recognition locally and send structured commands rather than microphone audio.
 
