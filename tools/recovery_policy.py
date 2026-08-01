@@ -31,7 +31,9 @@ class ComponentRecovery:
 
 class RecoveryPolicy:
     def __init__(self) -> None:
-        self.components: dict[str, ComponentRecovery] = defaultdict(ComponentRecovery)
+        self.components: dict[str, ComponentRecovery] = defaultdict(
+            ComponentRecovery
+        )
 
     def healthy(self, name: str, *, now: float | None = None) -> None:
         state = self.components[name]
@@ -40,7 +42,6 @@ class RecoveryPolicy:
         state.last_failure_at = 0.0
         state.next_retry_at = 0.0
         state.reason = ""
-        # A component that remains healthy long enough earns a clean backoff slate.
         current = time.monotonic() if now is None else float(now)
         self._trim_restarts(state, current)
         if not state.restart_times:
@@ -53,7 +54,10 @@ class RecoveryPolicy:
         state.first_failure_at = 0.0
         state.last_failure_at = 0.0
         state.next_retry_at = 0.0
+        state.circuit_open_until = 0.0
+        state.consecutive_restarts = 0
         state.reason = ""
+        state.restart_times.clear()
 
     def observe_failure(
         self,
@@ -72,14 +76,27 @@ class RecoveryPolicy:
         self._trim_restarts(state, current)
         return state
 
-    def grace_expired(self, name: str, *, now: float | None = None) -> bool:
+    def grace_expired(
+        self,
+        name: str,
+        *,
+        now: float | None = None,
+    ) -> bool:
         current = time.monotonic() if now is None else float(now)
         state = self.components[name]
         if state.first_failure_at <= 0:
             return False
-        return current - state.first_failure_at >= GRACE_SECONDS.get(name, 30.0)
+        return current - state.first_failure_at >= GRACE_SECONDS.get(
+            name,
+            30.0,
+        )
 
-    def can_restart(self, name: str, *, now: float | None = None) -> bool:
+    def can_restart(
+        self,
+        name: str,
+        *,
+        now: float | None = None,
+    ) -> bool:
         current = time.monotonic() if now is None else float(now)
         state = self.components[name]
         self._trim_restarts(state, current)
@@ -109,30 +126,53 @@ class RecoveryPolicy:
             state.next_retry_at = state.circuit_open_until
             state.phase = "Needs attention"
         else:
-            index = min(state.consecutive_restarts - 1, len(BACKOFF_SECONDS) - 1)
+            index = min(
+                state.consecutive_restarts - 1,
+                len(BACKOFF_SECONDS) - 1,
+            )
             state.next_retry_at = current + BACKOFF_SECONDS[index]
             state.phase = "Recovering"
         state.first_failure_at = 0.0
         return state
 
-    def retry_in(self, name: str, *, now: float | None = None) -> float:
+    def retry_in(
+        self,
+        name: str,
+        *,
+        now: float | None = None,
+    ) -> float:
         current = time.monotonic() if now is None else float(now)
         state = self.components[name]
         return max(0.0, state.next_retry_at - current)
 
-    def snapshot(self, name: str, *, now: float | None = None) -> dict[str, Any]:
+    def snapshot(
+        self,
+        name: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        current = time.monotonic() if now is None else float(now)
         state = self.components[name]
         return {
             "phase": state.phase,
             "reason": state.reason,
-            "retry_in_seconds": round(self.retry_in(name, now=now), 1),
+            "retry_in_seconds": round(
+                self.retry_in(name, now=current),
+                1,
+            ),
             "consecutive_restarts": state.consecutive_restarts,
-            "circuit_open": state.circuit_open_until
-            > (time.monotonic() if now is None else float(now)),
+            "circuit_open": state.circuit_open_until > current,
         }
 
-    def _trim_restarts(self, state: ComponentRecovery, now: float) -> None:
-        while state.restart_times and now - state.restart_times[0] > CIRCUIT_WINDOW_SECONDS:
+    def _trim_restarts(
+        self,
+        state: ComponentRecovery,
+        now: float,
+    ) -> None:
+        while (
+            state.restart_times
+            and now - state.restart_times[0] > CIRCUIT_WINDOW_SECONDS
+        ):
             state.restart_times.popleft()
         if not state.restart_times and state.next_retry_at <= now:
             state.consecutive_restarts = 0
@@ -149,7 +189,10 @@ def install_recovery_policy(core: Any) -> RecoveryPolicy:
         original_update_component_status(specs)
         with core.STATE.lock:
             for spec in specs:
-                current = core.STATE.component_status.setdefault(spec.name, {})
+                current = core.STATE.component_status.setdefault(
+                    spec.name,
+                    {},
+                )
                 current.update(policy.snapshot(spec.name))
         core.persist_state()
 
@@ -173,15 +216,24 @@ def install_recovery_policy(core: Any) -> RecoveryPolicy:
 
         for spec in specs:
             with core.STATE.lock:
-                if not core.STATE.desired_running or core.STATE.shutdown_requested:
+                if (
+                    not core.STATE.desired_running
+                    or core.STATE.shutdown_requested
+                ):
                     return
 
+            state_before = policy.components[spec.name]
             running = core.component_running(spec)
             ready = bool(running and spec.ready())
             if ready:
                 policy.healthy(spec.name)
                 continue
 
+            was_recovery = bool(
+                running
+                or state_before.first_failure_at > 0
+                or state_before.consecutive_restarts > 0
+            )
             if running:
                 state = policy.observe_failure(
                     spec.name,
@@ -191,7 +243,10 @@ def install_recovery_policy(core: Any) -> RecoveryPolicy:
                     core.LOG.event(
                         "component.degraded",
                         component=spec.name,
-                        grace_seconds=GRACE_SECONDS.get(spec.name, 30.0),
+                        grace_seconds=GRACE_SECONDS.get(
+                            spec.name,
+                            30.0,
+                        ),
                         reason=state.reason,
                     )
                     with core.STATE.lock:
@@ -203,7 +258,8 @@ def install_recovery_policy(core: Any) -> RecoveryPolicy:
                 retry = policy.retry_in(spec.name)
                 with core.STATE.lock:
                     core.STATE.last_error = (
-                        f"{spec.name} recovery paused for {round(retry)} seconds"
+                        f"{spec.name} recovery paused for "
+                        f"{round(retry)} seconds"
                         if retry > 0
                         else f"{spec.name} needs attention"
                     )
@@ -211,9 +267,14 @@ def install_recovery_policy(core: Any) -> RecoveryPolicy:
                 return
 
             if running:
-                core.terminate_component(spec, "continuous-readiness-failure")
+                core.terminate_component(
+                    spec,
+                    "continuous-readiness-failure",
+                )
 
-            recovery_resume = resume_playback or spec.name == "redbot"
+            recovery_resume = resume_playback or (
+                spec.name == "redbot" and was_recovery
+            )
             if not core.start_component(
                 spec,
                 resume_playback=recovery_resume,
@@ -226,13 +287,22 @@ def install_recovery_policy(core: Any) -> RecoveryPolicy:
 
             if not core.wait_until_ready(spec):
                 core.terminate_component(spec, "readiness-failed")
-                policy.record_restart(spec.name, "readiness timeout")
+                policy.record_restart(
+                    spec.name,
+                    "readiness timeout",
+                )
                 with core.STATE.lock:
-                    core.STATE.last_error = f"{spec.name} did not become ready"
+                    core.STATE.last_error = (
+                        f"{spec.name} did not become ready"
+                    )
                 update_component_status(specs)
                 return
 
-            policy.record_restart(spec.name, "automatic recovery")
+            if was_recovery:
+                policy.record_restart(
+                    spec.name,
+                    "automatic recovery",
+                )
             policy.healthy(spec.name)
 
         with core.STATE.lock:
