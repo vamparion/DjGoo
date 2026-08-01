@@ -1,0 +1,83 @@
+name: Lavalink Runtime Smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "config/lavalink.application.yml"
+      - "local_cogs/djgoowelcome/**"
+      - "tools/djgoo_portable_stack.py"
+      - "tools/smoke_lavalink_runtime.py"
+      - "tools/start_redbot_selector.py"
+      - "voice/operational_log.py"
+      - ".github/workflows/lavalink-runtime-smoke.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "config/lavalink.application.yml"
+      - "local_cogs/djgoowelcome/**"
+      - "tools/djgoo_portable_stack.py"
+      - "tools/smoke_lavalink_runtime.py"
+      - "tools/start_redbot_selector.py"
+      - "voice/operational_log.py"
+      - ".github/workflows/lavalink-runtime-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-runtime:
+    name: Windows packaged node
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up portable Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install WebSocket client dependency
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install "aiohttp>=3.9,<4"
+          if ($LASTEXITCODE -ne 0) { throw "aiohttp installation failed with exit $LASTEXITCODE" }
+
+      - name: Assemble packaged Lavalink layout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = Join-Path $PWD "build/Lavalink-Smoke"
+          $javaRoot = Join-Path $root "runtime/java"
+          $audioRoot = Join-Path $root "data/discordbot/cogs/Audio"
+          New-Item -ItemType Directory -Force $javaRoot, $audioRoot, (Join-Path $root "logs") | Out-Null
+          Copy-Item -Path (Join-Path $env:JAVA_HOME "*") -Destination $javaRoot -Recurse -Force
+          Copy-Item config/lavalink.application.yml (Join-Path $audioRoot "application.yml") -Force
+          Invoke-WebRequest -UseBasicParsing "https://github.com/Cog-Creators/Lavalink-Jars/releases/latest/download/Lavalink.jar" -OutFile (Join-Path $audioRoot "Lavalink.jar")
+          if ((Get-Item (Join-Path $audioRoot "Lavalink.jar")).Length -lt 1000000) {
+            throw "Lavalink download is unexpectedly small"
+          }
+
+      - name: Verify Red external-node configuration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -c "from tools.start_redbot_selector import LAVALINK_BIND_HOST, LAVALINK_CLIENT_HOST, LAVALINK_PORT; assert LAVALINK_BIND_HOST == '::1'; assert LAVALINK_CLIENT_HOST == '[::1]'; assert f'ws://{LAVALINK_CLIENT_HOST}:{LAVALINK_PORT}' == 'ws://[::1]:2333'; print('Red external-node URI OK')"
+          if ($LASTEXITCODE -ne 0) { throw "Red external-node configuration check failed with exit $LASTEXITCODE" }
+
+      - name: Launch node and complete Red-style WebSocket handshake
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python tools/smoke_lavalink_runtime.py --project-root build/Lavalink-Smoke --timeout 120
+          if ($LASTEXITCODE -ne 0) { throw "Lavalink runtime smoke probe failed with exit $LASTEXITCODE" }
