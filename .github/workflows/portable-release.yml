@@ -1,0 +1,144 @@
+name: Portable Host
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "launcher/**"
+      - "tools/build_portable.py"
+      - "tools/generate_sbom.py"
+      - "tools/portable_red_setup.py"
+      - "requirements-*.txt"
+      - "pyproject.toml"
+      - ".github/workflows/portable-release.yml"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      PYTHON_VERSION: "3.11.15"
+      PACKAGE_NAME: "DjGoo-Host-win-x64"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up build Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            requirements-release.txt
+
+      - name: Set up portable Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install build and test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt -r requirements-release.txt
+
+      - name: Compile and test source
+        shell: pwsh
+        run: |
+          python -m compileall -q launcher voice tools local_cogs tests
+          python -m pytest -q
+
+      - name: Download portable Python runtime
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build/runtime-python | Out-Null
+          $url = "https://www.python.org/ftp/python/$env:PYTHON_VERSION/python-$env:PYTHON_VERSION-embed-amd64.zip"
+          Invoke-WebRequest -UseBasicParsing $url -OutFile build/python-embed.zip
+          Expand-Archive build/python-embed.zip build/runtime-python -Force
+          New-Item -ItemType Directory -Force build/runtime-python/Lib/site-packages | Out-Null
+          $pth = Get-ChildItem build/runtime-python -Filter "python*._pth" | Select-Object -First 1
+          @(
+            "python311.zip",
+            ".",
+            "Lib/site-packages",
+            "import site"
+          ) | Set-Content -Encoding ASCII $pth.FullName
+          "../../../.." | Set-Content -Encoding ASCII build/runtime-python/Lib/site-packages/djgoo-root.pth
+
+      - name: Install portable Python dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --only-binary=:all: --target build/runtime-python/Lib/site-packages -r requirements-bot.txt -r requirements-voice.txt
+
+      - name: Download Red-compatible Lavalink
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -UseBasicParsing "https://github.com/Cog-Creators/Lavalink-Jars/releases/latest/download/Lavalink.jar" -OutFile build/Lavalink.jar
+          if ((Get-Item build/Lavalink.jar).Length -lt 1000000) { throw "Lavalink download is unexpectedly small" }
+
+      - name: Build portable directory
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME.TrimStart("v") } else { "0.2.0-dev+$($env:GITHUB_SHA.Substring(0, 8))" }
+          python tools/build_portable.py `
+            --output "build/$env:PACKAGE_NAME" `
+            --runtime-python build/runtime-python `
+            --runtime-java "$env:JAVA_HOME" `
+            --lavalink-jar build/Lavalink.jar `
+            --version $version
+          Copy-Item config/lavalink.application.yml "build/$env:PACKAGE_NAME/data/discordbot/cogs/Audio/application.yml" -Force
+          python tools/generate_sbom.py `
+            --site-packages build/runtime-python/Lib/site-packages `
+            --output "build/$env:PACKAGE_NAME/sbom.cdx.json" `
+            --version $version
+
+      - name: Smoke-test portable layout
+        shell: pwsh
+        run: |
+          $root = Resolve-Path "build/$env:PACKAGE_NAME"
+          & "$root/runtime/python/python.exe" "$root/tools/portable_red_setup.py" --project-root "$root" --non-interactive
+          & "$root/runtime/python/python.exe" -c "import redbot, voice.command_parser, tools.djgoo_stack; print('portable imports OK')"
+          if (Get-ChildItem $root -Recurse -Include *.ps1,*.vbs) { throw "Public package contains legacy scripts" }
+
+      - name: Archive and checksum
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "build/$env:PACKAGE_NAME" -DestinationPath "build/$env:PACKAGE_NAME.zip" -CompressionLevel Optimal -Force
+          $hash = (Get-FileHash "build/$env:PACKAGE_NAME.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $env:PACKAGE_NAME.zip" | Set-Content -Encoding ASCII build/SHA256SUMS.txt
+
+      - name: Upload testable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DjGoo-Host-win-x64
+          path: |
+            build/DjGoo-Host-win-x64.zip
+            build/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: DjGoo-Host-win-x64
+          path: release
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/* --verify-tag --generate-notes --title "DjGoo $GITHUB_REF_NAME"
