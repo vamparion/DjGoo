@@ -8,7 +8,6 @@ import secrets
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Any
 
 from aiohttp import WSMsgType, web
 
@@ -103,6 +102,7 @@ class RelayState:
 
 
 STATE_KEY: web.AppKey[RelayState] = web.AppKey("relay_state", RelayState)
+CLEANUP_TASK_KEY: web.AppKey[asyncio.Task] = web.AppKey("cleanup_task", asyncio.Task)
 
 
 def relay_state(request: web.Request) -> RelayState:
@@ -112,8 +112,9 @@ def relay_state(request: web.Request) -> RelayState:
 @web.middleware
 async def secure_transport(request: web.Request, handler):
     allow_insecure = os.environ.get("DJGOO_RELAY_ALLOW_INSECURE", "").strip() == "1"
+    trust_proxy = os.environ.get("DJGOO_RELAY_TRUST_PROXY", "").strip() == "1"
     forwarded_proto = request.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip().lower()
-    is_secure = request.secure or forwarded_proto == "https"
+    is_secure = request.secure or (trust_proxy and forwarded_proto == "https")
     if request.path != "/healthz" and not allow_insecure and not is_secure:
         raise web.HTTPUpgradeRequired(text="DjGoo Relay requires TLS termination")
     return await handler(request)
@@ -141,7 +142,6 @@ async def host_socket(request: web.Request) -> web.WebSocketResponse:
         compress=False,
     )
     await websocket.prepare(request)
-
     room_id = ""
     try:
         message = await asyncio.wait_for(websocket.receive(), timeout=HOST_HELLO_TIMEOUT_SECONDS)
@@ -207,7 +207,6 @@ async def client_socket(request: web.Request) -> web.WebSocketResponse:
     )
     await websocket.prepare(request)
     remote_key = request.remote or "unknown"
-
     try:
         async for message in websocket:
             if message.type == WSMsgType.TEXT:
@@ -262,11 +261,11 @@ async def cleanup_routes(app: web.Application) -> None:
 
 
 async def start_background_tasks(app: web.Application) -> None:
-    app[web.AppKey("cleanup_task", asyncio.Task)] = asyncio.create_task(cleanup_routes(app))
+    app[CLEANUP_TASK_KEY] = asyncio.create_task(cleanup_routes(app))
 
 
 async def stop_background_tasks(app: web.Application) -> None:
-    task = app.get(web.AppKey("cleanup_task", asyncio.Task))
+    task = app.get(CLEANUP_TASK_KEY)
     if task is not None:
         task.cancel()
         try:
