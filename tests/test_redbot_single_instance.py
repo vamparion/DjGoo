@@ -4,6 +4,7 @@ import asyncio
 import builtins
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ from tools import start_redbot_selector
 from tools.start_redbot_selector import (
     CONSOLE_FLAG,
     DUPLICATE_EXIT_CODE,
+    LAVALINK_BIND_HOST,
     LAVALINK_HOST,
     LAVALINK_PASSWORD,
     LAVALINK_PORT,
@@ -22,9 +24,10 @@ from tools.start_redbot_selector import (
     SingleInstance,
     apply_bundled_java_environment,
     bundled_java_executable,
-    configure_managed_lavalink,
+    configure_external_lavalink,
     duplicate_instance_message,
     install_audio_runtime_patch,
+    monitor_lavalink_client,
     redbot_lock_path,
 )
 
@@ -158,35 +161,34 @@ def test_bundled_java_environment_precedes_machine_path(tmp_path: Path, monkeypa
     assert os.environ["PATH"].split(os.pathsep)[0] == str(java.parent)
 
 
-def test_red_audio_restores_known_good_managed_lavalink(tmp_path: Path) -> None:
-    java = bundled_java_executable(tmp_path)
-    java.parent.mkdir(parents=True)
-    java.write_bytes(b"")
+def test_red_audio_restores_original_external_ipv6_contract() -> None:
     config = _FakeConfig()
     cog = SimpleNamespace(config=config)
 
-    asyncio.run(configure_managed_lavalink(cog, tmp_path))
+    asyncio.run(configure_external_lavalink(cog))
 
     assert config.values == {
-        "use_external_lavalink": False,
-        "java_exc_path": str(java),
-        "yaml.server.address": LAVALINK_HOST,
-        "yaml.server.port": LAVALINK_PORT,
-        "yaml.lavalink.server.password": LAVALINK_PASSWORD,
-        "host": LAVALINK_HOST,
+        "use_external_lavalink": True,
+        "host": "[::1]",
         "rest_port": LAVALINK_PORT,
         "ws_port": LAVALINK_PORT,
         "password": LAVALINK_PASSWORD,
         "secured_ws": False,
+        "yaml.server.address": "::1",
+        "yaml.server.port": LAVALINK_PORT,
+        "yaml.lavalink.server.password": LAVALINK_PASSWORD,
     }
+    assert LAVALINK_HOST == "[::1]"
+    assert LAVALINK_BIND_HOST == "::1"
+    assert f"ws://{LAVALINK_HOST}:{LAVALINK_PORT}" == "ws://[::1]:2333"
 
 
-def test_audio_initializer_applies_portable_settings_before_normal_startup(
+def test_audio_initializer_applies_external_settings_before_normal_startup(
     tmp_path: Path,
 ) -> None:
-    java = bundled_java_executable(tmp_path)
-    java.parent.mkdir(parents=True)
-    java.write_bytes(b"")
+    class FakeTask:
+        def done(self) -> bool:
+            return False
 
     class FakeAudio:
         async def initialize(self) -> None:
@@ -195,6 +197,7 @@ def test_audio_initializer_applies_portable_settings_before_normal_startup(
         def __init__(self) -> None:
             self.config = _FakeConfig()
             self.calls: list[tuple[str, dict[str, object]]] = []
+            self._djgoo_lavalink_health_task = FakeTask()
 
     audio_package = SimpleNamespace(Audio=FakeAudio)
 
@@ -204,9 +207,9 @@ def test_audio_initializer_applies_portable_settings_before_normal_startup(
 
     assert instance.calls[0][0] == "original"
     settings_seen_by_original = instance.calls[0][1]
-    assert settings_seen_by_original["use_external_lavalink"] is False
-    assert settings_seen_by_original["java_exc_path"] == str(java)
-    assert settings_seen_by_original["yaml.server.address"] == LAVALINK_HOST
+    assert settings_seen_by_original["use_external_lavalink"] is True
+    assert settings_seen_by_original["host"] == "[::1]"
+    assert settings_seen_by_original["yaml.server.address"] == "::1"
 
 
 def test_audio_runtime_patch_is_idempotent(tmp_path: Path) -> None:
@@ -223,17 +226,48 @@ def test_audio_runtime_patch_is_idempotent(tmp_path: Path) -> None:
     assert FakeAudio.initialize is first_initialize
 
 
-def test_run_redbot_cleans_stale_lavalink_before_loading_red(
+def test_lavalink_health_uses_red_node_ready_state(tmp_path: Path, monkeypatch) -> None:
+    class StopMonitor(Exception):
+        pass
+
+    nodes = [SimpleNamespace(ready=False), SimpleNamespace(ready=True)]
+    fake_lavalink = SimpleNamespace(get_all_nodes=lambda: nodes)
+    monkeypatch.setitem(sys.modules, "lavalink", fake_lavalink)
+    heartbeats: list[tuple[str, dict[str, object]]] = []
+
+    def capture(component: str, *, project_root: Path, fields: dict[str, object]) -> None:
+        heartbeats.append((component, fields))
+
+    async def stop_after_first(_seconds: float) -> None:
+        raise StopMonitor
+
+    monkeypatch.setattr(start_redbot_selector, "write_heartbeat", capture)
+    monkeypatch.setattr(start_redbot_selector.asyncio, "sleep", stop_after_first)
+
+    with pytest.raises(StopMonitor):
+        asyncio.run(monitor_lavalink_client(tmp_path))
+
+    assert heartbeats == [
+        (
+            "lavalink-client",
+            {
+                "ready": True,
+                "node_count": 2,
+                "ready_node_count": 1,
+                "host": "[::1]",
+                "port": 2333,
+                "error": "",
+            },
+        )
+    ]
+
+
+def test_run_redbot_preserves_supervisor_owned_lavalink(
     tmp_path: Path, monkeypatch
 ) -> None:
     calls: list[str] = []
     monkeypatch.setattr(start_redbot_selector, "ensure_instance", lambda _root: calls.append("ensure"))
     monkeypatch.setattr(start_redbot_selector, "bind_red_data_manager", lambda _root: calls.append("bind"))
-    monkeypatch.setattr(
-        start_redbot_selector,
-        "cleanup_lavalink_processes",
-        lambda _root: calls.append("cleanup") or [],
-    )
     monkeypatch.setattr(
         start_redbot_selector,
         "apply_runtime_patches",
@@ -247,4 +281,4 @@ def test_run_redbot_cleans_stale_lavalink_before_loading_red(
 
     start_redbot_selector.run_redbot(tmp_path)
 
-    assert calls == ["ensure", "bind", "cleanup", "patch", "red"]
+    assert calls == ["ensure", "bind", "patch", "red"]

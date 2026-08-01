@@ -15,9 +15,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools.lavalink_process import cleanup_lavalink_processes
 from tools.portable_environment import bind_red_data_manager, red_config_dir
 from tools.portable_red_setup import ensure_instance, verify_red_instance_runtime
+from voice.health import write_heartbeat
 
 
 INSTANCE_NAME = "discordbot"
@@ -25,7 +25,10 @@ STARTUP_COGS = ("audio", "djgoowelcome")
 CONSOLE_FLAG = "--djgoo-console"
 CHECK_FLAG = "--djgoo-check"
 DUPLICATE_EXIT_CODE = 75
-LAVALINK_HOST = "::1"
+LAVALINK_BIND_HOST = "::1"
+# Red-Lavalink interpolates the configured host directly into ws://{host}:{port}.
+# IPv6 literals therefore require brackets in the client setting.
+LAVALINK_HOST = "[::1]"
 LAVALINK_PORT = 2333
 LAVALINK_PASSWORD = "youshallnotpass"
 
@@ -97,7 +100,7 @@ def _ipv6_socketpair(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0):
     if family not in (socket.AF_INET, socket.AF_INET6):
         raise ValueError("Only AF_INET and AF_INET6 socket pairs are supported")
     listener = socket.socket(socket.AF_INET6, type, proto)
-    listener.bind((LAVALINK_HOST, 0))
+    listener.bind((LAVALINK_BIND_HOST, 0))
     listener.listen(1)
     client = socket.socket(socket.AF_INET6, type, proto)
     try:
@@ -129,55 +132,79 @@ def apply_bundled_java_environment(project_root: Path = PROJECT_ROOT) -> Path:
     return java
 
 
-async def configure_managed_lavalink(
-    cog: Any,
-    project_root: Path = PROJECT_ROOT,
-) -> None:
-    """Restore DjGoo's last known-good Red-managed Lavalink settings.
+async def configure_external_lavalink(cog: Any) -> None:
+    """Restore the exact external-node contract used by working DjGoo builds."""
 
-    The portable stack previously worked by binding both Lavalink and Red's
-    client to IPv6 loopback and by using a known Java runtime. Later alpha builds
-    only disabled external-node mode, leaving stale/default ``localhost`` and
-    machine-wide Java settings behind. Apply the full managed-node contract
-    before Audio initializes.
-    """
-
-    java = apply_bundled_java_environment(project_root)
-    await cog.config.use_external_lavalink.set(False)
-    if java.exists():
-        await cog.config.java_exc_path.set(str(java))
-
-    await cog.config.yaml.server.address.set(LAVALINK_HOST)
-    await cog.config.yaml.server.port.set(LAVALINK_PORT)
-    await cog.config.yaml.lavalink.server.password.set(LAVALINK_PASSWORD)
-
-    # Keep the external-node fields aligned as well so switching modes or
-    # reading diagnostics never exposes contradictory values.
+    await cog.config.use_external_lavalink.set(True)
     await cog.config.host.set(LAVALINK_HOST)
     await cog.config.rest_port.set(LAVALINK_PORT)
     await cog.config.ws_port.set(LAVALINK_PORT)
     await cog.config.password.set(LAVALINK_PASSWORD)
     await cog.config.secured_ws.set(False)
 
+    # Keep Red's managed-node YAML aligned for diagnostics and future migrations.
+    # The server bind address is a raw IPv6 literal; only the WebSocket client
+    # host requires square brackets.
+    await cog.config.yaml.server.address.set(LAVALINK_BIND_HOST)
+    await cog.config.yaml.server.port.set(LAVALINK_PORT)
+    await cog.config.yaml.lavalink.server.password.set(LAVALINK_PASSWORD)
+
+
+async def monitor_lavalink_client(project_root: Path = PROJECT_ROOT) -> None:
+    """Publish health from Red-Lavalink's real WebSocket node state."""
+
+    import lavalink
+
+    while True:
+        nodes: list[Any] = []
+        ready_nodes: list[Any] = []
+        error = ""
+        try:
+            nodes = list(lavalink.get_all_nodes())
+            ready_nodes = [node for node in nodes if bool(getattr(node, "ready", False))]
+        except Exception as exc:  # Health reporting must never crash Red.
+            error = f"{type(exc).__name__}: {exc}"
+        try:
+            write_heartbeat(
+                "lavalink-client",
+                project_root=project_root,
+                fields={
+                    "ready": bool(ready_nodes),
+                    "node_count": len(nodes),
+                    "ready_node_count": len(ready_nodes),
+                    "host": LAVALINK_HOST,
+                    "port": LAVALINK_PORT,
+                    "error": error,
+                },
+            )
+        except OSError:
+            pass
+        await asyncio.sleep(2)
+
 
 def install_audio_runtime_patch(
     audio_package: Any,
     project_root: Path = PROJECT_ROOT,
 ) -> None:
-    """Apply portable managed-node settings before Red Audio initializes."""
+    """Apply the external-node settings before Red Audio initializes."""
 
     audio_class = audio_package.Audio
-    if bool(getattr(audio_class, "_djgoo_managed_lavalink_patch", False)):
+    if bool(getattr(audio_class, "_djgoo_external_lavalink_patch", False)):
         return
 
     original_initialize = audio_class.initialize
 
     async def djgoo_initialize(self: Any) -> None:
-        await configure_managed_lavalink(self, project_root)
+        await configure_external_lavalink(self)
         await original_initialize(self)
+        task = getattr(self, "_djgoo_lavalink_health_task", None)
+        if task is None or task.done():
+            self._djgoo_lavalink_health_task = asyncio.create_task(
+                monitor_lavalink_client(project_root)
+            )
 
     audio_class.initialize = djgoo_initialize
-    audio_class._djgoo_managed_lavalink_patch = True
+    audio_class._djgoo_external_lavalink_patch = True
     audio_class._djgoo_original_initialize = original_initialize
 
 
@@ -191,9 +218,7 @@ def apply_runtime_patches(project_root: Path = PROJECT_ROOT) -> None:
     import redbot.cogs.audio as audio_package
     from redbot.cogs.audio.managed_node import ll_server_config
 
-    # New instances register defaults from this dictionary. Existing instances
-    # are migrated by configure_managed_lavalink() above.
-    ll_server_config.DEFAULT_LAVALINK_YAML["yaml__server__address"] = LAVALINK_HOST
+    ll_server_config.DEFAULT_LAVALINK_YAML["yaml__server__address"] = LAVALINK_BIND_HOST
     ll_server_config.DEFAULT_LAVALINK_YAML["yaml__server__port"] = LAVALINK_PORT
     ll_server_config.DEFAULT_LAVALINK_YAML[
         "yaml__lavalink__server__password"
@@ -277,10 +302,8 @@ def run_redbot(project_root: Path = PROJECT_ROOT) -> None:
     if not instance.acquire():
         raise RedbotAlreadyRunning(duplicate_instance_message(project_root))
     try:
-        # Always migrate early portable configurations before Red reads them.
         ensure_instance(project_root)
         bind_red_data_manager(project_root)
-        cleanup_lavalink_processes(project_root)
         apply_runtime_patches(project_root)
         sys.argv = redbot_argv(project_root)
         runpy.run_module("redbot", run_name="__main__")

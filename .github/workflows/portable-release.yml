@@ -27,7 +27,7 @@ jobs:
   host:
     name: Build Host
     runs-on: windows-latest
-    timeout-minutes: 55
+    timeout-minutes: 65
     env:
       PACKAGE_NAME: "DjGoo-Host-win-x64"
     steps:
@@ -105,12 +105,20 @@ jobs:
           python -m pip install --only-binary=:all: --target build/runtime-python/Lib/site-packages -r requirements-bot.txt -r requirements-voice.txt
           if ($LASTEXITCODE -ne 0) { throw "Portable dependency installation failed with exit $LASTEXITCODE" }
 
-      - name: Download Red-compatible Lavalink
+      - name: Download Red-pinned Lavalink
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          Invoke-WebRequest -UseBasicParsing "https://github.com/Cog-Creators/Lavalink-Jars/releases/latest/download/Lavalink.jar" -OutFile build/Lavalink.jar
+          $pin = (& build/runtime-python/python.exe -c "from redbot.cogs.audio.managed_node.version_pins import JAR_VERSION; print(str(JAR_VERSION))").Trim()
+          if (-not $pin) { throw "Red returned an empty Lavalink version pin" }
+          $url = "https://github.com/Cog-Creators/Lavalink-Jars/releases/download/$pin/Lavalink.jar"
+          Write-Host "Red requires Lavalink $pin"
+          Invoke-WebRequest -UseBasicParsing $url -OutFile build/Lavalink.jar
           if ((Get-Item build/Lavalink.jar).Length -lt 1000000) { throw "Lavalink download is unexpectedly small" }
+          $versionOutput = (& "$env:JAVA_HOME/bin/java.exe" -jar build/Lavalink.jar --version 2>&1 | Out-String)
+          if ($versionOutput -notmatch "(?m)^Version:\s+$([regex]::Escape($pin))\s*$") {
+            throw "Downloaded Lavalink does not match Red pin $pin. Output: $versionOutput"
+          }
 
       - name: Build Host package
         shell: pwsh
@@ -141,10 +149,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Portable Red setup failed with exit $LASTEXITCODE" }
           & "$root/runtime/python/python.exe" "$root/tools/start_redbot_selector.py" --djgoo-check
           if ($LASTEXITCODE -ne 0) { throw "Portable Red self-check failed with exit $LASTEXITCODE" }
-          & "$root/runtime/python/python.exe" -c "import pip, redbot, voice.command_parser, voice.command_gateway, tools.djgoo_stack; print('Host imports OK; pip', pip.__version__)"
+          & "$root/runtime/python/python.exe" -c "import pip, redbot, lavalink, voice.command_parser, voice.command_gateway, tools.djgoo_stack; print('Host imports OK; pip', pip.__version__, 'Red', redbot.__version__)"
           if ($LASTEXITCODE -ne 0) { throw "Host import smoke test failed with exit $LASTEXITCODE" }
           if (!(Test-Path "$root/DjGoo.exe")) { throw "DjGoo.exe is missing" }
           if (Get-ChildItem $root -Recurse -Include *.ps1,*.vbs) { throw "Host package contains legacy scripts" }
+
+      - name: Verify real Red-Lavalink connection
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $root = Resolve-Path "build/$env:PACKAGE_NAME"
+          & "$root/runtime/python/python.exe" "$root/tools/check_lavalink_connection.py" --project-root "$root" --timeout 180
+          if ($LASTEXITCODE -ne 0) { throw "Red-Lavalink WebSocket integration check failed with exit $LASTEXITCODE" }
 
       - name: Build and verify incremental Host update
         shell: pwsh
@@ -157,10 +174,10 @@ jobs:
             --output-manifest build/DjGoo-Host-update.json `
             --version $env:DJGOO_VERSION
           if ($LASTEXITCODE -ne 0) { throw "Incremental update build failed with exit $LASTEXITCODE" }
-          python -c "import json,zipfile; from pathlib import Path; m=json.loads(Path('build/DjGoo-Host-update.json').read_text()); z=zipfile.ZipFile('build/DjGoo-Host-update.zip'); names=set(z.namelist()); assert 'DjGoo.exe' in names; assert 'data/installed-version.json' in names; assert any(n.startswith('runtime/python/Lib/site-packages/pip/') for n in names); assert not any(n.startswith(('runtime/java/','logs/')) for n in names); assert not any(n.startswith('data/') and n != 'data/installed-version.json' for n in names); assert len(m['files']) == len(names); print('Incremental update verified:', Path('build/DjGoo-Host-update.zip').stat().st_size, 'bytes')"
+          python -c "import json,zipfile; from pathlib import Path; m=json.loads(Path('build/DjGoo-Host-update.json').read_text()); z=zipfile.ZipFile('build/DjGoo-Host-update.zip'); names=set(z.namelist()); required={'DjGoo.exe','data/installed-version.json','data/lavalink-contract.json','data/discordbot/cogs/Audio/Lavalink.jar','data/discordbot/cogs/Audio/application.yml'}; allowed_data={'data/installed-version.json','data/lavalink-contract.json','data/discordbot/cogs/Audio/Lavalink.jar','data/discordbot/cogs/Audio/application.yml'}; assert required <= names; assert any(n.startswith('runtime/python/Lib/site-packages/pip/') for n in names); assert not any(n.startswith(('runtime/java/','logs/')) for n in names); assert not any(n.startswith('data/') and n not in allowed_data for n in names); assert len(m['files']) == len(names); print('Incremental update verified:', Path('build/DjGoo-Host-update.zip').stat().st_size, 'bytes')"
           if ($LASTEXITCODE -ne 0) { throw "Incremental update verification failed with exit $LASTEXITCODE" }
           $updateSize = (Get-Item build/DjGoo-Host-update.zip).Length
-          if ($updateSize -gt 100MB) { throw "Incremental update is unexpectedly large: $updateSize bytes" }
+          if ($updateSize -gt 150MB) { throw "Incremental update is unexpectedly large: $updateSize bytes" }
           $updateHash = (Get-FileHash build/DjGoo-Host-update.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           "$updateHash  DjGoo-Host-update.zip" | Set-Content -Encoding ASCII build/SHA256SUMS-Update.txt
 
