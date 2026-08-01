@@ -23,11 +23,12 @@ async def pair_from_invite(
     invite.validate()
     errors: list[str] = []
     for endpoint in invite.ordered_endpoints():
+        pairing_code = endpoint.pairing_code(invite.code)
         try:
             if endpoint.transport == "direct":
                 credential: RecipientCredential = await RemoteGatewayTransport.pair(
                     endpoint.endpoint,
-                    invite.code,
+                    pairing_code,
                     endpoint.security,
                     device_name=device_name,
                 )
@@ -35,7 +36,7 @@ async def pair_from_invite(
                 credential = await RelayTransport.pair(
                     endpoint.endpoint,
                     endpoint.room_id,
-                    invite.code,
+                    pairing_code,
                     endpoint.host_public_key,
                     endpoint.security,
                     device_name=device_name,
@@ -43,12 +44,20 @@ async def pair_from_invite(
             else:
                 continue
         except Exception as exc:
-            errors.append(f"{endpoint.transport}: {type(exc).__name__}: {exc}")
+            errors.append(
+                f"{endpoint.transport}: {type(exc).__name__}: {exc}"
+            )
             continue
         save_protected_json(credential_path, asdict(credential))
         return credential, endpoint.transport
-    detail = "; ".join(errors[-3:]) if errors else "no supported connection method"
-    raise RuntimeError(f"DjGoo could not complete secure pairing ({detail})")
+    detail = (
+        "; ".join(errors[-3:])
+        if errors
+        else "no supported connection method"
+    )
+    raise RuntimeError(
+        f"DjGoo could not complete secure pairing ({detail})"
+    )
 
 
 def load_recipient_credential(path: Path) -> RecipientCredential:
@@ -59,7 +68,9 @@ def load_recipient_credential(path: Path) -> RecipientCredential:
             transport="relay",
             relay_url=str(data["relay_url"]),
             room_id=str(data["room_id"]),
-            host_encryption_public_key=str(data["host_encryption_public_key"]),
+            host_encryption_public_key=str(
+                data["host_encryption_public_key"]
+            ),
             host_encryption_fingerprint_sha256=str(
                 data["host_encryption_fingerprint_sha256"]
             ),
@@ -79,7 +90,9 @@ def load_recipient_credential(path: Path) -> RecipientCredential:
     )
 
 
-def transport_for_credential(credential: RecipientCredential) -> RecipientTransport:
+def transport_for_credential(
+    credential: RecipientCredential,
+) -> RecipientTransport:
     if isinstance(credential, RelayCredential):
         return RelayTransport(credential)
     return RemoteGatewayTransport(credential)
