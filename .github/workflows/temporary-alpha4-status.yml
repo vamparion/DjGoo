@@ -1,5 +1,6 @@
 name: Temporary alpha.4 status
 
+# Second commit triggers this workflow after GitHub has registered it on main.
 on:
   push:
     branches:
