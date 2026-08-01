@@ -27,6 +27,8 @@ ROOT_FILES = (
     "pyproject.toml",
     "sbom.cdx.json",
     "data/installed-version.json",
+    "data/discordbot/cogs/Audio/Lavalink.jar",
+    "data/discordbot/cogs/Audio/application.yml",
 )
 CONFIG_FILES = (
     "config/secrets.example.json",
@@ -36,7 +38,11 @@ EXCLUDED_PARTS = {"__pycache__", ".git", ".github"}
 EXCLUDED_SUFFIXES = {".pyc", ".pyo"}
 BUNDLE_NAME = "DjGoo-Host-update.zip"
 MANIFEST_NAME = "DjGoo-Host-update.json"
-SAFE_DATA_FILES = {"data/installed-version.json"}
+SAFE_DATA_FILES = {
+    "data/installed-version.json",
+    "data/discordbot/cogs/Audio/Lavalink.jar",
+    "data/discordbot/cogs/Audio/application.yml",
+}
 VERSION_PATTERN = re.compile(
     r"\d+\.\d+\.\d+"
     r"(?:-(?:(?:alpha|beta|rc)\.\d+|dev))?"
@@ -108,6 +114,10 @@ def collect_update_files(package_root: Path) -> list[Path]:
         raise UpdateBundleError("DjGoo.exe is missing from the package")
     if "data/installed-version.json" not in collected:
         raise UpdateBundleError("The package does not contain installed-version metadata")
+    if "data/discordbot/cogs/Audio/Lavalink.jar" not in collected:
+        raise UpdateBundleError("The package does not contain the pinned Lavalink jar")
+    if "data/discordbot/cogs/Audio/application.yml" not in collected:
+        raise UpdateBundleError("The package does not contain the Lavalink configuration")
     if not any(name.startswith("runtime/python/Lib/site-packages/pip/") for name in collected):
         raise UpdateBundleError("The package does not contain the bundled pip module")
     return [collected[name] for name in sorted(collected)]
@@ -153,7 +163,7 @@ def build_update_bundle(
         "bundle_asset": BUNDLE_NAME,
         "bundle_sha256": sha256_file(output_zip),
         "bundle_size": output_zip.stat().st_size,
-        "runtime_generation": 2,
+        "runtime_generation": 3,
         "requires_full_install": False,
         "files": entries,
         "deletes": [],
@@ -172,9 +182,9 @@ def main() -> int:
     parser.add_argument("--version", required=True)
     args = parser.parse_args()
     build_update_bundle(
-        args.package_root,
-        args.output_zip,
-        args.output_manifest,
+        args.package_root.resolve(),
+        args.output_zip.resolve(),
+        args.output_manifest.resolve(),
         args.version,
     )
     return 0
