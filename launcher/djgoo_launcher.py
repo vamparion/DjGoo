@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from tkinter import BOTH, END, LEFT, RIGHT, X, Button, Frame, Label, StringVar, Text, Tk, messagebox
 
+from tools.portable_environment import portable_environment
+
 
 APP_NAME = "DjGoo"
 RELEASES_URL = "https://github.com/vamparion/DjGoo/releases"
@@ -52,6 +54,10 @@ class Layout:
     @property
     def setup_script(self) -> Path:
         return self.root / "tools" / "portable_red_setup.py"
+
+    @property
+    def bot_console_script(self) -> Path:
+        return self.root / "tools" / "start_redbot_selector.py"
 
     @property
     def state_file(self) -> Path:
@@ -140,12 +146,7 @@ class DjGooLauncher:
         self.activity.see(END)
 
     def _environment(self) -> dict[str, str]:
-        env = os.environ.copy()
-        env["DJGOO_HOME"] = str(self.layout.root)
-        env["REDBOT_CONFIG_DIR"] = str(
-            self.layout.root / ".localappdata" / "Red-DiscordBot" / "Red-DiscordBot"
-        )
-        return env
+        return portable_environment(self.layout.root, os.environ)
 
     def _validate_runtime(self) -> bool:
         required = (self.layout.runtime_python, self.layout.stack_script)
@@ -185,24 +186,39 @@ class DjGooLauncher:
             return
         command = [str(self.layout.runtime_python), str(self.layout.setup_script), "--project-root", str(self.layout.root)]
         self.log("Opening guided Red/Discord setup console.")
-        subprocess.Popen(
-            command,
-            cwd=self.layout.root,
-            env=self._environment(),
-            creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
-        )
+        try:
+            subprocess.Popen(
+                command,
+                cwd=self.layout.root,
+                env=self._environment(),
+                creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+            )
+        except OSError as exc:
+            self.log(f"Could not open first-run setup: {exc}")
+            messagebox.showerror(APP_NAME, str(exc))
 
     def run_bot_console(self) -> None:
         if not self._validate_runtime():
             return
-        command = [str(self.layout.runtime_python), str(self.layout.root / "tools" / "start_redbot_selector.py")]
-        self.log("Opening Redbot console. This is where first-start token prompts appear.")
-        subprocess.Popen(
-            command,
-            cwd=self.layout.root,
-            env=self._environment(),
-            creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
-        )
+        if not self.layout.bot_console_script.exists():
+            messagebox.showerror(APP_NAME, f"Bot console helper is missing: {self.layout.bot_console_script}")
+            return
+        command = [
+            str(self.layout.runtime_python),
+            str(self.layout.bot_console_script),
+            "--djgoo-console",
+        ]
+        self.log("Opening Redbot console. Token and prefix prompts will remain visible.")
+        try:
+            subprocess.Popen(
+                command,
+                cwd=self.layout.root,
+                env=self._environment(),
+                creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+            )
+        except OSError as exc:
+            self.log(f"Could not open Redbot console: {exc}")
+            messagebox.showerror(APP_NAME, str(exc))
 
     def refresh_status(self) -> None:
         try:
