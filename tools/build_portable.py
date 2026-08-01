@@ -6,6 +6,7 @@ import json
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -21,6 +22,7 @@ COPY_FILES = (
 )
 EXCLUDED_SUFFIXES = {".ps1", ".vbs", ".pyc"}
 EXCLUDED_NAMES = {"__pycache__", ".git", ".github", ".venv", ".voice-venv", "node_modules"}
+RUNTIME_GENERATION = 2
 
 
 def ignore_copy(directory: str, names: list[str]) -> set[str]:
@@ -81,6 +83,19 @@ def install_portable_supervisor(output: Path) -> None:
     shutil.copy2(adapter, source_core)
 
 
+def write_installed_version(output: Path, version: str) -> None:
+    payload = {
+        "schema": 1,
+        "version": str(version).strip().lstrip("v"),
+        "release_tag": f"v{str(version).strip().lstrip('v')}",
+        "runtime_generation": RUNTIME_GENERATION,
+        "installed_at": time.time(),
+    }
+    path = output / "data" / "installed-version.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
 def write_manifest(output: Path, version: str) -> None:
     files: list[dict[str, object]] = []
     for path in sorted(item for item in output.rglob("*") if item.is_file()):
@@ -93,7 +108,16 @@ def write_manifest(output: Path, version: str) -> None:
             }
         )
     (output / "manifest.json").write_text(
-        json.dumps({"schema": 1, "version": version, "files": files}, indent=2) + "\n",
+        json.dumps(
+            {
+                "schema": 1,
+                "version": str(version).strip().lstrip("v"),
+                "runtime_generation": RUNTIME_GENERATION,
+                "files": files,
+            },
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
 
@@ -119,10 +143,21 @@ def build(output: Path, runtime_python: Path, runtime_java: Path, lavalink_jar: 
     lavalink_config = output / "config" / "lavalink.application.yml"
     if lavalink_config.exists():
         shutil.copy2(lavalink_config, lavalink_dir / "application.yml")
-    for relative in ("config", "data", "data/models", "data/health", "data/pids", "logs", "licenses"):
+    for relative in (
+        "config",
+        "data",
+        "data/models",
+        "data/health",
+        "data/pids",
+        "data/updates",
+        "data/update-backups",
+        "logs",
+        "licenses",
+    ):
         (output / relative).mkdir(parents=True, exist_ok=True)
 
     build_launcher(output)
+    write_installed_version(output, version)
     write_manifest(output, version)
 
     forbidden = [path for path in output.rglob("*") if path.suffix.lower() in {".ps1", ".vbs"}]
