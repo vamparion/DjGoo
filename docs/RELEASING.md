@@ -1,6 +1,6 @@
 # Releasing DjGoo
 
-DjGoo uses ordered, reviewable changes and tagged GitHub releases. Do not tag a commit merely because branch CI is green; microphone, Discord, playback, relocation, and public TLS behavior require manual acceptance.
+DjGoo uses ordered, reviewable changes and tagged GitHub releases. Do not tag a commit merely because branch CI is green; microphone, Discord, playback, relocation, public TLS, and publisher identity require manual acceptance.
 
 ## Merge order for the current architecture
 
@@ -33,6 +33,26 @@ The exact commit to tag must pass on `main`:
 - clean status with no unresolved required review threads.
 
 Record the passing workflow run IDs in the release notes or release issue.
+
+## Publisher identity and signing
+
+Pull-request and prerelease artifacts may be unsigned while the project is alpha. Stable tags are configured to fail unless these repository settings exist:
+
+- secret `WINDOWS_SIGNING_CERTIFICATE_BASE64`;
+- secret `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`;
+- variable `WINDOWS_SIGNING_TIMESTAMP_URL`.
+
+The workflow signs both desktop executables with SHA-256 and an RFC 3161 trusted timestamp, verifies them with Windows SignTool, and regenerates the package manifest after the signature changes the executable bytes.
+
+Before a stable release:
+
+- complete issue #12;
+- verify the certificate subject is the intended public publisher;
+- inspect both executables through the Windows Digital Signatures interface;
+- preserve certificate purchase, renewal, revocation, and recovery procedures outside the repository;
+- test download and SmartScreen behavior on clean Windows systems.
+
+After the repository becomes public, tagged ZIPs also receive GitHub build-provenance attestations through the release workflow. The step is intentionally skipped while the repository remains private because that GitHub feature is not available to this repository's current plan/visibility combination.
 
 ## Host manual acceptance
 
@@ -87,13 +107,16 @@ After all gates pass:
 
 1. update `CHANGELOG.md` with the version and date;
 2. merge the release-preparation change to `main`;
-3. create an annotated tag such as `v0.4.0-rc.1` on the exact accepted commit;
+3. create an annotated prerelease tag such as `v0.4.0-rc.1` on the exact accepted commit;
 4. push the tag;
 5. verify Host and Voice assets are attached to one GitHub Release;
 6. verify checksums, manifests, SBOMs, GPL text, and third-party notices;
-7. verify the relay image tag, provenance, and image SBOM when applicable;
-8. download the published assets once more and repeat a minimal launch/import smoke test;
-9. publish release notes with known limitations and upgrade/rollback guidance.
+7. when public, verify GitHub provenance attestations for both ZIPs;
+8. verify the relay image tag, provenance, and image SBOM when applicable;
+9. download the published assets and repeat a minimal launch/import/signature smoke test;
+10. publish release notes with known limitations and upgrade/rollback guidance.
+
+A stable tag such as `v0.4.0` is permitted only after Authenticode configuration and the complete stable-release gate pass.
 
 ## Rollback
 
