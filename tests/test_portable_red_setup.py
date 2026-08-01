@@ -172,7 +172,7 @@ def test_run_redbot_repairs_instance_before_loading_red(tmp_path: Path, monkeypa
     monkeypatch.setattr(
         start_redbot_selector,
         "apply_runtime_patches",
-        lambda: calls.append("patch"),
+        lambda _root: calls.append("patch"),
     )
     monkeypatch.setattr(
         start_redbot_selector.runpy,
