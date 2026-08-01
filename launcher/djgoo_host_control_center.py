@@ -16,6 +16,7 @@ from launcher.djgoo_host_experience import (
     Layout,
     application_root,
 )
+from launcher.djgoo_launcher import START_STATUS_GRACE_SECONDS
 from tools.legacy_music_core import migrate_existing_music_core
 from voice.input_binding import capture_next_button, normalize_button_name
 
@@ -88,11 +89,11 @@ class DjGooHostControlCenter(DjGooControlCenter):
 
         state = self._state()
         age = time.monotonic() - self._requested_at
-        if self._requested_desired is True and age < self.START_STATUS_GRACE_SECONDS if hasattr(self, "START_STATUS_GRACE_SECONDS") else False:
+        if self._requested_desired is True and age < START_STATUS_GRACE_SECONDS:
             return True
         if self._redbot_process_active(state):
             return True
-        if self._requested_desired is False and age < 180.0:
+        if self._requested_desired is False and age < START_STATUS_GRACE_SECONDS:
             return False
         return bool(state.get("desired_running"))
 
