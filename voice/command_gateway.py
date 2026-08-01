@@ -1,55 +1,22 @@
 from __future__ import annotations
 
-import asyncio
 import json
-import math
-import threading
-import time
-import uuid
-from collections import defaultdict, deque
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import Any
 
 from aiohttp import web
 
-from voice.command_queue import append_queue_item
-from voice.pairing_store import DeviceIdentity, PairingStore
+from voice.command_acceptance import (
+    AuthenticatedCommandProcessor,
+    AuthorizationResult,
+    AuthorizeCallback,
+    CommandRejected,
+)
+from voice.pairing_store import PairingStore
 from voice.tls_identity import TlsIdentity
 
 
 MAX_BODY_BYTES = 16_384
-MAX_COMMANDS_PER_WINDOW = 12
-RATE_WINDOW_SECONDS = 10.0
-MAX_COMMAND_AGE_SECONDS = 300.0
-MAX_CLOCK_SKEW_SECONDS = 60.0
-
-
-@dataclass(frozen=True)
-class AuthorizationResult:
-    allowed: bool
-    reason: str = ""
-    voice_channel_id: int | None = None
-
-
-AuthorizeCallback = Callable[[DeviceIdentity, str], Awaitable[AuthorizationResult]]
-
-
-class DeviceRateLimiter:
-    def __init__(self) -> None:
-        self._events: dict[str, deque[float]] = defaultdict(deque)
-        self._lock = threading.Lock()
-
-    def allow(self, device_id: str) -> bool:
-        now = time.monotonic()
-        with self._lock:
-            events = self._events[device_id]
-            while events and now - events[0] > RATE_WINDOW_SECONDS:
-                events.popleft()
-            if len(events) >= MAX_COMMANDS_PER_WINDOW:
-                return False
-            events.append(now)
-            return True
 
 
 class VoiceCommandGateway:
@@ -69,8 +36,7 @@ class VoiceCommandGateway:
         self.tls_identity = tls_identity
         self.host = host
         self.port = int(port)
-        self._queue_lock = threading.Lock()
-        self._limiter = DeviceRateLimiter()
+        self.processor = AuthenticatedCommandProcessor(pairing_store, remote_queue_path, authorize)
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
 
@@ -116,7 +82,7 @@ class VoiceCommandGateway:
             }
         )
 
-    async def _json(self, request: web.Request) -> dict[str, object]:
+    async def _json(self, request: web.Request) -> dict[str, Any]:
         try:
             payload = await request.json(loads=json.loads)
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
@@ -127,27 +93,31 @@ class VoiceCommandGateway:
             raise web.HTTPBadRequest(text="Raw microphone audio is not accepted")
         return payload
 
+    @staticmethod
+    def _raise_http(error: CommandRejected) -> None:
+        exception_type = {
+            400: web.HTTPBadRequest,
+            401: web.HTTPUnauthorized,
+            403: web.HTTPForbidden,
+            429: web.HTTPTooManyRequests,
+        }.get(error.status, web.HTTPBadRequest)
+        raise exception_type(text=error.message)
+
     async def pair(self, request: web.Request) -> web.Response:
         payload = await self._json(request)
-        code = str(payload.get("code") or "")
-        device_name = str(payload.get("device_name") or "DjGoo Voice Remote")
-        redeemed = await asyncio.to_thread(self.pairing_store.redeem_pairing_code, code, device_name)
-        if redeemed is None:
-            raise web.HTTPUnauthorized(text="Pairing code is invalid or expired")
-        identity, token = redeemed
-        return web.json_response(
-            {
-                "protocol": 1,
-                "device_id": identity.device_id,
-                "device_token": token,
-                "discord_user_id": str(identity.user_id),
-                "guild_id": str(identity.guild_id),
-                "tls_fingerprint_sha256": self.fingerprint,
-            },
-            status=201,
-        )
+        try:
+            result = await self.processor.redeem_pairing(
+                str(payload.get("code") or ""),
+                str(payload.get("device_name") or "DjGoo Voice Remote"),
+            )
+        except CommandRejected as error:
+            self._raise_http(error)
+            raise AssertionError("unreachable")
+        result["tls_fingerprint_sha256"] = self.fingerprint
+        return web.json_response(result, status=201)
 
-    def _bearer_token(self, request: web.Request) -> str:
+    @staticmethod
+    def _bearer_token(request: web.Request) -> str:
         authorization = request.headers.get("Authorization", "")
         scheme, _, token = authorization.partition(" ")
         if scheme.lower() != "bearer" or not token.strip():
@@ -156,65 +126,17 @@ class VoiceCommandGateway:
 
     async def command(self, request: web.Request) -> web.Response:
         token = self._bearer_token(request)
-        identity = await asyncio.to_thread(self.pairing_store.authenticate, token)
-        if identity is None:
-            raise web.HTTPUnauthorized(text="Unknown or revoked device")
-        if not self._limiter.allow(identity.device_id):
-            raise web.HTTPTooManyRequests(text="Voice command rate limit exceeded")
-
         payload = await self._json(request)
-        command_id = str(payload.get("command_id") or "")
         try:
-            uuid.UUID(command_id)
-        except (ValueError, AttributeError):
-            raise web.HTTPBadRequest(text="A valid command UUID is required")
+            result = await self.processor.accept(token, payload)
+        except CommandRejected as error:
+            self._raise_http(error)
+            raise AssertionError("unreachable")
+        return web.json_response(result, status=200 if result.get("duplicate") else 202)
 
-        intent = str(payload.get("intent") or "").strip()
-        if not intent or len(intent) > 64:
-            raise web.HTTPBadRequest(text="A valid intent is required")
-        if str(payload.get("guild_id") or identity.guild_id) != str(identity.guild_id):
-            raise web.HTTPForbidden(text="Device is not paired to that guild")
 
-        now = time.time()
-        try:
-            created_at = float(payload.get("created_at") or now)
-            confidence = float(payload.get("confidence") or 0.0)
-        except (TypeError, ValueError):
-            raise web.HTTPBadRequest(text="Invalid command timestamp or confidence")
-        if not math.isfinite(created_at) or not math.isfinite(confidence):
-            raise web.HTTPBadRequest(text="Invalid command timestamp or confidence")
-        if created_at < now - MAX_COMMAND_AGE_SECONDS or created_at > now + MAX_CLOCK_SKEW_SECONDS:
-            raise web.HTTPBadRequest(text="Command timestamp is stale or too far in the future")
-        confidence = min(1.0, max(0.0, confidence))
-
-        authorization = await self.authorize(identity, intent)
-        if not authorization.allowed:
-            raise web.HTTPForbidden(text=authorization.reason or "Command is not authorized")
-
-        claimed = await asyncio.to_thread(
-            self.pairing_store.claim_command,
-            command_id,
-            identity.device_id,
-        )
-        if not claimed:
-            return web.json_response({"accepted": True, "duplicate": True, "command_id": command_id})
-
-        item = {
-            "type": "command",
-            "source": "voice_remote",
-            "created_at": created_at,
-            "command_id": command_id,
-            "device_id": identity.device_id,
-            "user_id": identity.user_id,
-            "guild_id": identity.guild_id,
-            "voice_channel_id": authorization.voice_channel_id,
-            "intent": intent,
-            "query": str(payload.get("query") or "")[:500],
-            "playlist": str(payload.get("playlist") or "")[:200],
-            "value": payload.get("value"),
-            "confidence": confidence,
-            "raw": str(payload.get("raw") or "")[:1000],
-        }
-        with self._queue_lock:
-            append_queue_item(self.remote_queue_path, item)
-        return web.json_response({"accepted": True, "duplicate": False, "command_id": command_id}, status=202)
+__all__ = [
+    "AuthorizationResult",
+    "AuthorizeCallback",
+    "VoiceCommandGateway",
+]
