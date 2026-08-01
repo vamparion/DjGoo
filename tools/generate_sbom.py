@@ -21,13 +21,16 @@ def component_for_distribution(distribution: importlib.metadata.Distribution) ->
     }
 
 
-def generate(site_packages: Path, output: Path, application_version: str) -> None:
+def generate(site_packages: Path, output: Path, application_version: str, application_name: str) -> None:
     distributions = sorted(
         importlib.metadata.distributions(path=[str(site_packages)]),
         key=lambda item: str(item.metadata.get("Name") or "").lower(),
     )
     components = [component_for_distribution(item) for item in distributions]
-    serial_seed = json.dumps(components, sort_keys=True).encode("utf-8")
+    serial_seed = json.dumps(
+        {"application": application_name, "version": application_version, "components": components},
+        sort_keys=True,
+    ).encode("utf-8")
     serial = hashlib.sha256(serial_seed).hexdigest()
     payload = {
         "bomFormat": "CycloneDX",
@@ -37,7 +40,7 @@ def generate(site_packages: Path, output: Path, application_version: str) -> Non
         "metadata": {
             "component": {
                 "type": "application",
-                "name": "DjGoo Host",
+                "name": application_name,
                 "version": application_version,
                 "licenses": [{"license": {"id": "GPL-3.0-or-later"}}],
             }
@@ -53,8 +56,9 @@ def main() -> int:
     parser.add_argument("--site-packages", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--version", required=True)
+    parser.add_argument("--name", default="DjGoo Host")
     args = parser.parse_args()
-    generate(args.site_packages.resolve(), args.output.resolve(), args.version)
+    generate(args.site_packages.resolve(), args.output.resolve(), args.version, args.name)
     return 0
 
 

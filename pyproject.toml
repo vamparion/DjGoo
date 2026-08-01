@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "djgoo"
-version = "0.2.0"
-description = "Game-first Discord music control with local voice recognition"
+version = "0.3.0"
+description = "Game-first Discord music control with paired local voice clients"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 license = {text = "GPL-3.0-or-later"}
@@ -22,10 +22,13 @@ classifiers = [
 
 [project.scripts]
 djgoo = "launcher.djgoo_launcher:main"
+djgoo-voice = "voice.djgoo_voice_remote:main"
 djgoo-build-portable = "tools.build_portable:main"
+djgoo-build-voice = "tools.build_voice_remote:main"
 
 [project.gui-scripts]
 djgoo-gui = "launcher.djgoo_launcher:main"
+djgoo-voice-gui = "launcher.djgoo_voice_launcher:main"
 
 [tool.setuptools]
 py-modules = []
