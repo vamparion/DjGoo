@@ -27,6 +27,7 @@ ROOT_FILES = (
     "pyproject.toml",
     "sbom.cdx.json",
     "data/installed-version.json",
+    "data/lavalink-contract.json",
     "data/discordbot/cogs/Audio/Lavalink.jar",
     "data/discordbot/cogs/Audio/application.yml",
 )
@@ -40,6 +41,7 @@ BUNDLE_NAME = "DjGoo-Host-update.zip"
 MANIFEST_NAME = "DjGoo-Host-update.json"
 SAFE_DATA_FILES = {
     "data/installed-version.json",
+    "data/lavalink-contract.json",
     "data/discordbot/cogs/Audio/Lavalink.jar",
     "data/discordbot/cogs/Audio/application.yml",
 }
@@ -110,14 +112,16 @@ def collect_update_files(package_root: Path) -> list[Path]:
                 for path in _directory_files(root, dist_info.relative_to(root).as_posix()):
                     add(path)
 
-    if "DjGoo.exe" not in collected:
-        raise UpdateBundleError("DjGoo.exe is missing from the package")
-    if "data/installed-version.json" not in collected:
-        raise UpdateBundleError("The package does not contain installed-version metadata")
-    if "data/discordbot/cogs/Audio/Lavalink.jar" not in collected:
-        raise UpdateBundleError("The package does not contain the pinned Lavalink jar")
-    if "data/discordbot/cogs/Audio/application.yml" not in collected:
-        raise UpdateBundleError("The package does not contain the Lavalink configuration")
+    required = {
+        "DjGoo.exe",
+        "data/installed-version.json",
+        "data/lavalink-contract.json",
+        "data/discordbot/cogs/Audio/Lavalink.jar",
+        "data/discordbot/cogs/Audio/application.yml",
+    }
+    missing = sorted(required.difference(collected))
+    if missing:
+        raise UpdateBundleError(f"The package is missing required update files: {missing}")
     if not any(name.startswith("runtime/python/Lib/site-packages/pip/") for name in collected):
         raise UpdateBundleError("The package does not contain the bundled pip module")
     return [collected[name] for name in sorted(collected)]
