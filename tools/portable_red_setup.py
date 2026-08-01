@@ -86,6 +86,21 @@ def ensure_instance(project_root: Path) -> Path:
     return config_path
 
 
+def verify_red_config_resolution(project_root: Path, prepared_config: Path) -> Path:
+    """Fail setup when Red resolves a different config file than DjGoo prepared."""
+
+    from redbot.core import data_manager
+
+    actual = data_manager.config_file.resolve()
+    expected = prepared_config.resolve()
+    if actual != expected:
+        raise RuntimeError(
+            "Red configuration path mismatch. "
+            f"DjGoo prepared {expected}, but Red resolved {actual}."
+        )
+    return actual
+
+
 def ensure_project_files(project_root: Path) -> None:
     for relative in (
         "config",
@@ -142,9 +157,11 @@ def main() -> int:
     print(f"Folder: {project_root}\n")
     ensure_project_files(project_root)
     config_path = ensure_instance(project_root)
+    verify_red_config_resolution(project_root, config_path)
     write_marker(project_root)
 
     print(f"Created or refreshed the Red instance configuration at:\n  {config_path}\n")
+    print("Verified that Red resolves this same portable configuration file.\n")
     print(f"Registered bundled DjGoo cogs from:\n  {(project_root / 'local_cogs').resolve()}\n")
     print("Discord requires each host owner to create their own bot application.")
     print("Never send the bot token to another user and never put it in GitHub.")
