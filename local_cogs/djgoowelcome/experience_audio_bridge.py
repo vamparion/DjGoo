@@ -9,7 +9,7 @@ import discord
 import lavalink
 from lavalink import NodeNotFound, PlayerNotFound
 
-from voice.command_catalog import COMMAND_HINTS, command_tip
+from voice.command_catalog import command_tip
 from voice.deck_store import DeckStore
 from voice.now_playing_state import NowPlayingState
 from voice.operational_log import log_event
@@ -25,7 +25,9 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
     def __init__(self, *, bot, project_root: Path, send_payload):
         super().__init__(bot=bot, project_root=project_root, send_payload=send_payload)
         self.deck_store = DeckStore(project_root / "data" / "djgoo-decks.json")
-        self.now_playing = NowPlayingState(project_root / "data" / "djgoo-now-playing.json")
+        self.now_playing = NowPlayingState(
+            project_root / "data" / "djgoo-now-playing.json"
+        )
 
     def _mode_for_track(self, guild_id: int, track: Any) -> str:
         active_request = self._active_radio_request.get(int(guild_id))
@@ -35,16 +37,31 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             return "RADIO"
         return "PLAYBACK"
 
+    def _active_request_details(self, guild_id: int) -> dict[str, Any]:
+        reader = getattr(self, "active_request_metadata", None)
+        if callable(reader):
+            value = reader(guild_id)
+            if isinstance(value, dict):
+                return value
+        return {}
+
     def _queue_preview(self, guild_id: int) -> list[str]:
         try:
             player = lavalink.get_player(guild_id)
         except (NodeNotFound, PlayerNotFound):
             return []
-        return [str(getattr(track, "title", "") or "Unknown") for track in list(player.queue)[:3]]
+        return [
+            str(getattr(track, "title", "") or "Unknown")
+            for track in list(player.queue)[:3]
+        ]
 
     def _tip_for_track(self, track: Any, *, radio_active: bool) -> str:
         key = self._track_key(track)
-        index = sum(key.encode("utf-8", errors="ignore")) if key else int(time.time())
+        index = (
+            sum(key.encode("utf-8", errors="ignore"))
+            if key
+            else int(time.time())
+        )
         hint = command_tip(index, radio_active=radio_active)
         return f"Try saying: “{hint.phrase}”"
 
@@ -58,7 +75,11 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
     ) -> None:
         data = self._track_data(track)
         if self._should_reject_playing_track(data):
-            log_event("discord.deck.blocked_bad_track", guild_id=guild.id, track=data)
+            log_event(
+                "discord.deck.blocked_bad_track",
+                guild_id=guild.id,
+                track=data,
+            )
             return
         channel = preferred_channel or self._best_text_channel(guild)
         if channel is None:
@@ -75,12 +96,17 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
 
         station = self.stations.get_active(guild.id)
         mode = self._mode_for_track(guild.id, track)
+        request = self._active_request_details(guild.id)
         queue_preview = self._queue_preview(guild.id)
         embed_data = build_playback_control_embed(
             data,
             station_name=station["name"] if station else None,
         )
         description = [f"Mode: **{mode}**"]
+        if mode == "REQUEST":
+            requester = str(request.get("requester_name") or "Player")
+            timing = str(request.get("timing") or "next").title()
+            description.append(f"Requested by: **{requester}** • {timing}")
         if station is not None:
             description.append(f"Station: **{station['name']}**")
         if queue_preview:
@@ -88,20 +114,31 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         uri = str(data.get("uri") or "").strip()
         if uri:
             description.append(f"[Open track]({uri})")
-        description.append("Use the controls below or keep playing without leaving your game.")
+        description.append(
+            "Use the controls below or keep playing without leaving your game."
+        )
         embed_data["description"] = "\n".join(description)[:4096]
         embed_data["footer"] = {
-            "text": self._tip_for_track(track, radio_active=station is not None)
+            "text": self._tip_for_track(
+                track,
+                radio_active=station is not None,
+            )
         }
         embed = discord.Embed.from_dict(embed_data)
         view = PlaybackControlsView(self, guild.id)
-        content = f"DjGoo • {mode} • {data.get('title', 'Unknown track')}"[:2000]
+        content = (
+            f"DjGoo • {mode} • {data.get('title', 'Unknown track')}"
+        )[:2000]
 
         record = self.deck_store.get(guild.id)
         if record is not None:
             target_channel = guild.get_channel(int(record.get("channel_id") or 0))
             if target_channel is not None:
-                with contextlib.suppress(discord.HTTPException, discord.Forbidden, discord.NotFound):
+                with contextlib.suppress(
+                    discord.HTTPException,
+                    discord.Forbidden,
+                    discord.NotFound,
+                ):
                     message = await target_channel.fetch_message(
                         int(record.get("message_id") or 0)
                     )
@@ -118,7 +155,11 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             self.deck_store.clear(guild.id)
 
         try:
-            message = await channel.send(content=content, embed=embed, view=view)
+            message = await channel.send(
+                content=content,
+                embed=embed,
+                view=view,
+            )
         except (discord.HTTPException, discord.Forbidden):
             log_event(
                 "discord.deck.failed",
@@ -141,7 +182,11 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             track=data,
         )
 
-    def _publish_now_playing(self, guild_id: int, track: Any | None = None) -> None:
+    def _publish_now_playing(
+        self,
+        guild_id: int,
+        track: Any | None = None,
+    ) -> None:
         try:
             player = lavalink.get_player(guild_id)
         except (NodeNotFound, PlayerNotFound):
@@ -152,6 +197,7 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         data = self._track_data(selected)
         station = self.stations.get_active(guild_id)
         mode = self._mode_for_track(guild_id, selected)
+        request = self._active_request_details(guild_id)
         self.now_playing.publish(
             guild_id,
             {
@@ -164,13 +210,22 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                 "paused": bool(getattr(player, "paused", False)),
                 "volume": int(getattr(player, "volume", 0) or 0),
                 "station": station.get("name", "") if station else "",
+                "requester": str(request.get("requester_name") or ""),
+                "request_timing": str(request.get("timing") or ""),
                 "queue": self._queue_preview(guild_id),
-                "tip": self._tip_for_track(selected, radio_active=station is not None),
+                "tip": self._tip_for_track(
+                    selected,
+                    radio_active=station is not None,
+                ),
             },
         )
 
     async def handle_track_start(self, guild, track) -> None:
         await super().handle_track_start(guild, track)
+        # The lower bridge classifies a track as REQUEST during its station-start
+        # hook, which runs after the first deck update. Refresh once more so the
+        # persistent deck and Mini Player immediately show the correct mode.
+        await self._send_playback_controls(guild, track, force=True)
         self._publish_now_playing(guild.id, track)
 
     async def handle_track_enqueue(self, guild, track) -> None:
