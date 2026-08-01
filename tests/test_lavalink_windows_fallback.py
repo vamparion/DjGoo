@@ -17,15 +17,28 @@ class RecordingLogger:
 
 
 class HiddenSocketProcess:
-    def __init__(self, pid: int, command: list[str], created: float) -> None:
+    def __init__(
+        self,
+        pid: int,
+        command: list[str],
+        created: float,
+        *,
+        cwd: Path | None = None,
+    ) -> None:
         self.pid = pid
         self._command = command
         self._created = created
+        self._cwd = cwd
         self.terminated = False
         self.killed = False
 
     def cmdline(self) -> list[str]:
         return list(self._command)
+
+    def cwd(self) -> str:
+        if self._cwd is None:
+            raise psutil.AccessDenied(self.pid)
+        return str(self._cwd)
 
     def create_time(self) -> float:
         return self._created
@@ -48,13 +61,21 @@ class HiddenSocketProcess:
         return not self.terminated and not self.killed
 
 
+def _audio_dir(root: Path) -> Path:
+    return root / "data" / "discordbot" / "cogs" / "Audio"
+
+
 def _command(root: Path) -> list[str]:
     return [
         "java.exe",
         "-Xms64M",
         "-jar",
-        str(root / "data" / "discordbot" / "cogs" / "Audio" / "Lavalink.jar"),
+        str(_audio_dir(root) / "Lavalink.jar"),
     ]
+
+
+def _relative_command() -> list[str]:
+    return ["java.exe", "-Xms64M", "-jar", "Lavalink.jar"]
 
 
 def test_reachable_port_adopts_oldest_matching_process_when_socket_owner_is_hidden(
@@ -70,6 +91,7 @@ def test_reachable_port_adopts_oldest_matching_process_when_socket_owner_is_hidd
     records: dict[str, dict[str, object]] = {}
     logger = RecordingLogger()
     core = SimpleNamespace(
+        PROJECT_ROOT=root,
         LOG=logger,
         write_component_record=lambda spec, process: records.__setitem__(
             spec.name,
@@ -86,6 +108,63 @@ def test_reachable_port_adopts_oldest_matching_process_when_socket_owner_is_hidd
     assert failed_bind_attempt.terminated is True
     adopted = [fields for name, fields in logger.events if name == "component.adopted"]
     assert adopted[-1]["reason"] == "reachable-lavalink-fallback"
+
+
+def test_relative_managed_lavalink_is_recognized_by_audio_working_directory(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path.resolve()
+    managed = HiddenSocketProcess(
+        1501,
+        _relative_command(),
+        created=5.0,
+        cwd=_audio_dir(root),
+    )
+
+    assert adapter._process_is_package_lavalink(managed, root) is True
+
+    unrelated = HiddenSocketProcess(
+        1502,
+        _relative_command(),
+        created=6.0,
+        cwd=root / "unrelated",
+    )
+    assert adapter._process_is_package_lavalink(unrelated, root) is False
+
+
+def test_relative_managed_listener_is_adopted_and_new_failed_bind_is_removed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path.resolve()
+    managed_listener = HiddenSocketProcess(
+        1601,
+        _relative_command(),
+        created=5.0,
+        cwd=_audio_dir(root),
+    )
+    failed_bind_attempt = HiddenSocketProcess(1602, _command(root), created=20.0)
+    monkeypatch.setattr(
+        adapter.psutil,
+        "process_iter",
+        lambda: [failed_bind_attempt, managed_listener],
+    )
+    monkeypatch.setattr(adapter, "_lavalink_port_ready", lambda timeout=0.4: True)
+    monkeypatch.setattr(adapter.psutil, "wait_procs", lambda targets, timeout: (targets, []))
+
+    records: dict[str, dict[str, object]] = {}
+    core = SimpleNamespace(
+        PROJECT_ROOT=root,
+        LOG=RecordingLogger(),
+        write_component_record=lambda spec, process: records.__setitem__(
+            spec.name,
+            {"pid": process.pid, "create_time": process.create_time()},
+        ),
+    )
+    spec = SimpleNamespace(name="lavalink", command_markers=("lavalink.jar", str(root)))
+
+    assert adapter._adopt_lavalink_listener(core, spec) is True
+    assert records["lavalink"]["pid"] == managed_listener.pid
+    assert failed_bind_attempt.terminated is True
 
 
 def test_fallback_readiness_belongs_only_to_oldest_matching_process(
