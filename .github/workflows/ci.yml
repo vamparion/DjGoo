@@ -38,12 +38,5 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q voice tools local_cogs tests
 
-      - name: Run reliability tests
-        run: |
-          python -m pytest -q \
-            tests/test_media_policy.py \
-            tests/test_sqlite_stations.py \
-            tests/test_extended_voice_commands.py \
-            tests/test_voice_audio_processing.py \
-            tests/test_stack_supervisor.py \
-            tests/test_health_heartbeat.py
+      - name: Run complete test suite
+        run: python -m pytest -q
