@@ -1,0 +1,29 @@
+name: Temporary packaged Lavalink smoke patch
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/temporary-apply-packaged-lavalink-smoke.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/restore-supervisor-owned-lavalink
+          token: ${{ github.token }}
+          fetch-depth: 0
+      - run: python tools/patch_portable_smoke_workflow.py
+      - shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/portable-release.yml
+          git commit -m "exercise packaged Lavalink in Host smoke test"
+          git push origin HEAD:agent/restore-supervisor-owned-lavalink
