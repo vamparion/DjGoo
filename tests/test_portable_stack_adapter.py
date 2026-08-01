@@ -236,6 +236,7 @@ def test_initial_redbot_ready_event_gets_bounded_startup_grace(monkeypatch) -> N
     }
     core.read_json = lambda path: heartbeat
     monkeypatch.setattr(adapter.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(adapter, "_lavalink_port_ready", lambda: True)
 
     assert adapter._portable_redbot_ready(core) is True
     heartbeat["event"] = "redbot.heartbeat"

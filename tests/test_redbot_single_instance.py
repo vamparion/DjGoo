@@ -15,8 +15,13 @@ from tools import start_redbot_selector
 from tools.start_redbot_selector import (
     CONSOLE_FLAG,
     DUPLICATE_EXIT_CODE,
+    LAVALINK_HOST,
+    LAVALINK_PASSWORD,
+    LAVALINK_PORT,
     RedbotAlreadyRunning,
     SingleInstance,
+    apply_bundled_java_environment,
+    bundled_java_executable,
     configure_managed_lavalink,
     duplicate_instance_message,
     install_audio_runtime_patch,
@@ -122,60 +127,98 @@ def test_duplicate_message_points_to_current_log(tmp_path: Path) -> None:
     assert str(tmp_path / "data" / "discordbot" / "core" / "logs" / "latest.log") in message
 
 
-class _FakeSetting:
-    def __init__(self, name: str, values: dict[str, object]) -> None:
-        self.name = name
+class _FakeConfigNode:
+    def __init__(self, values: dict[str, object], path: tuple[str, ...] = ()) -> None:
         self.values = values
+        self.path = path
+
+    def __getattr__(self, name: str) -> "_FakeConfigNode":
+        return _FakeConfigNode(self.values, (*self.path, name))
 
     async def set(self, value: object) -> None:
-        self.values[self.name] = value
+        self.values[".".join(self.path)] = value
 
 
-class _FakeConfig:
+class _FakeConfig(_FakeConfigNode):
     def __init__(self) -> None:
-        self.values: dict[str, object] = {}
-
-    def __getattr__(self, name: str) -> _FakeSetting:
-        return _FakeSetting(name, self.values)
+        super().__init__({})
 
 
-def test_red_audio_is_returned_to_managed_lavalink() -> None:
-    cog = SimpleNamespace(config=_FakeConfig())
+def test_bundled_java_environment_precedes_machine_path(tmp_path: Path, monkeypatch) -> None:
+    java = bundled_java_executable(tmp_path)
+    java.parent.mkdir(parents=True)
+    java.write_bytes(b"")
+    monkeypatch.setenv("PATH", os.pathsep.join(["machine-java", "other-bin"]))
+    monkeypatch.delenv("JAVA_HOME", raising=False)
 
-    asyncio.run(configure_managed_lavalink(cog))
+    resolved = apply_bundled_java_environment(tmp_path)
 
-    assert cog.config.values == {"use_external_lavalink": False}
+    assert resolved == java
+    assert os.environ["JAVA_HOME"] == str(java.parents[1])
+    assert os.environ["PATH"].split(os.pathsep)[0] == str(java.parent)
 
 
-def test_audio_initializer_forces_managed_mode_before_normal_startup() -> None:
+def test_red_audio_restores_known_good_managed_lavalink(tmp_path: Path) -> None:
+    java = bundled_java_executable(tmp_path)
+    java.parent.mkdir(parents=True)
+    java.write_bytes(b"")
+    config = _FakeConfig()
+    cog = SimpleNamespace(config=config)
+
+    asyncio.run(configure_managed_lavalink(cog, tmp_path))
+
+    assert config.values == {
+        "use_external_lavalink": False,
+        "java_exc_path": str(java),
+        "yaml.server.address": LAVALINK_HOST,
+        "yaml.server.port": LAVALINK_PORT,
+        "yaml.lavalink.server.password": LAVALINK_PASSWORD,
+        "host": LAVALINK_HOST,
+        "rest_port": LAVALINK_PORT,
+        "ws_port": LAVALINK_PORT,
+        "password": LAVALINK_PASSWORD,
+        "secured_ws": False,
+    }
+
+
+def test_audio_initializer_applies_portable_settings_before_normal_startup(
+    tmp_path: Path,
+) -> None:
+    java = bundled_java_executable(tmp_path)
+    java.parent.mkdir(parents=True)
+    java.write_bytes(b"")
+
     class FakeAudio:
         async def initialize(self) -> None:
-            self.calls.append("original")
+            self.calls.append(("original", dict(self.config.values)))
 
         def __init__(self) -> None:
             self.config = _FakeConfig()
-            self.calls: list[str] = []
+            self.calls: list[tuple[str, dict[str, object]]] = []
 
     audio_package = SimpleNamespace(Audio=FakeAudio)
 
-    install_audio_runtime_patch(audio_package)
+    install_audio_runtime_patch(audio_package, tmp_path)
     instance = FakeAudio()
     asyncio.run(instance.initialize())
 
-    assert instance.calls == ["original"]
-    assert instance.config.values["use_external_lavalink"] is False
+    assert instance.calls[0][0] == "original"
+    settings_seen_by_original = instance.calls[0][1]
+    assert settings_seen_by_original["use_external_lavalink"] is False
+    assert settings_seen_by_original["java_exc_path"] == str(java)
+    assert settings_seen_by_original["yaml.server.address"] == LAVALINK_HOST
 
 
-def test_audio_runtime_patch_is_idempotent() -> None:
+def test_audio_runtime_patch_is_idempotent(tmp_path: Path) -> None:
     class FakeAudio:
         async def initialize(self) -> None:
             return None
 
     audio_package = SimpleNamespace(Audio=FakeAudio)
 
-    install_audio_runtime_patch(audio_package)
+    install_audio_runtime_patch(audio_package, tmp_path)
     first_initialize = FakeAudio.initialize
-    install_audio_runtime_patch(audio_package)
+    install_audio_runtime_patch(audio_package, tmp_path)
 
     assert FakeAudio.initialize is first_initialize
 
@@ -191,7 +234,11 @@ def test_run_redbot_cleans_stale_lavalink_before_loading_red(
         "cleanup_lavalink_processes",
         lambda _root: calls.append("cleanup") or [],
     )
-    monkeypatch.setattr(start_redbot_selector, "apply_runtime_patches", lambda: calls.append("patch"))
+    monkeypatch.setattr(
+        start_redbot_selector,
+        "apply_runtime_patches",
+        lambda _root: calls.append("patch"),
+    )
     monkeypatch.setattr(
         start_redbot_selector.runpy,
         "run_module",

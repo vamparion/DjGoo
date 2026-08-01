@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import runpy
 import socket
 import sys
@@ -24,6 +25,9 @@ STARTUP_COGS = ("audio", "djgoowelcome")
 CONSOLE_FLAG = "--djgoo-console"
 CHECK_FLAG = "--djgoo-check"
 DUPLICATE_EXIT_CODE = 75
+LAVALINK_HOST = "::1"
+LAVALINK_PORT = 2333
+LAVALINK_PASSWORD = "youshallnotpass"
 
 
 class RedbotAlreadyRunning(RuntimeError):
@@ -93,7 +97,7 @@ def _ipv6_socketpair(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0):
     if family not in (socket.AF_INET, socket.AF_INET6):
         raise ValueError("Only AF_INET and AF_INET6 socket pairs are supported")
     listener = socket.socket(socket.AF_INET6, type, proto)
-    listener.bind(("::1", 0))
+    listener.bind((LAVALINK_HOST, 0))
     listener.listen(1)
     client = socket.socket(socket.AF_INET6, type, proto)
     try:
@@ -107,20 +111,60 @@ def _ipv6_socketpair(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0):
     return client, server
 
 
-async def configure_managed_lavalink(cog: Any) -> None:
-    """Return Red Audio to its native managed Lavalink lifecycle.
+def bundled_java_executable(project_root: Path = PROJECT_ROOT) -> Path:
+    return (project_root.resolve() / "runtime" / "java" / "bin" / "java.exe").resolve()
 
-    Older DjGoo alpha builds persisted external-node mode while also launching
-    Lavalink from the supervisor. Force that setting off before Audio performs
-    its normal initialization so Red owns the Java node exactly as it did in the
-    originally working setup.
+
+def apply_bundled_java_environment(project_root: Path = PROJECT_ROOT) -> Path:
+    java = bundled_java_executable(project_root)
+    if not java.exists():
+        return java
+    java_home = java.parents[1]
+    os.environ["JAVA_HOME"] = str(java_home)
+    current_path = os.environ.get("PATH", "")
+    java_bin = str(java.parent)
+    path_parts = [part for part in current_path.split(os.pathsep) if part]
+    if not path_parts or os.path.normcase(path_parts[0]) != os.path.normcase(java_bin):
+        os.environ["PATH"] = os.pathsep.join([java_bin, *path_parts])
+    return java
+
+
+async def configure_managed_lavalink(
+    cog: Any,
+    project_root: Path = PROJECT_ROOT,
+) -> None:
+    """Restore DjGoo's last known-good Red-managed Lavalink settings.
+
+    The portable stack previously worked by binding both Lavalink and Red's
+    client to IPv6 loopback and by using a known Java runtime. Later alpha builds
+    only disabled external-node mode, leaving stale/default ``localhost`` and
+    machine-wide Java settings behind. Apply the full managed-node contract
+    before Audio initializes.
     """
 
+    java = apply_bundled_java_environment(project_root)
     await cog.config.use_external_lavalink.set(False)
+    if java.exists():
+        await cog.config.java_exc_path.set(str(java))
+
+    await cog.config.yaml.server.address.set(LAVALINK_HOST)
+    await cog.config.yaml.server.port.set(LAVALINK_PORT)
+    await cog.config.yaml.lavalink.server.password.set(LAVALINK_PASSWORD)
+
+    # Keep the external-node fields aligned as well so switching modes or
+    # reading diagnostics never exposes contradictory values.
+    await cog.config.host.set(LAVALINK_HOST)
+    await cog.config.rest_port.set(LAVALINK_PORT)
+    await cog.config.ws_port.set(LAVALINK_PORT)
+    await cog.config.password.set(LAVALINK_PASSWORD)
+    await cog.config.secured_ws.set(False)
 
 
-def install_audio_runtime_patch(audio_package: Any) -> None:
-    """Force managed-node mode before Red Audio initializes."""
+def install_audio_runtime_patch(
+    audio_package: Any,
+    project_root: Path = PROJECT_ROOT,
+) -> None:
+    """Apply portable managed-node settings before Red Audio initializes."""
 
     audio_class = audio_package.Audio
     if bool(getattr(audio_class, "_djgoo_managed_lavalink_patch", False)):
@@ -129,7 +173,7 @@ def install_audio_runtime_patch(audio_package: Any) -> None:
     original_initialize = audio_class.initialize
 
     async def djgoo_initialize(self: Any) -> None:
-        await configure_managed_lavalink(self)
+        await configure_managed_lavalink(self, project_root)
         await original_initialize(self)
 
     audio_class.initialize = djgoo_initialize
@@ -137,14 +181,24 @@ def install_audio_runtime_patch(audio_package: Any) -> None:
     audio_class._djgoo_original_initialize = original_initialize
 
 
-def apply_runtime_patches() -> None:
+def apply_runtime_patches(project_root: Path = PROJECT_ROOT) -> None:
     socket.socketpair = _ipv6_socketpair
     if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-    import redbot.cogs.audio as audio_package
+    apply_bundled_java_environment(project_root)
 
-    install_audio_runtime_patch(audio_package)
+    import redbot.cogs.audio as audio_package
+    from redbot.cogs.audio.managed_node import ll_server_config
+
+    # New instances register defaults from this dictionary. Existing instances
+    # are migrated by configure_managed_lavalink() above.
+    ll_server_config.DEFAULT_LAVALINK_YAML["yaml__server__address"] = LAVALINK_HOST
+    ll_server_config.DEFAULT_LAVALINK_YAML["yaml__server__port"] = LAVALINK_PORT
+    ll_server_config.DEFAULT_LAVALINK_YAML[
+        "yaml__lavalink__server__password"
+    ] = LAVALINK_PASSWORD
+    install_audio_runtime_patch(audio_package, project_root)
 
 
 def redbot_argv(project_root: Path = PROJECT_ROOT) -> list[str]:
@@ -227,7 +281,7 @@ def run_redbot(project_root: Path = PROJECT_ROOT) -> None:
         ensure_instance(project_root)
         bind_red_data_manager(project_root)
         cleanup_lavalink_processes(project_root)
-        apply_runtime_patches()
+        apply_runtime_patches(project_root)
         sys.argv = redbot_argv(project_root)
         runpy.run_module("redbot", run_name="__main__")
     finally:

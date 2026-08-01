@@ -285,6 +285,8 @@ def _portable_redbot_ready(core: Any) -> bool:
         return False
     if heartbeat.get("audio_loaded") is not True or heartbeat.get("discord_ready") is not True:
         return False
+    if not _lavalink_port_ready():
+        return False
 
     max_age = 120.0 if heartbeat.get("event") == "redbot.ready" else 15.0
     return -5.0 <= age <= max_age
