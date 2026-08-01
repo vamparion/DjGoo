@@ -7,6 +7,7 @@ import socket
 import sys
 import traceback
 from pathlib import Path
+from typing import BinaryIO
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,70 @@ INSTANCE_NAME = "discordbot"
 STARTUP_COGS = ("audio", "djgoowelcome")
 CONSOLE_FLAG = "--djgoo-console"
 CHECK_FLAG = "--djgoo-check"
+DUPLICATE_EXIT_CODE = 75
+
+
+class RedbotAlreadyRunning(RuntimeError):
+    pass
+
+
+class SingleInstance:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.handle: BinaryIO | None = None
+
+    def acquire(self) -> bool:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.handle = self.path.open("a+b")
+        if self.path.stat().st_size == 0:
+            self.handle.write(b"0")
+            self.handle.flush()
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, BlockingIOError):
+            self.handle.close()
+            self.handle = None
+            return False
+        return True
+
+    def close(self) -> None:
+        if self.handle is None:
+            return
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        self.handle.close()
+        self.handle = None
+
+
+def redbot_lock_path(project_root: Path = PROJECT_ROOT) -> Path:
+    return project_root / "data" / "redbot-instance.lock"
+
+
+def duplicate_instance_message(project_root: Path = PROJECT_ROOT) -> str:
+    return (
+        "Another DjGoo Redbot process is already using this package.\n"
+        "Stop DjGoo before opening the bot console. Starting a second copy would "
+        "conflict with Redbot's latest.log file.\n"
+        f"Current Redbot log: {project_root / 'data' / INSTANCE_NAME / 'core' / 'logs' / 'latest.log'}"
+    )
 
 
 def _ipv6_socketpair(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0):
@@ -123,12 +188,18 @@ def _pause_after_error() -> None:
 
 
 def run_redbot(project_root: Path = PROJECT_ROOT) -> None:
-    # Always migrate early portable configurations before Red reads them.
-    ensure_instance(project_root)
-    bind_red_data_manager(project_root)
-    apply_runtime_patches()
-    sys.argv = redbot_argv(project_root)
-    runpy.run_module("redbot", run_name="__main__")
+    instance = SingleInstance(redbot_lock_path(project_root))
+    if not instance.acquire():
+        raise RedbotAlreadyRunning(duplicate_instance_message(project_root))
+    try:
+        # Always migrate early portable configurations before Red reads them.
+        ensure_instance(project_root)
+        bind_red_data_manager(project_root)
+        apply_runtime_patches()
+        sys.argv = redbot_argv(project_root)
+        runpy.run_module("redbot", run_name="__main__")
+    finally:
+        instance.close()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -139,6 +210,11 @@ def main(argv: list[str] | None = None) -> int:
             check_portable_red(PROJECT_ROOT)
         else:
             run_redbot(PROJECT_ROOT)
+    except RedbotAlreadyRunning as exc:
+        print(str(exc), file=sys.stderr)
+        if console_mode:
+            _pause_after_error()
+        return DUPLICATE_EXIT_CODE
     except SystemExit as exc:
         code = _exit_code(exc.code)
         if console_mode and code != 0:

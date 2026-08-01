@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import queue
@@ -48,12 +49,42 @@ from tools.update_client import (
 APP_NAME = "DjGoo"
 RELEASES_URL = "https://github.com/vamparion/DjGoo/releases"
 DISCORD_APPS_URL = "https://discord.com/developers/applications"
+START_STATUS_GRACE_SECONDS = 180.0
 
 
 def application_root() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return SOURCE_ROOT
+
+
+def read_json(path: Path) -> dict[str, object] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def process_exists(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        process_query_limited_information = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(
+            process_query_limited_information,
+            False,
+            pid,
+        )
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
+    try:
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -107,6 +138,22 @@ class Layout:
         return self.root / "data" / "djgoo-supervisor-state.json"
 
     @property
+    def supervisor_pid_file(self) -> Path:
+        return self.root / "data" / "pids" / "supervisor.json"
+
+    @property
+    def redbot_pid_file(self) -> Path:
+        return self.root / "data" / "pids" / "redbot.json"
+
+    @property
+    def redbot_log(self) -> Path:
+        return self.root / "data" / "discordbot" / "core" / "logs" / "latest.log"
+
+    @property
+    def component_logs(self) -> Path:
+        return self.root / "logs" / "components"
+
+    @property
     def logs(self) -> Path:
         return self.root / "logs"
 
@@ -125,6 +172,8 @@ class DjGooLauncher:
         self.layout = layout
         self.status_text = StringVar(value="Checking DjGoo…")
         self._update_busy = False
+        self._requested_desired: bool | None = None
+        self._requested_at = 0.0
         self._ui_queue: queue.SimpleQueue[Callable[[], None]] = queue.SimpleQueue()
         self._build()
         self._report_update_result()
@@ -160,7 +209,7 @@ class DjGooLauncher:
                 side=LEFT, padx=(0, 8)
             )
         Button(controls, text="First-run setup", width=16, command=self.run_setup).pack(side=LEFT, padx=(12, 8))
-        Button(controls, text="Test bot console", width=16, command=self.run_bot_console).pack(side=LEFT)
+        Button(controls, text="Bot console / log", width=16, command=self.run_bot_console).pack(side=LEFT)
 
         tools = Frame(self.root, padx=18, pady=4)
         tools.pack(fill=X)
@@ -211,6 +260,43 @@ class DjGooLauncher:
         self.log("Package validation failed: " + ", ".join(missing))
         return False
 
+    def _state(self) -> dict[str, object]:
+        return read_json(self.layout.state_file) or {}
+
+    @staticmethod
+    def _recorded_process_active(path: Path) -> bool:
+        record = read_json(path)
+        if not record:
+            return False
+        try:
+            return process_exists(int(record.get("pid") or 0))
+        except (TypeError, ValueError):
+            return False
+
+    def _redbot_process_active(self, state: dict[str, object] | None = None) -> bool:
+        state = state or self._state()
+        components = state.get("components")
+        if isinstance(components, dict):
+            redbot = components.get("redbot")
+            if isinstance(redbot, dict):
+                try:
+                    pid = int(redbot.get("pid") or 0)
+                except (TypeError, ValueError):
+                    pid = 0
+                if process_exists(pid):
+                    return True
+        return self._recorded_process_active(self.layout.redbot_pid_file)
+
+    def _redbot_or_stack_active(self) -> bool:
+        if (
+            self._requested_desired is True
+            and time.monotonic() - self._requested_at < START_STATUS_GRACE_SECONDS
+        ):
+            return True
+        return self._recorded_process_active(
+            self.layout.supervisor_pid_file
+        ) or self._redbot_process_active()
+
     def stack_action(self, action: str) -> None:
         if not self._validate_runtime():
             return
@@ -224,13 +310,23 @@ class DjGooLauncher:
                 stderr=subprocess.DEVNULL,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
+            self._requested_desired = action in {"start", "reset"}
+            self._requested_at = time.monotonic()
             self.log(f"Requested {action}.")
+            self.root.after(250, self.refresh_status)
             self.root.after(1200, self.refresh_status)
         except OSError as exc:
             self.log(f"Could not request {action}: {exc}")
             messagebox.showerror(APP_NAME, str(exc))
 
     def run_setup(self) -> None:
+        if self._redbot_or_stack_active():
+            self.log("First-run setup blocked because DjGoo is starting or running.")
+            messagebox.showwarning(
+                APP_NAME,
+                "Stop DjGoo before running First-run setup. Editing the Redbot instance while it is active can damage its configuration.",
+            )
+            return
         if not self.layout.setup_script.exists():
             messagebox.showerror(APP_NAME, f"Setup helper is missing: {self.layout.setup_script}")
             return
@@ -257,6 +353,14 @@ class DjGooLauncher:
         if not self.layout.bot_console_script.exists():
             messagebox.showerror(APP_NAME, f"Bot console helper is missing: {self.layout.bot_console_script}")
             return
+        if self._redbot_or_stack_active():
+            self.log("A duplicate Redbot console was blocked. Opening the active bot log instead.")
+            messagebox.showwarning(
+                APP_NAME,
+                "DjGoo is already starting or running. Starting a second Redbot against the same data folder would cause a file-lock crash.\n\nThe active bot log will be opened instead.",
+            )
+            self.open_redbot_log()
+            return
         self.log("Opening Redbot console. Token and prefix prompts will remain visible.")
         try:
             subprocess.Popen(
@@ -272,6 +376,16 @@ class DjGooLauncher:
         except OSError as exc:
             self.log(f"Could not open Redbot console: {exc}")
             messagebox.showerror(APP_NAME, str(exc))
+
+    def open_redbot_log(self) -> None:
+        if self.layout.redbot_log.exists():
+            try:
+                self.open_path(self.layout.redbot_log)
+                return
+            except OSError as exc:
+                self.log(f"Could not open the active Redbot log directly: {exc}")
+        self.layout.component_logs.mkdir(parents=True, exist_ok=True)
+        self.open_path(self.layout.component_logs)
 
     def check_updates(self) -> None:
         if self._update_busy:
@@ -431,14 +545,35 @@ class DjGooLauncher:
         messagebox.showerror(APP_NAME, "The previous DjGoo update failed and was rolled back.\n\n" + error)
 
     def refresh_status(self) -> None:
-        try:
-            data = json.loads(self.layout.state_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            self.status_text.set("Stopped or not configured")
+        data = self._state()
+        if not data:
+            if self._requested_desired and time.monotonic() - self._requested_at < START_STATUS_GRACE_SECONDS:
+                self.status_text.set("Starting — request accepted")
+            else:
+                self.status_text.set("Stopped or not configured")
             return
+
         desired = bool(data.get("desired_running"))
+        if self._requested_desired is not None:
+            age = time.monotonic() - self._requested_at
+            if desired == self._requested_desired:
+                self._requested_desired = None
+            elif age < START_STATUS_GRACE_SECONDS:
+                desired = self._requested_desired
+            else:
+                self._requested_desired = None
+
         components = data.get("components") if isinstance(data.get("components"), dict) else {}
-        ready = [name for name, state in components.items() if isinstance(state, dict) and state.get("ready")]
+        ready = [
+            name
+            for name, state in components.items()
+            if isinstance(state, dict) and state.get("ready")
+        ]
+        running = [
+            name
+            for name, state in components.items()
+            if isinstance(state, dict) and state.get("running")
+        ]
         total = len(components)
         error = str(data.get("last_error") or "").strip()
         if error:
@@ -447,6 +582,8 @@ class DjGooLauncher:
             self.status_text.set(f"Running — {', '.join(sorted(ready))}")
         elif desired:
             self.status_text.set(f"Starting — {len(ready)}/{total or 3} components ready")
+        elif running:
+            self.status_text.set(f"Stopping — {', '.join(sorted(running))}")
         else:
             self.status_text.set("Stopped")
 
@@ -456,8 +593,15 @@ class DjGooLauncher:
 
     @staticmethod
     def open_path(path: Path) -> None:
-        path.mkdir(parents=True, exist_ok=True)
-        os.startfile(path) if os.name == "nt" else webbrowser.open(path.as_uri())
+        if path.exists():
+            target = path
+        elif path.suffix:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            target = path.parent
+        else:
+            path.mkdir(parents=True, exist_ok=True)
+            target = path
+        os.startfile(target) if os.name == "nt" else webbrowser.open(target.as_uri())
 
 
 def main() -> int:
