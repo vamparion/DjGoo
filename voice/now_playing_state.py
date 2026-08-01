@@ -15,9 +15,19 @@ class NowPlayingState:
     def publish(self, guild_id: int, payload: Mapping[str, Any]) -> None:
         with self._lock:
             state = self.read_all()
+            previous_order = max(
+                (
+                    int(item.get("updated_at_ns") or 0)
+                    for item in state.values()
+                    if isinstance(item, dict)
+                ),
+                default=0,
+            )
+            updated_at_ns = max(time.time_ns(), previous_order + 1)
             state[str(int(guild_id))] = {
                 "guild_id": int(guild_id),
-                "updated_at": time.time(),
+                "updated_at": updated_at_ns / 1_000_000_000,
+                "updated_at_ns": updated_at_ns,
                 **dict(payload),
             }
             self._write(state)
@@ -40,7 +50,13 @@ class NowPlayingState:
         values = [value for value in self.read_all().values() if isinstance(value, dict)]
         if not values:
             return None
-        return max(values, key=lambda item: float(item.get("updated_at") or 0))
+        return max(
+            values,
+            key=lambda item: (
+                int(item.get("updated_at_ns") or 0),
+                float(item.get("updated_at") or 0),
+            ),
+        )
 
     def _write(self, state: dict[str, dict[str, Any]]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
