@@ -9,7 +9,10 @@ import sys
 import time
 from pathlib import Path
 
-from tools.red_lavalink_contract import ensure_red_lavalink_contract
+from tools.red_lavalink_contract import (
+    ensure_red_lavalink_contract,
+    write_red_application_yml,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -169,9 +172,13 @@ def build(output: Path, runtime_python: Path, runtime_java: Path, lavalink_jar: 
     lavalink_dir = output / "data" / "discordbot" / "cogs" / "Audio"
     lavalink_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(selected_jar, lavalink_dir / "Lavalink.jar")
-    lavalink_config = output / "config" / "lavalink.application.yml"
-    if lavalink_config.exists():
-        shutil.copy2(lavalink_config, lavalink_dir / "application.yml")
+    write_red_application_yml(
+        runtime_python=runtime_python_executable,
+        output=lavalink_dir / "application.yml",
+        bind_host="::1",
+        port=2333,
+        password="youshallnotpass",
+    )
     for relative in (
         "config",
         "data",
