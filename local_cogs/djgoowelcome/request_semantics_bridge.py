@@ -25,6 +25,7 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
         )
         self._pending_request_context: dict[int, dict[str, Any]] = {}
         self._active_request_metadata: dict[int, dict[str, Any]] = {}
+        self._station_enqueue_depth: dict[int, int] = {}
 
     def _request_metadata(
         self,
@@ -158,9 +159,10 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
                 requested_track,
             )
             if timing == "later":
-                self._place_later_request_before_radio(
+                self._place_request_before_radio(
                     ctx.guild.id,
                     requested_track,
+                    force_front=False,
                 )
 
         data = self._track_data(requested_track)
@@ -190,6 +192,79 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
         )
         return notice
 
+    async def _top_up_station_queue(self, guild_id: int) -> None:
+        numeric_guild_id = int(guild_id)
+        self._station_enqueue_depth[numeric_guild_id] = (
+            self._station_enqueue_depth.get(numeric_guild_id, 0) + 1
+        )
+        try:
+            await super()._top_up_station_queue(numeric_guild_id)
+        finally:
+            remaining = self._station_enqueue_depth.get(numeric_guild_id, 1) - 1
+            if remaining > 0:
+                self._station_enqueue_depth[numeric_guild_id] = remaining
+            else:
+                self._station_enqueue_depth.pop(numeric_guild_id, None)
+
+    async def handle_track_enqueue(self, guild: Any, track: Any) -> None:
+        await super().handle_track_enqueue(guild, track)
+        guild_id = int(guild.id)
+        if self.stations.get_active(guild_id) is None:
+            return
+        if self._station_enqueue_depth.get(guild_id, 0) > 0:
+            return
+        if guild_id in self._pending_request_context:
+            return
+
+        track_key = self._track_key(track)
+        if not track_key or track_key in self.request_ledger.pending_keys(guild_id):
+            return
+
+        requester = getattr(track, "requester", None)
+        requester_id = int(getattr(requester, "id", requester or 0) or 0)
+        bot_user_id = int(getattr(getattr(self.bot, "user", None), "id", 0) or 0)
+        if requester_id and requester_id == bot_user_id:
+            return
+        requester_name = str(
+            getattr(requester, "display_name", "")
+            or getattr(requester, "name", "")
+            or "Discord player"
+        )[:100]
+        extras = getattr(track, "extras", {}) or {}
+        try:
+            force_front = bool(extras.get("bumped"))
+        except AttributeError:
+            force_front = False
+
+        super()._remember_radio_request(guild_id, track)
+        data = self._track_data(track)
+        self.request_ledger.add(
+            guild_id,
+            track_key=track_key,
+            title=str(data.get("title") or ""),
+            timing="next",
+            requester_id=requester_id,
+            requester_name=requester_name,
+        )
+        self._place_request_before_radio(
+            guild_id,
+            track,
+            force_front=force_front,
+        )
+        self._persist_player_state(
+            guild_id,
+            reason="native_discord_request_enqueued",
+        )
+        self._publish_now_playing(guild_id)
+        log_event(
+            "request.native_discord.detected",
+            guild_id=guild_id,
+            requester_id=requester_id,
+            requester_name=requester_name,
+            force_front=force_front,
+            track=data,
+        )
+
     def _player_identity_snapshot(
         self,
         guild_id: int,
@@ -204,10 +279,12 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
             track_ids.add(id(player.current))
         return queue_ids, track_ids
 
-    def _place_later_request_before_radio(
+    def _place_request_before_radio(
         self,
         guild_id: int,
         requested_track: Any,
+        *,
+        force_front: bool,
     ) -> None:
         try:
             player = lavalink.get_player(guild_id)
@@ -217,13 +294,16 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
         if requested_track not in queue:
             return
         queue.remove(requested_track)
-        known_request_keys = self.request_ledger.pending_keys(guild_id)
-        insert_at = 0
-        for index, track in enumerate(queue):
-            if self._track_key(track) not in known_request_keys:
-                insert_at = index
-                break
-            insert_at = index + 1
+        if force_front:
+            insert_at = 0
+        else:
+            known_request_keys = self.request_ledger.pending_keys(guild_id)
+            insert_at = 0
+            for index, queued_track in enumerate(queue):
+                if self._track_key(queued_track) not in known_request_keys:
+                    insert_at = index
+                    break
+                insert_at = index + 1
         queue.insert(insert_at, requested_track)
         player.queue.clear()
         player.queue.extend(queue)
