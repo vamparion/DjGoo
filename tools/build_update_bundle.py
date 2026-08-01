@@ -35,6 +35,12 @@ EXCLUDED_PARTS = {"__pycache__", ".git", ".github"}
 EXCLUDED_SUFFIXES = {".pyc", ".pyo"}
 BUNDLE_NAME = "DjGoo-Host-update.zip"
 MANIFEST_NAME = "DjGoo-Host-update.json"
+VERSION_PATTERN = re.compile(
+    r"\d+\.\d+\.\d+"
+    r"(?:-(?:(?:alpha|beta|rc)\.\d+|dev))?"
+    r"(?:\+[0-9A-Za-z.-]+)?",
+    re.IGNORECASE,
+)
 
 
 class UpdateBundleError(RuntimeError):
@@ -109,7 +115,7 @@ def build_update_bundle(
 ) -> dict[str, object]:
     root = package_root.resolve()
     normalized_version = str(version).strip().lstrip("v")
-    if not re.fullmatch(r"\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?(?:\+[0-9A-Za-z.-]+)?", normalized_version):
+    if not VERSION_PATTERN.fullmatch(normalized_version):
         raise UpdateBundleError(f"Invalid update version: {version}")
 
     files = collect_update_files(root)
