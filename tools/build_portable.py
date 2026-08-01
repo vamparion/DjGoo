@@ -9,13 +9,17 @@ import sys
 import time
 from pathlib import Path
 
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from tools.red_lavalink_contract import (
     ensure_red_lavalink_contract,
     write_red_application_yml,
 )
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 COPY_DIRECTORIES = ("config", "control_panel_dist", "launcher", "local_cogs", "tools", "voice")
 COPY_FILES = (
     "LICENSE",
