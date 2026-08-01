@@ -4,6 +4,7 @@ import hashlib
 import re
 import shutil
 import subprocess
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -65,6 +66,31 @@ def red_lavalink_pin(runtime_python: Path) -> str:
     return output
 
 
+def red_youtube_plugin_pin(runtime_python: Path) -> str:
+    command = [
+        str(runtime_python),
+        "-c",
+        (
+            "from redbot.cogs.audio.managed_node.version_pins import YT_PLUGIN_VERSION; "
+            "print(str(YT_PLUGIN_VERSION))"
+        ),
+    ]
+    try:
+        output = subprocess.check_output(
+            command,
+            text=True,
+            stderr=subprocess.STDOUT,
+            timeout=30,
+        ).strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise LavalinkContractError(
+            f"Could not read Red's YouTube plugin pin: {exc}"
+        ) from exc
+    if not output:
+        raise LavalinkContractError("Red returned an empty YouTube plugin pin")
+    return output
+
+
 def reported_lavalink_version(java: Path, jar: Path) -> str:
     if not jar.is_file():
         raise LavalinkContractError(f"Lavalink jar is missing: {jar}")
@@ -111,6 +137,56 @@ def download_exact_lavalink(version: str, destination: Path) -> str:
     return url
 
 
+def write_red_application_yml(
+    *,
+    runtime_python: Path,
+    output: Path,
+    bind_host: str = "::1",
+    port: int = 2333,
+    password: str = "youshallnotpass",
+) -> None:
+    """Generate application.yml using Red's own managed-node schema and pins."""
+
+    script = """
+from pathlib import Path
+import sys
+import yaml
+from redbot.cogs.audio.managed_node.ll_server_config import get_default_server_config
+
+data = get_default_server_config()
+data['server']['address'] = sys.argv[2]
+data['server']['port'] = int(sys.argv[3])
+data['lavalink']['server']['password'] = sys.argv[4]
+Path(sys.argv[1]).write_text(yaml.safe_dump(data, sort_keys=False), encoding='utf-8')
+"""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(
+            [
+                str(runtime_python),
+                "-c",
+                script,
+                str(output),
+                bind_host,
+                str(port),
+                password,
+            ],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=45,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise LavalinkContractError(
+            f"Could not generate Red-compatible application.yml: {exc}"
+        ) from exc
+    if not output.is_file() or output.stat().st_size < 500:
+        raise LavalinkContractError(
+            f"Generated Lavalink configuration is missing or unexpectedly small: {output}"
+        )
+
+
 def ensure_red_lavalink_contract(
     *,
     runtime_python: Path,
@@ -120,7 +196,9 @@ def ensure_red_lavalink_contract(
 ) -> dict[str, str | int]:
     """Select and verify the exact Lavalink jar pinned by packaged Red."""
 
-    pin = red_lavalink_pin(runtime_python.resolve())
+    runtime_python = runtime_python.resolve()
+    pin = red_lavalink_pin(runtime_python)
+    youtube_pin = red_youtube_plugin_pin(runtime_python)
     java = java_executable(runtime_java.resolve())
     source = candidate_jar.resolve()
     source_version = ""
@@ -146,6 +224,7 @@ def ensure_red_lavalink_contract(
 
     return {
         "red_lavalink_version": pin,
+        "youtube_plugin_version": youtube_pin,
         "lavalink_version": actual,
         "lavalink_sha256": sha256_file(output_jar),
         "lavalink_size": output_jar.stat().st_size,
