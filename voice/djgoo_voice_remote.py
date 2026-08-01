@@ -6,7 +6,6 @@ import math
 import sys
 from pathlib import Path
 
-import numpy as np
 from faster_whisper import WhisperModel
 
 from voice.audio_capture import PushToTalkAudioCapture, audio_metrics, prepare_for_whisper
@@ -22,7 +21,13 @@ from voice.djgoo_voice_listener import (
 )
 from voice.listener_settings import voice_settings
 from voice.operational_log import log_event
-from voice.remote_transport import RemoteGatewayTransport, load_credential, save_credential
+from voice.relay_transport import RelayTransport
+from voice.remote_transport import (
+    RemoteGatewayTransport,
+    load_credential,
+    save_credential,
+    transport_for_credential,
+)
 
 
 def remote_config_path(project_root: Path) -> Path:
@@ -42,17 +47,37 @@ def load_remote_settings(project_root: Path) -> dict:
     return voice_settings(voice_config, project_root)
 
 
-async def pair_device(project_root: Path, gateway_url: str, code: str, fingerprint: str, device_name: str) -> None:
-    credential = await RemoteGatewayTransport.pair(
-        gateway_url,
-        code,
-        fingerprint,
-        device_name=device_name,
-    )
+async def pair_device(
+    project_root: Path,
+    *,
+    transport: str,
+    endpoint: str,
+    code: str,
+    security_value: str,
+    device_name: str,
+    room_id: str = "",
+    host_public_key: str = "",
+) -> None:
+    if transport == "relay":
+        credential = await RelayTransport.pair(
+            endpoint,
+            room_id,
+            code,
+            host_public_key,
+            security_value,
+            device_name=device_name,
+        )
+    else:
+        credential = await RemoteGatewayTransport.pair(
+            endpoint,
+            code,
+            security_value,
+            device_name=device_name,
+        )
     save_credential(remote_config_path(project_root), credential)
     print(
-        f"Paired as Discord user {credential.discord_user_id} in guild {credential.guild_id}. "
-        f"Device ID: {credential.device_id}",
+        f"Paired through {transport} as Discord user {credential.discord_user_id} "
+        f"in guild {credential.guild_id}. Device ID: {credential.device_id}",
         flush=True,
     )
 
@@ -62,19 +87,21 @@ def run_remote(project_root: Path) -> None:
     if not credential_path.exists():
         raise RuntimeError("This Voice Remote is not paired. Open DjGoo Voice and enter a pairing code first.")
     credential = load_credential(credential_path)
-    transport = RemoteGatewayTransport(credential)
+    transport = transport_for_credential(credential)
     settings = load_remote_settings(project_root)
     input_device = resolve_input_device(settings["input_device"])
     corrections = load_corrections(project_root, settings["corrections"])
     dynamic_hotwords = " ".join(
         part for part in (settings["hotwords"], correction_hotwords(corrections)) if part.strip()
     )
+    endpoint = getattr(credential, "relay_url", None) or getattr(credential, "gateway_url", None)
 
     log_event(
         "voice.remote.starting",
+        transport=getattr(credential, "transport", "direct"),
         device_id=credential.device_id,
         guild_id=credential.guild_id,
-        gateway_url=credential.gateway_url,
+        endpoint=endpoint,
         model=settings["model_name"],
         device=settings["device"],
         compute_type=settings["compute_type"],
@@ -167,16 +194,30 @@ def main() -> int:
     parser.add_argument("--project-root", default=str(Path(__file__).resolve().parents[1]))
     subparsers = parser.add_subparsers(dest="action", required=True)
     pair_parser = subparsers.add_parser("pair")
-    pair_parser.add_argument("--gateway", required=True)
+    pair_parser.add_argument("--transport", choices=("direct", "relay"), default="direct")
+    pair_parser.add_argument("--endpoint", required=True)
     pair_parser.add_argument("--code", required=True)
-    pair_parser.add_argument("--fingerprint", required=True)
+    pair_parser.add_argument("--security", required=True)
+    pair_parser.add_argument("--room-id", default="")
+    pair_parser.add_argument("--host-public-key", default="")
     pair_parser.add_argument("--device-name", default="DjGoo Voice Remote")
     subparsers.add_parser("run")
     args = parser.parse_args()
     project_root = Path(args.project_root).resolve()
 
     if args.action == "pair":
-        asyncio.run(pair_device(project_root, args.gateway, args.code, args.fingerprint, args.device_name))
+        asyncio.run(
+            pair_device(
+                project_root,
+                transport=args.transport,
+                endpoint=args.endpoint,
+                code=args.code,
+                security_value=args.security,
+                device_name=args.device_name,
+                room_id=args.room_id,
+                host_public_key=args.host_public_key,
+            )
+        )
         return 0
     if args.action == "run":
         run_remote(project_root)
