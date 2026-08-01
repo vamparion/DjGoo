@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import threading
 import time
+import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +21,8 @@ from voice.tls_identity import TlsIdentity
 MAX_BODY_BYTES = 16_384
 MAX_COMMANDS_PER_WINDOW = 12
 RATE_WINDOW_SECONDS = 10.0
+MAX_COMMAND_AGE_SECONDS = 300.0
+MAX_CLOCK_SKEW_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -160,11 +164,28 @@ class VoiceCommandGateway:
 
         payload = await self._json(request)
         command_id = str(payload.get("command_id") or "")
+        try:
+            uuid.UUID(command_id)
+        except (ValueError, AttributeError):
+            raise web.HTTPBadRequest(text="A valid command UUID is required")
+
         intent = str(payload.get("intent") or "").strip()
         if not intent or len(intent) > 64:
             raise web.HTTPBadRequest(text="A valid intent is required")
         if str(payload.get("guild_id") or identity.guild_id) != str(identity.guild_id):
             raise web.HTTPForbidden(text="Device is not paired to that guild")
+
+        now = time.time()
+        try:
+            created_at = float(payload.get("created_at") or now)
+            confidence = float(payload.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            raise web.HTTPBadRequest(text="Invalid command timestamp or confidence")
+        if not math.isfinite(created_at) or not math.isfinite(confidence):
+            raise web.HTTPBadRequest(text="Invalid command timestamp or confidence")
+        if created_at < now - MAX_COMMAND_AGE_SECONDS or created_at > now + MAX_CLOCK_SKEW_SECONDS:
+            raise web.HTTPBadRequest(text="Command timestamp is stale or too far in the future")
+        confidence = min(1.0, max(0.0, confidence))
 
         authorization = await self.authorize(identity, intent)
         if not authorization.allowed:
@@ -181,7 +202,7 @@ class VoiceCommandGateway:
         item = {
             "type": "command",
             "source": "voice_remote",
-            "created_at": float(payload.get("created_at") or time.time()),
+            "created_at": created_at,
             "command_id": command_id,
             "device_id": identity.device_id,
             "user_id": identity.user_id,
@@ -191,7 +212,7 @@ class VoiceCommandGateway:
             "query": str(payload.get("query") or "")[:500],
             "playlist": str(payload.get("playlist") or "")[:200],
             "value": payload.get("value"),
-            "confidence": float(payload.get("confidence") or 0.0),
+            "confidence": confidence,
             "raw": str(payload.get("raw") or "")[:1000],
         }
         with self._queue_lock:
