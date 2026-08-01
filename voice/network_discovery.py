@@ -44,14 +44,14 @@ def lan_addresses() -> list[str]:
             continue
         if not isinstance(address, ipaddress.IPv4Address):
             continue
-        if address.is_loopback or address.is_unspecified or address.is_multicast:
+        if (
+            address.is_loopback
+            or address.is_unspecified
+            or address.is_multicast
+            or address.is_link_local
+        ):
             continue
-        if address.is_private:
-            rank = 0
-        elif address.is_link_local:
-            rank = 2
-        else:
-            rank = 1
+        rank = 0 if address.is_private else 1
         ranked.append((rank, value))
     return [value for _rank, value in sorted(ranked)]
 
