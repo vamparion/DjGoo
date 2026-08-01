@@ -124,10 +124,20 @@ class DjGooWelcome(commands.Cog):
 
     async def _command_queue_loop(self) -> None:
         await self.bot.wait_until_red_ready()
-        log_event("redbot.ready", guild_count=len(self.bot.guilds))
+        log_event("redbot.ready", guild_count=len(self.bot.guilds), audio_loaded=self.bot.get_cog("Audio") is not None)
         await self._audio_bridge.resume_saved_playback()
+        next_heartbeat = 0.0
         while True:
             try:
+                now = time.monotonic()
+                if now >= next_heartbeat:
+                    log_event(
+                        "redbot.heartbeat",
+                        guild_count=len(self.bot.guilds),
+                        audio_loaded=self.bot.get_cog("Audio") is not None,
+                    )
+                    next_heartbeat = now + 5.0
+
                 items = drain_queue(self._queue_path())
                 if items:
                     log_event("voice.queue.drained", count=len(items), queue_path=str(self._queue_path()))
