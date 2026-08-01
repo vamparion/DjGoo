@@ -9,6 +9,8 @@ import sys
 import time
 from pathlib import Path
 
+from tools.red_lavalink_contract import ensure_red_lavalink_contract
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 COPY_DIRECTORIES = ("config", "control_panel_dist", "launcher", "local_cogs", "tools", "voice")
@@ -22,7 +24,7 @@ COPY_FILES = (
 )
 EXCLUDED_SUFFIXES = {".ps1", ".vbs", ".pyc"}
 EXCLUDED_NAMES = {"__pycache__", ".git", ".github", ".venv", ".voice-venv", "node_modules"}
-RUNTIME_GENERATION = 2
+RUNTIME_GENERATION = 3
 
 
 def ignore_copy(directory: str, names: list[str]) -> set[str]:
@@ -96,6 +98,21 @@ def write_installed_version(output: Path, version: str) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def write_lavalink_contract(output: Path, contract: dict[str, object]) -> None:
+    path = output / "data" / "lavalink-contract.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": 1,
+        "red_package": "Red-DiscordBot==3.5.24",
+        "connection_mode": "external",
+        "client_host": "[::1]",
+        "bind_host": "::1",
+        "port": 2333,
+        **contract,
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
 def write_manifest(output: Path, version: str) -> None:
     files: list[dict[str, object]] = []
     for path in sorted(item for item in output.rglob("*") if item.is_file()):
@@ -137,9 +154,21 @@ def build(output: Path, runtime_python: Path, runtime_java: Path, lavalink_jar: 
     copy_tree(runtime_python, output / "runtime" / "python")
     copy_tree(runtime_java, output / "runtime" / "java")
 
+    selected_jar = output.parent / "Lavalink-red-pinned.jar"
+    selected_jar.unlink(missing_ok=True)
+    runtime_python_executable = output / "runtime" / "python" / "python.exe"
+    if not runtime_python_executable.exists():
+        runtime_python_executable = output / "runtime" / "python" / "python"
+    contract = ensure_red_lavalink_contract(
+        runtime_python=runtime_python_executable,
+        runtime_java=output / "runtime" / "java",
+        candidate_jar=lavalink_jar,
+        output_jar=selected_jar,
+    )
+
     lavalink_dir = output / "data" / "discordbot" / "cogs" / "Audio"
     lavalink_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(lavalink_jar, lavalink_dir / "Lavalink.jar")
+    shutil.copy2(selected_jar, lavalink_dir / "Lavalink.jar")
     lavalink_config = output / "config" / "lavalink.application.yml"
     if lavalink_config.exists():
         shutil.copy2(lavalink_config, lavalink_dir / "application.yml")
@@ -156,6 +185,7 @@ def build(output: Path, runtime_python: Path, runtime_java: Path, lavalink_jar: 
     ):
         (output / relative).mkdir(parents=True, exist_ok=True)
 
+    write_lavalink_contract(output, contract)
     build_launcher(output)
     write_installed_version(output, version)
     write_manifest(output, version)
