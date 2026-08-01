@@ -124,8 +124,18 @@ jobs:
 
           Verify the ZIP with its matching SHA-256 checksum file before testing.
           EOF
-          gh release create "$tag" release-assets/* \
-            --target "$GITHUB_SHA" \
-            --prerelease \
-            --title "DjGoo $tag (Alpha)" \
-            --notes-file release-notes.md
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" release-assets/* --clobber
+            gh release edit "$tag" \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "DjGoo $tag (Alpha)" \
+              --notes-file release-notes.md
+          else
+            gh release create "$tag" release-assets/* \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "DjGoo $tag (Alpha)" \
+              --notes-file release-notes.md
+          fi
