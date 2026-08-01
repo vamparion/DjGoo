@@ -9,7 +9,21 @@ import time
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
-from tkinter import BOTH, END, LEFT, RIGHT, X, Button, Frame, Label, StringVar, Text, Tk, messagebox
+from tkinter import (
+    BOTH,
+    END,
+    LEFT,
+    RIGHT,
+    X,
+    Button,
+    Frame,
+    Label,
+    StringVar,
+    Text,
+    Tk,
+    messagebox,
+    simpledialog,
+)
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +31,15 @@ if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
 from tools.portable_environment import portable_environment
+from tools.update_auth import clear_token, load_token, save_token
+from tools.update_client import (
+    AuthenticationRequired,
+    UpdateError,
+    UpdateOffer,
+    check_for_update,
+    download_update,
+    read_installed_version,
+)
 
 
 APP_NAME = "DjGoo"
@@ -65,6 +88,18 @@ class Layout:
         return self.root / "tools" / "start_redbot_selector.py"
 
     @property
+    def update_worker(self) -> Path:
+        return self.root / "tools" / "apply_update.py"
+
+    @property
+    def update_auth(self) -> Path:
+        return self.root / "config" / "update-auth.json"
+
+    @property
+    def update_result(self) -> Path:
+        return self.root / "data" / "update-result.json"
+
+    @property
     def state_file(self) -> Path:
         return self.root / "data" / "djgoo-supervisor-state.json"
 
@@ -86,21 +121,24 @@ class DjGooLauncher:
         self.root = root
         self.layout = layout
         self.status_text = StringVar(value="Checking DjGoo…")
+        self._update_busy = False
         self._build()
+        self._report_update_result()
         self.refresh_status()
         self.root.after(2500, self._poll)
 
     def _build(self) -> None:
+        version = read_installed_version(self.layout.root).text
         self.root.title("DjGoo")
-        self.root.geometry("760x520")
-        self.root.minsize(680, 460)
+        self.root.geometry("790x540")
+        self.root.minsize(700, 480)
 
         header = Frame(self.root, padx=18, pady=16)
         header.pack(fill=X)
         Label(header, text="DjGoo", font=("Segoe UI", 22, "bold")).pack(anchor="w")
         Label(
             header,
-            text="Portable game-first Discord music and voice control",
+            text=f"Portable game-first Discord music and voice control — {version}",
             font=("Segoe UI", 10),
         ).pack(anchor="w")
 
@@ -127,10 +165,9 @@ class DjGooLauncher:
         tools.pack(fill=X)
         Button(tools, text="Open logs", command=lambda: self.open_path(self.layout.logs)).pack(side=LEFT, padx=(0, 8))
         Button(tools, text="Open settings", command=lambda: self.open_path(self.layout.config)).pack(side=LEFT, padx=(0, 8))
-        Button(tools, text="Discord developer portal", command=lambda: webbrowser.open(DISCORD_APPS_URL)).pack(
-            side=LEFT, padx=(0, 8)
-        )
-        Button(tools, text="Check releases", command=lambda: webbrowser.open(RELEASES_URL)).pack(side=LEFT)
+        Button(tools, text="Check for updates", command=self.check_updates).pack(side=LEFT, padx=(0, 8))
+        Button(tools, text="Discord portal", command=lambda: webbrowser.open(DISCORD_APPS_URL)).pack(side=LEFT, padx=(0, 8))
+        Button(tools, text="Release page", command=lambda: webbrowser.open(RELEASES_URL)).pack(side=LEFT)
 
         Label(
             self.root,
@@ -149,6 +186,9 @@ class DjGooLauncher:
         stamp = time.strftime("%H:%M:%S")
         self.activity.insert(END, f"[{stamp}] {text}\n")
         self.activity.see(END)
+
+    def _thread_log(self, text: str) -> None:
+        self.root.after(0, lambda: self.log(text))
 
     def _environment(self) -> dict[str, str]:
         return portable_environment(self.layout.root, os.environ)
@@ -224,6 +264,177 @@ class DjGooLauncher:
         except OSError as exc:
             self.log(f"Could not open Redbot console: {exc}")
             messagebox.showerror(APP_NAME, str(exc))
+
+    def check_updates(self) -> None:
+        if self._update_busy:
+            self.log("An update check is already running.")
+            return
+        self._update_busy = True
+        self.log("Checking GitHub for a verified incremental update…")
+        threading.Thread(target=self._check_update_worker, daemon=True).start()
+
+    def _check_update_worker(self, token: str | None = None, prompted: bool = False) -> None:
+        token = token if token is not None else load_token(self.layout.update_auth)
+        try:
+            offer = check_for_update(self.layout.root, token)
+        except AuthenticationRequired:
+            if token:
+                clear_token(self.layout.update_auth)
+            self.root.after(0, lambda: self._request_update_token(prompted))
+            return
+        except UpdateError as exc:
+            self.root.after(0, lambda: self._finish_update_error(str(exc)))
+            return
+        except BaseException as exc:
+            self.root.after(0, lambda: self._finish_update_error(f"Unexpected update error: {exc}"))
+            return
+
+        if offer is None:
+            self.root.after(0, self._finish_no_update)
+        else:
+            self.root.after(0, lambda: self._confirm_update(offer, token))
+
+    def _request_update_token(self, already_prompted: bool) -> None:
+        if already_prompted:
+            self._finish_update_error(
+                "GitHub rejected the update token. Use a fine-grained token with read access to this repository."
+            )
+            return
+        token = simpledialog.askstring(
+            "Private DjGoo updates",
+            "This DjGoo repository is private. Enter a fine-grained GitHub token with read-only Contents access.\n\n"
+            "The token will be encrypted for this Windows account and will not be written to logs.",
+            show="*",
+            parent=self.root,
+        )
+        if not token:
+            self._update_busy = False
+            self.log("Update check cancelled.")
+            return
+        try:
+            save_token(self.layout.update_auth, token)
+        except BaseException as exc:
+            self._finish_update_error(f"Could not securely save the update token: {exc}")
+            return
+        threading.Thread(
+            target=self._check_update_worker,
+            args=(token, True),
+            daemon=True,
+        ).start()
+
+    def _finish_no_update(self) -> None:
+        self._update_busy = False
+        self.log("DjGoo is already up to date.")
+        messagebox.showinfo(APP_NAME, "DjGoo is already up to date.")
+
+    def _finish_update_error(self, error: str) -> None:
+        self._update_busy = False
+        self.log("Update failed: " + error)
+        messagebox.showerror(APP_NAME, error)
+
+    def _confirm_update(self, offer: UpdateOffer, token: str | None) -> None:
+        installed = read_installed_version(self.layout.root).text
+        approved = messagebox.askyesno(
+            APP_NAME,
+            f"DjGoo {offer.version.text} is available.\n\n"
+            f"Installed: {installed}\n"
+            f"Available: {offer.version.text}\n\n"
+            "Download and install the verified incremental update now?",
+        )
+        if not approved:
+            self._update_busy = False
+            self.log("Update declined.")
+            return
+        self.log(f"Downloading DjGoo {offer.version.text} incremental update…")
+        threading.Thread(
+            target=self._download_update_worker,
+            args=(offer, token),
+            daemon=True,
+        ).start()
+
+    def _download_update_worker(self, offer: UpdateOffer, token: str | None) -> None:
+        progress_state = {"percent": -10}
+
+        def progress(downloaded: int, total: int) -> None:
+            if total <= 0:
+                return
+            percent = min(100, int(downloaded * 100 / total))
+            bucket = percent // 10 * 10
+            if bucket > progress_state["percent"]:
+                progress_state["percent"] = bucket
+                self._thread_log(f"Update download: {bucket}%")
+
+        try:
+            bundle, manifest, _ = download_update(
+                self.layout.root,
+                offer,
+                token,
+                progress,
+            )
+        except AuthenticationRequired:
+            clear_token(self.layout.update_auth)
+            self.root.after(0, lambda: self._finish_update_error("GitHub authorization expired. Check for updates again."))
+            return
+        except UpdateError as exc:
+            self.root.after(0, lambda: self._finish_update_error(str(exc)))
+            return
+        except BaseException as exc:
+            self.root.after(0, lambda: self._finish_update_error(f"Unexpected download error: {exc}"))
+            return
+        self.root.after(0, lambda: self._launch_update_worker(bundle, manifest, offer))
+
+    def _launch_update_worker(self, bundle: Path, manifest: Path, offer: UpdateOffer) -> None:
+        if not self.layout.update_worker.exists():
+            self._finish_update_error(f"Update worker is missing: {self.layout.update_worker}")
+            return
+        command = [
+            str(self.layout.runtime_pythonw),
+            str(self.layout.update_worker),
+            "--root",
+            str(self.layout.root),
+            "--bundle",
+            str(bundle),
+            "--manifest",
+            str(manifest),
+            "--parent-pid",
+            str(os.getpid()),
+        ]
+        try:
+            subprocess.Popen(
+                command,
+                cwd=self.layout.root,
+                env=self._environment(),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                close_fds=True,
+            )
+        except OSError as exc:
+            self._finish_update_error(f"Could not start the update worker: {exc}")
+            return
+        self.log(f"Installing DjGoo {offer.version.text}; the launcher will restart.")
+        self.root.after(300, self.root.destroy)
+
+    def _report_update_result(self) -> None:
+        path = self.layout.update_result
+        if not path.exists():
+            return
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        if bool(payload.get("success")):
+            version = str(payload.get("version") or "new version")
+            self.log(f"Update completed successfully: DjGoo {version}.")
+        else:
+            error = str(payload.get("error") or "Unknown update error")
+            self.log("Previous update failed: " + error)
+            messagebox.showerror(APP_NAME, "The previous DjGoo update failed and was rolled back.\n\n" + error)
 
     def refresh_status(self) -> None:
         try:
