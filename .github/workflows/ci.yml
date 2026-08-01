@@ -12,8 +12,8 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -27,25 +27,28 @@ jobs:
             requirements-dev.txt
             requirements-voice.txt
 
-      - name: Install PortAudio runtime
-        run: sudo apt-get update && sudo apt-get install -y libportaudio2
-
       - name: Install test dependencies
+        shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
           python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed with exit $LASTEXITCODE" }
           python -m pip install --requirement requirements-dev.txt
+          if ($LASTEXITCODE -ne 0) { throw "Test dependency installation failed with exit $LASTEXITCODE" }
 
       - name: Compile Python sources
-        shell: bash
+        shell: powershell
         run: |
-          set -o pipefail
-          python -m compileall -q launcher voice tools local_cogs relay tests 2>&1 | tee compile.log
+          $ErrorActionPreference = "Stop"
+          python -m compileall -q launcher voice tools local_cogs relay tests 2>&1 | Tee-Object -FilePath compile.log
+          if ($LASTEXITCODE -ne 0) { throw "Source compilation failed with exit $LASTEXITCODE" }
 
       - name: Run complete test suite
-        shell: bash
+        shell: powershell
         run: |
-          set -o pipefail
-          python -m pytest -q 2>&1 | tee pytest.log
+          $ErrorActionPreference = "Stop"
+          python -m pytest -q 2>&1 | Tee-Object -FilePath pytest.log
+          if ($LASTEXITCODE -ne 0) { throw "Test suite failed with exit $LASTEXITCODE" }
 
       - name: Upload diagnostics
         if: always()
