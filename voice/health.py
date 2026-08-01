@@ -2,9 +2,21 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any, Mapping
+
+
+HEARTBEAT_REFRESH_SECONDS = 2.0
+HEARTBEAT_LEASE_SECONDS = {
+    "lavalink-client": 20.0,
+    "redbot": 60.0,
+    "voice": 90.0,
+}
+_HEARTBEAT_LOCK = threading.RLock()
+_HEARTBEAT_LEASES: dict[str, dict[str, Any]] = {}
+_HEARTBEAT_THREADS: set[str] = set()
 
 
 def health_directory(project_root: Path | None = None) -> Path:
@@ -16,10 +28,94 @@ def health_directory(project_root: Path | None = None) -> Path:
 
 
 def heartbeat_path(component: str, project_root: Path | None = None) -> Path:
-    safe_name = "".join(character for character in component.lower() if character.isalnum() or character in "-_")
+    safe_name = "".join(
+        character
+        for character in component.lower()
+        if character.isalnum() or character in "-_"
+    )
     if not safe_name:
         raise ValueError("Heartbeat component name cannot be empty")
     return health_directory(project_root) / f"{safe_name}.json"
+
+
+def _write_payload(
+    component: str,
+    *,
+    project_root: Path | None,
+    fields: Mapping[str, Any],
+) -> None:
+    path = heartbeat_path(component, project_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "component": component,
+        "pid": os.getpid(),
+        "timestamp": time.time(),
+        **dict(fields),
+    }
+    temp = path.with_suffix(path.suffix + ".tmp")
+    with _HEARTBEAT_LOCK:
+        temp.write_text(
+            json.dumps(payload, ensure_ascii=False, default=str) + "\n",
+            encoding="utf-8",
+        )
+        temp.replace(path)
+
+
+def _lease_is_active(
+    component: str,
+    *,
+    source_monotonic: float,
+    now_monotonic: float,
+) -> bool:
+    lease = float(HEARTBEAT_LEASE_SECONDS.get(component, 0.0))
+    return lease > 0 and 0.0 <= now_monotonic - source_monotonic <= lease
+
+
+def _refresh_heartbeat_lease_once(component: str) -> bool:
+    with _HEARTBEAT_LOCK:
+        state = dict(_HEARTBEAT_LEASES.get(component) or {})
+    if not state:
+        return False
+    if not _lease_is_active(
+        component,
+        source_monotonic=float(state["source_monotonic"]),
+        now_monotonic=time.monotonic(),
+    ):
+        with _HEARTBEAT_LOCK:
+            _HEARTBEAT_LEASES.pop(component, None)
+        return False
+    _write_payload(
+        component,
+        project_root=state.get("project_root"),
+        fields=state.get("fields") or {},
+    )
+    return True
+
+
+def _heartbeat_lease_loop(component: str) -> None:
+    try:
+        while True:
+            time.sleep(HEARTBEAT_REFRESH_SECONDS)
+            if not _refresh_heartbeat_lease_once(component):
+                return
+    finally:
+        with _HEARTBEAT_LOCK:
+            _HEARTBEAT_THREADS.discard(component)
+
+
+def _ensure_heartbeat_lease_thread(component: str) -> None:
+    if component not in HEARTBEAT_LEASE_SECONDS:
+        return
+    with _HEARTBEAT_LOCK:
+        if component in _HEARTBEAT_THREADS:
+            return
+        _HEARTBEAT_THREADS.add(component)
+    threading.Thread(
+        target=_heartbeat_lease_loop,
+        args=(component,),
+        name=f"djgoo-heartbeat-{component}",
+        daemon=True,
+    ).start()
 
 
 def write_heartbeat(
@@ -28,20 +124,27 @@ def write_heartbeat(
     project_root: Path | None = None,
     fields: Mapping[str, Any] | None = None,
 ) -> None:
-    path = heartbeat_path(component, project_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "component": component,
-        "pid": os.getpid(),
-        "timestamp": time.time(),
-        **dict(fields or {}),
-    }
-    temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_text(json.dumps(payload, ensure_ascii=False, default=str) + "\n", encoding="utf-8")
-    temp.replace(path)
+    heartbeat_fields = dict(fields or {})
+    _write_payload(
+        component,
+        project_root=project_root,
+        fields=heartbeat_fields,
+    )
+    if component in HEARTBEAT_LEASE_SECONDS:
+        with _HEARTBEAT_LOCK:
+            _HEARTBEAT_LEASES[component] = {
+                "source_monotonic": time.monotonic(),
+                "project_root": project_root,
+                "fields": heartbeat_fields,
+            }
+        _ensure_heartbeat_lease_thread(component)
 
 
-def read_heartbeat(component: str, *, project_root: Path | None = None) -> dict[str, Any] | None:
+def read_heartbeat(
+    component: str,
+    *,
+    project_root: Path | None = None,
+) -> dict[str, Any] | None:
     path = heartbeat_path(component, project_root)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
