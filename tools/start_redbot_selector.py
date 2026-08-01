@@ -30,14 +30,14 @@ def _ipv6_socketpair(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0):
     return client, server
 
 
-socket.socketpair = _ipv6_socketpair
+def apply_runtime_patches() -> None:
+    socket.socketpair = _ipv6_socketpair
+    if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    from redbot.cogs.audio.managed_node import ll_server_config
 
-from redbot.cogs.audio.managed_node import ll_server_config
-
-ll_server_config.DEFAULT_LAVALINK_YAML["yaml__server__address"] = "::1"
+    ll_server_config.DEFAULT_LAVALINK_YAML["yaml__server__address"] = "::1"
 
 
 def redbot_argv(project_root: Path = PROJECT_ROOT) -> list[str]:
@@ -53,6 +53,7 @@ def redbot_argv(project_root: Path = PROJECT_ROOT) -> list[str]:
 
 
 def main() -> None:
+    apply_runtime_patches()
     sys.argv = redbot_argv(PROJECT_ROOT)
     runpy.run_module("redbot", run_name="__main__")
 
