@@ -1,21 +1,26 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import os
 import shutil
 import subprocess
-import sys
 import time
 import traceback
 import zipfile
+from ctypes import wintypes
 from pathlib import Path, PurePosixPath
 from typing import Callable, Iterable, Mapping
 
 
 REPLACE_TIMEOUT_SECONDS = 30.0
 PARENT_EXIT_TIMEOUT_SECONDS = 30.0
+PROCESS_SYNCHRONIZE = 0x00100000
+WAIT_OBJECT_0 = 0x00000000
+WAIT_TIMEOUT = 0x00000102
+WAIT_FAILED = 0xFFFFFFFF
 
 
 class UpdateApplyError(RuntimeError):
@@ -146,7 +151,37 @@ def extract_verified_bundle(
                 raise UpdateApplyError(f"Extracted file verification failed for {relative}")
 
 
-def _process_exists(pid: int) -> bool:
+def _wait_for_windows_process(pid: int, timeout: float) -> None:
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    handle = kernel32.OpenProcess(PROCESS_SYNCHRONIZE, False, pid)
+    if not handle:
+        error = ctypes.get_last_error()
+        if error in {87, 1168}:
+            return
+        raise UpdateApplyError(f"Could not wait for DjGoo launcher process {pid} (Windows error {error})")
+    try:
+        result = kernel32.WaitForSingleObject(handle, max(0, int(timeout * 1000)))
+    finally:
+        kernel32.CloseHandle(handle)
+    if result == WAIT_OBJECT_0:
+        return
+    if result == WAIT_TIMEOUT:
+        raise UpdateApplyError(f"DjGoo launcher process {pid} did not exit in time")
+    if result == WAIT_FAILED:
+        raise UpdateApplyError(
+            f"Could not wait for DjGoo launcher process {pid} (Windows error {ctypes.get_last_error()})"
+        )
+    raise UpdateApplyError(f"Unexpected wait result {result} for DjGoo launcher process {pid}")
+
+
+def _process_exists_posix(pid: int) -> bool:
     if pid <= 0:
         return False
     try:
@@ -161,8 +196,13 @@ def _process_exists(pid: int) -> bool:
 
 
 def wait_for_process_exit(pid: int, timeout: float = PARENT_EXIT_TIMEOUT_SECONDS) -> None:
+    if pid <= 0:
+        return
+    if os.name == "nt":
+        _wait_for_windows_process(pid, timeout)
+        return
     deadline = time.monotonic() + timeout
-    while _process_exists(pid):
+    while _process_exists_posix(pid):
         if time.monotonic() >= deadline:
             raise UpdateApplyError(f"DjGoo launcher process {pid} did not exit in time")
         time.sleep(0.2)
@@ -258,14 +298,23 @@ def _write_json(path: Path, payload: Mapping[str, object]) -> None:
     os.replace(temporary, path)
 
 
-def stop_stack(root: Path, log: Callable[[str], None]) -> None:
+def stack_was_running(root: Path) -> bool:
+    try:
+        payload = json.loads((root / "data" / "djgoo-supervisor-state.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(payload.get("desired_running")) if isinstance(payload, dict) else False
+
+
+def invoke_stack(root: Path, action: str, log: Callable[[str], None]) -> None:
     python = root / "runtime" / "python" / "python.exe"
     stack = root / "tools" / "djgoo_stack.py"
     if not python.exists() or not stack.exists():
+        log(f"Stack {action} skipped because the runtime or supervisor is missing.")
         return
     try:
         completed = subprocess.run(
-            [str(python), str(stack), "stop"],
+            [str(python), str(stack), action],
             cwd=root,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -273,9 +322,9 @@ def stop_stack(root: Path, log: Callable[[str], None]) -> None:
             timeout=20,
             check=False,
         )
-        log(f"Requested stack stop (exit {completed.returncode}).")
+        log(f"Requested stack {action} (exit {completed.returncode}).")
     except (OSError, subprocess.TimeoutExpired) as exc:
-        log(f"Stack stop request could not complete: {exc}")
+        log(f"Stack {action} request could not complete: {exc}")
 
 
 def restart_launcher(root: Path, log: Callable[[str], None]) -> None:
@@ -310,7 +359,8 @@ def run_update(root: Path, bundle: Path, manifest_path: Path, parent_pid: int) -
             stream.write(f"[{stamp}] {message}\n")
 
     started_at = time.time()
-    stop_stack(root, log)
+    resume_stack = stack_was_running(root)
+    invoke_stack(root, "stop", log)
     try:
         manifest = load_manifest(manifest_path)
         expected = validate_bundle(bundle, manifest)
@@ -330,6 +380,8 @@ def run_update(root: Path, bundle: Path, manifest_path: Path, parent_pid: int) -
                 "installed_at": time.time(),
             },
         )
+        if resume_stack:
+            invoke_stack(root, "start", log)
         _write_json(
             result_path,
             {
@@ -339,6 +391,7 @@ def run_update(root: Path, bundle: Path, manifest_path: Path, parent_pid: int) -
                 "started_at": started_at,
                 "finished_at": time.time(),
                 "backup": str(backup),
+                "resumed_stack": resume_stack,
             },
         )
         log(f"Successfully installed DjGoo {version}.")
@@ -348,6 +401,8 @@ def run_update(root: Path, bundle: Path, manifest_path: Path, parent_pid: int) -
     except BaseException as exc:
         detail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
         log("Update failed:\n" + detail)
+        if resume_stack:
+            invoke_stack(root, "start", log)
         try:
             _write_json(
                 result_path,
@@ -357,6 +412,7 @@ def run_update(root: Path, bundle: Path, manifest_path: Path, parent_pid: int) -
                     "error": str(exc),
                     "started_at": started_at,
                     "finished_at": time.time(),
+                    "resumed_stack": resume_stack,
                 },
             )
         except OSError:
