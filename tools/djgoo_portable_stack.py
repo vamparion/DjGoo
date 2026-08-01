@@ -43,6 +43,13 @@ def _process_cmdline(process: Any) -> list[str]:
         return []
 
 
+def _process_cwd(process: Any) -> Path | None:
+    try:
+        return Path(str(process.cwd())).resolve()
+    except (psutil.Error, OSError, TypeError, ValueError):
+        return None
+
+
 def _process_matches_spec(process: Any, spec: Any) -> bool:
     cmdline = " ".join(_process_cmdline(process)).lower()
     if not cmdline:
@@ -50,9 +57,30 @@ def _process_matches_spec(process: Any, spec: Any) -> bool:
     return all(str(marker).lower() in cmdline for marker in tuple(spec.command_markers))
 
 
+def _lavalink_directory(project_root: Path) -> Path:
+    return (
+        project_root.resolve()
+        / "data"
+        / "discordbot"
+        / "cogs"
+        / "Audio"
+    ).resolve()
+
+
 def _process_is_package_lavalink(process: Any, project_root: Path) -> bool:
     command = " ".join(_process_cmdline(process)).lower()
-    return "lavalink.jar" in command and str(project_root.resolve()).lower() in command
+    if "lavalink.jar" not in command:
+        return False
+
+    root = project_root.resolve()
+    if str(root).lower() in command:
+        return True
+
+    # Red Audio's managed-node launcher can use a relative command such as
+    # ``java -jar Lavalink.jar`` while setting cwd to its Audio data directory.
+    # That process still belongs to this package even though the full project
+    # path is absent from its command line.
+    return _process_cwd(process) == _lavalink_directory(root)
 
 
 def _connection_port(connection: Any) -> int | None:
@@ -160,7 +188,7 @@ def _terminate_process_tree(process: Any) -> None:
 
 
 def _adopt_lavalink_listener(core: Any, spec: Any) -> bool:
-    matches = _matching_processes(spec)
+    matches = _matching_package_lavalink_processes(core.PROJECT_ROOT)
     exact_listeners = [
         process for process in matches if _process_listens_on(process, LAVALINK_PORT)
     ]
@@ -190,7 +218,7 @@ def _adopt_lavalink_listener(core: Any, spec: Any) -> bool:
         reason=reason,
     )
 
-    for duplicate in _matching_processes(spec):
+    for duplicate in _matching_package_lavalink_processes(core.PROJECT_ROOT):
         if int(duplicate.pid) == int(listener.pid):
             continue
         core.LOG.event(
@@ -324,7 +352,7 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
     core.VOICE_PYTHON = runtime_python
     core.PYTHONW = runtime_pythonw if runtime_pythonw.exists() else runtime_python
     core.REDBOT_SELECTOR = root / "tools" / "start_redbot_selector.py"
-    core.LAVALINK_DIR = root / "data" / "discordbot" / "cogs" / "Audio"
+    core.LAVALINK_DIR = _lavalink_directory(root)
     core.LAVALINK_JAR = core.LAVALINK_DIR / "Lavalink.jar"
     core.EVENT_LOG = core.LOG_DIR / "djgoo-events.jsonl"
     core.WINDOWS_DETACHED_FLAGS = portable_windows_flags()
@@ -343,7 +371,10 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
         return False
 
     def portable_terminate_component(spec: Any, reason: str) -> None:
-        leftovers = _matching_processes(spec)
+        if getattr(spec, "name", "") == "lavalink":
+            leftovers = _matching_package_lavalink_processes(root)
+        else:
+            leftovers = _matching_processes(spec)
         original_terminate_component(spec, reason)
         for process in leftovers:
             try:
