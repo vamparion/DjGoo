@@ -1,9 +1,37 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "djgoo"
 version = "0.2.0"
-description = "Private game-first Discord music bot extensions for Red-DiscordBot"
-requires-python = ">=3.11,<3.13"
-license = { text = "GPL-3.0-or-later" }
+description = "Game-first Discord music control with local voice recognition"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+license = {text = "GPL-3.0-or-later"}
+authors = [{name = "Vamp Arion"}]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Win32 (MS Windows)",
+  "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+  "Operating System :: Microsoft :: Windows :: Windows 10",
+  "Operating System :: Microsoft :: Windows :: Windows 11",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Multimedia :: Sound/Audio",
+]
+
+[project.scripts]
+djgoo = "launcher.djgoo_launcher:main"
+djgoo-build-portable = "tools.build_portable:main"
+
+[project.gui-scripts]
+djgoo-gui = "launcher.djgoo_launcher:main"
+
+[tool.setuptools]
+py-modules = []
+
+[tool.setuptools.packages.find]
+include = ["launcher*", "voice*", "tools*", "local_cogs*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -11,4 +39,8 @@ addopts = "-ra"
 
 [tool.ruff]
 target-version = "py311"
-line-length = 120
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
