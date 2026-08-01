@@ -138,6 +138,10 @@ class Layout:
         return self.root / "data" / "djgoo-supervisor-state.json"
 
     @property
+    def supervisor_pid_file(self) -> Path:
+        return self.root / "data" / "pids" / "supervisor.json"
+
+    @property
     def redbot_pid_file(self) -> Path:
         return self.root / "data" / "pids" / "redbot.json"
 
@@ -259,6 +263,16 @@ class DjGooLauncher:
     def _state(self) -> dict[str, object]:
         return read_json(self.layout.state_file) or {}
 
+    @staticmethod
+    def _recorded_process_active(path: Path) -> bool:
+        record = read_json(path)
+        if not record:
+            return False
+        try:
+            return process_exists(int(record.get("pid") or 0))
+        except (TypeError, ValueError):
+            return False
+
     def _redbot_process_active(self, state: dict[str, object] | None = None) -> bool:
         state = state or self._state()
         components = state.get("components")
@@ -269,16 +283,9 @@ class DjGooLauncher:
                     pid = int(redbot.get("pid") or 0)
                 except (TypeError, ValueError):
                     pid = 0
-                if redbot.get("running") is True or process_exists(pid):
+                if process_exists(pid):
                     return True
-
-        record = read_json(self.layout.redbot_pid_file)
-        if record:
-            try:
-                return process_exists(int(record.get("pid") or 0))
-            except (TypeError, ValueError):
-                return False
-        return False
+        return self._recorded_process_active(self.layout.redbot_pid_file)
 
     def _redbot_or_stack_active(self) -> bool:
         if (
@@ -286,8 +293,9 @@ class DjGooLauncher:
             and time.monotonic() - self._requested_at < START_STATUS_GRACE_SECONDS
         ):
             return True
-        state = self._state()
-        return bool(state.get("desired_running")) or self._redbot_process_active(state)
+        return self._recorded_process_active(
+            self.layout.supervisor_pid_file
+        ) or self._redbot_process_active()
 
     def stack_action(self, action: str) -> None:
         if not self._validate_runtime():
