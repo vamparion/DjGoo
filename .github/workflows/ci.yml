@@ -11,30 +11,6 @@ permissions:
   contents: read
 
 jobs:
-  license-sync:
-    if: github.event_name == 'push' && github.ref_name == 'agent/djgoo-reliability-voice-radio'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Check out implementation branch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref_name }}
-
-      - name: Install complete GPL-3.0 license text
-        shell: bash
-        run: |
-          cp /usr/share/common-licenses/GPL-3 LICENSE
-          if git diff --quiet -- LICENSE; then
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add LICENSE
-          git commit -m "include complete GPL-3.0 license text"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
-
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
