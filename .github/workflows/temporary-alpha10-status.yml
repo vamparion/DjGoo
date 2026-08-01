@@ -1,0 +1,81 @@
+name: Temporary alpha.10 status
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for alpha.10 publisher and report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          publisher_id=""
+          publisher_status="not-found"
+          publisher_conclusion=""
+          publisher_url=""
+          package_id=""
+          package_status="not-found"
+          package_conclusion=""
+          package_url=""
+
+          for attempt in $(seq 1 50); do
+            publishers="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?branch=release%2Fv0.3.0-alpha.10&per_page=30")"
+            publisher_row="$(jq -r '[.workflow_runs[] | select(.name == "Publish Alpha Release")] | sort_by(.created_at) | reverse | .[0] | if . == null then "" else [.id,.status,(.conclusion // ""),.html_url] | @tsv end' <<<"$publishers")"
+            package_row="$(jq -r '[.workflow_runs[] | select(.name == "Portable Releases")] | sort_by(.created_at) | reverse | .[0] | if . == null then "" else [.id,.status,(.conclusion // ""),.html_url] | @tsv end' <<<"$publishers")"
+
+            if [[ -n "$publisher_row" ]]; then
+              IFS=$'\t' read -r publisher_id publisher_status publisher_conclusion publisher_url <<<"$publisher_row"
+            fi
+            if [[ -n "$package_row" ]]; then
+              IFS=$'\t' read -r package_id package_status package_conclusion package_url <<<"$package_row"
+            fi
+            if [[ "$publisher_status" == "completed" ]]; then
+              break
+            fi
+            sleep 15
+          done
+
+          release_status="missing"
+          release_url=""
+          assets="none"
+          target=""
+          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v0.3.0-alpha.10" >/tmp/release.json 2>/dev/null; then
+            release_status="present"
+            release_url="$(jq -r '.html_url' /tmp/release.json)"
+            target="$(jq -r '.target_commitish' /tmp/release.json)"
+            assets="$(jq -r '.assets[] | "- \(.name) — \(.size) bytes"' /tmp/release.json)"
+          fi
+
+          cat >/tmp/body.md <<EOF
+          Temporary verification for v0.3.0-alpha.10.
+
+          Publisher run ID: ${publisher_id:-not found}
+          Publisher status: ${publisher_status}
+          Publisher conclusion: ${publisher_conclusion:-pending}
+          Publisher URL: ${publisher_url:-not found}
+
+          Package run ID: ${package_id:-not found}
+          Package status: ${package_status}
+          Package conclusion: ${package_conclusion:-pending}
+          Package URL: ${package_url:-not found}
+
+          Release status: ${release_status}
+          Release target: ${target:-not found}
+          Release URL: ${release_url:-not found}
+
+          Assets:
+          ${assets}
+          EOF
+
+          gh issue create --title "Temporary alpha.10 release status" --body-file /tmp/body.md
