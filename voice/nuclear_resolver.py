@@ -16,7 +16,7 @@ BAD_TITLE_RE = re.compile(
     r"\b("
     r"instrumental|karaoke|reaction|interview|lesson|tutorial|similarit(?:y|ies)|"
     r"documentary|shorts?|clip|compilation|playlist|full album|greatest hits|"
-    r"mix|dj set|hours? of|live at|live from|live in"
+    r"mix|dj set|hours? of|live at|live from|live in|extended version|loop|repeat"
     r")\b",
     re.IGNORECASE,
 )
@@ -27,12 +27,14 @@ class NuclearTrack:
     title: str
     artists: List[str]
     duration_seconds: int = 0
+    isrc: str = ""
 
     def redbot_query(self) -> str:
         artist_text = ", ".join(self.artists)
+        identifier = f' "{self.isrc}"' if self.isrc else ""
         if artist_text:
-            return f"{artist_text} - {self.title} official audio"
-        return f"{self.title} official audio"
+            return f"{artist_text} - {self.title}{identifier} official audio"
+        return f"{self.title}{identifier} official audio"
 
 
 def normalize_nuclear_track(data: Dict[str, Any]) -> NuclearTrack:
@@ -41,15 +43,18 @@ def normalize_nuclear_track(data: Dict[str, Any]) -> NuclearTrack:
         for item in data.get("artists", [])
         if isinstance(item, dict) and str(item.get("name", "")).strip()
     ]
-    duration_ms = data.get("durationMs") or 0
+    duration_ms = data.get("durationMs") or data.get("duration_ms") or 0
     try:
         duration_seconds = int(float(duration_ms) / 1000)
     except (TypeError, ValueError):
         duration_seconds = 0
+    source = data.get("source", {}) if isinstance(data.get("source"), dict) else {}
+    isrc = str(data.get("isrc") or source.get("isrc") or "").strip().upper()
     return NuclearTrack(
         title=str(data.get("title", "")).strip(),
         artists=artists,
         duration_seconds=duration_seconds,
+        isrc=isrc,
     )
 
 
@@ -66,18 +71,19 @@ class NuclearResolver:
         self._transport = transport
         self._session_id: Optional[str] = None
 
-    def resolve_track_query(self, query: str) -> Optional[str]:
+    def resolve_track(self, query: str) -> Optional[NuclearTrack]:
         log_event("nuclear.track.resolve.start", query=query, mcp_url=self.mcp_url)
         result = self._call(
             "Metadata.search",
-            {"params": {"query": query, "types": ["tracks"], "limit": 8}},
+            {"params": {"query": query, "types": ["tracks"], "limit": 10}},
         )
         tracks = result.get("tracks", []) or []
         log_event("nuclear.track.search.result", query=query, count=len(tracks))
         for index, item in enumerate(tracks):
+            if not isinstance(item, dict):
+                continue
             track = normalize_nuclear_track(item)
             if self.accepts_track(track):
-                resolved = track.redbot_query()
                 log_event(
                     "nuclear.track.accepted",
                     query=query,
@@ -85,9 +91,9 @@ class NuclearResolver:
                     title=track.title,
                     artists=track.artists,
                     duration_seconds=track.duration_seconds,
-                    resolved_query=resolved,
+                    isrc=track.isrc,
                 )
-                return resolved
+                return track
             log_event(
                 "nuclear.track.rejected",
                 query=query,
@@ -95,9 +101,34 @@ class NuclearResolver:
                 title=track.title,
                 artists=track.artists,
                 duration_seconds=track.duration_seconds,
+                isrc=track.isrc,
             )
         log_event("nuclear.track.resolve.empty", query=query)
         return None
+
+    def resolve_track_candidates(self, query: str, *, limit: int = 8) -> List[NuclearTrack]:
+        result = self._call(
+            "Metadata.search",
+            {"params": {"query": query, "types": ["tracks"], "limit": max(1, limit)}},
+        )
+        candidates: List[NuclearTrack] = []
+        for item in result.get("tracks", []) or []:
+            if not isinstance(item, dict):
+                continue
+            track = normalize_nuclear_track(item)
+            if self.accepts_track(track):
+                candidates.append(track)
+            if len(candidates) >= limit:
+                break
+        return candidates
+
+    def resolve_track_query(self, query: str) -> Optional[str]:
+        track = self.resolve_track(query)
+        if track is None:
+            return None
+        resolved = track.redbot_query()
+        log_event("nuclear.track.query", query=query, resolved_query=resolved)
+        return resolved
 
     def resolve_album_queries(self, query: str, *, limit: int = 50) -> List[str]:
         log_event("nuclear.album.resolve.start", query=query, limit=limit)
@@ -122,6 +153,8 @@ class NuclearResolver:
         )
         queries = []
         for item in details.get("tracks", []) or []:
+            if not isinstance(item, dict):
+                continue
             track = normalize_nuclear_track(item)
             if self.accepts_track(track):
                 queries.append(track.redbot_query())
@@ -176,7 +209,7 @@ class NuclearResolver:
                 "params": {
                     "protocolVersion": "2025-03-26",
                     "capabilities": {},
-                    "clientInfo": {"name": "djgoo", "version": "0.1"},
+                    "clientInfo": {"name": "djgoo", "version": "0.2"},
                 },
             },
             session_required=False,
