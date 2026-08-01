@@ -18,18 +18,28 @@ DjGoo is licensed under **GPL-3.0-or-later**. It integrates with or distributes 
 | NumPy | Numerical audio processing | BSD-3-Clause |
 | SciPy | Resampling and audio filtering | BSD-3-Clause |
 | psutil | Process identity, supervision, and termination | BSD-3-Clause |
-| aiohttp | Discord webhook and authenticated command transport | Apache-2.0 |
-| cryptography | TLS identity generation and certificate processing | Apache-2.0 OR BSD-3-Clause |
+| aiohttp | Discord webhook, direct gateway, relay server, and WebSocket transports | Apache-2.0 |
+| cryptography | TLS identity, Ed25519, X25519, HKDF, and ChaCha20-Poly1305 support | Apache-2.0 OR BSD-3-Clause |
 | OpenSSL, as used by CPython/cryptography wheels | TLS and cryptographic primitives | Apache-2.0 |
 
 The portable packages retain license and notice files distributed with their runtimes and Python wheels. `sbom.cdx.json` records the exact Python packages in each build, while `manifest.json` records every released file and its SHA-256 digest.
+
+## Relay container and deployment example
+
+| Project | Purpose | License |
+|---|---|---|
+| Python official container image | Base runtime for the relay container | PSF License plus licenses for included Debian components |
+| Caddy | Example public TLS termination and WebSocket reverse proxy | Apache-2.0 |
+| Docker / Docker Compose | Container build and deployment interface | Apache-2.0 for Docker Engine components; individual components retain their licenses |
+
+The relay container publication workflow generates an image SBOM and build provenance. Operators remain responsible for retaining notices required by the exact base image and proxy versions they deploy.
 
 ## Build dependencies
 
 | Project | Purpose | License |
 |---|---|---|
 | PyInstaller | Builds the graphical `DjGoo.exe` and `DjGoo Voice.exe` launchers | GPL-2.0-or-later with the PyInstaller bootloader exception |
-| GitHub Actions | Reproducible tests and release assembly | Service; individual actions retain their licenses |
+| GitHub Actions | Reproducible tests, release assembly, and container publication | Service; individual actions retain their licenses |
 
 PyInstaller's exception permits distributing applications produced by its bootloader without imposing PyInstaller's GPL terms on the generated application beyond DjGoo's existing GPL license.
 
@@ -47,4 +57,4 @@ Future source-code ports from any design reference must be reviewed separately, 
 
 ## Service and content terms
 
-Open-source licensing does not grant permission to bypass the terms of YouTube, Discord, Spotify, SponsorBlock, or another network service. Deployers are responsible for their API credentials, account permissions, service terms, and the media they request or store.
+Open-source licensing does not grant permission to bypass the terms of YouTube, Discord, Spotify, SponsorBlock, a relay hosting provider, or another network service. Deployers are responsible for their API credentials, account permissions, service terms, privacy obligations, and the media they request or store.
