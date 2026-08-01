@@ -1,0 +1,1 @@
+"""DjGoo desktop launcher package."""
