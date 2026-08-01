@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to build, such as 0.3.0-alpha.12. Leave blank to use VERSION."
+        description: "Version to build, such as 0.3.0-alpha.13. Leave blank to use VERSION."
         required: false
         type: string
       publish:
@@ -173,7 +173,7 @@ jobs:
           python tools/generate_sbom.py --site-packages build/voice-python/Lib/site-packages --output build/DjGoo-Voice-win-x64/sbom.cdx.json --version $env:DJGOO_VERSION --name "DjGoo Voice"
           if ($LASTEXITCODE -ne 0) { throw "Voice SBOM generation failed with exit $LASTEXITCODE" }
 
-      - name: Smoke-test portable Host
+      - name: Smoke-test portable packages
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
@@ -182,28 +182,51 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Portable Music Core setup failed with exit $LASTEXITCODE" }
           & "$root/runtime/python/python.exe" "$root/tools/start_redbot_selector.py" --djgoo-check
           if ($LASTEXITCODE -ne 0) { throw "Portable Music Core self-check failed with exit $LASTEXITCODE" }
-          & "$root/runtime/python/python.exe" -c "import voice.command_parser, voice.connection_manager, tools.djgoo_stack; print('DjGoo Host imports OK')"
+          & "$root/runtime/python/python.exe" -c "import voice.command_parser, voice.connection_manager, voice.input_binding, tools.djgoo_stack; print('DjGoo Host imports OK')"
           if ($LASTEXITCODE -ne 0) { throw "Portable Host import smoke test failed with exit $LASTEXITCODE" }
           if (!(Test-Path "$root/DjGoo.exe")) { throw "DjGoo.exe is missing" }
           if (!(Test-Path "$root/DjGoo Mini Player.exe")) { throw "DjGoo Mini Player.exe is missing" }
-          if (!(Test-Path "build/DjGoo-Voice-win-x64/DjGoo Voice.exe")) { throw "DjGoo Voice.exe is missing" }
 
-      - name: Build updater bundle and release archives
+          $voiceRoot = Resolve-Path build/DjGoo-Voice-win-x64
+          Push-Location $voiceRoot
+          try {
+            & "$voiceRoot/runtime/python/python.exe" -c "import voice.input_binding, voice.djgoo_voice_remote_bound, tools.voice_update_client, tools.apply_voice_update; print('DjGoo Voice imports OK')"
+            if ($LASTEXITCODE -ne 0) { throw "Portable Voice import smoke test failed with exit $LASTEXITCODE" }
+          } finally {
+            Pop-Location
+          }
+          if (!(Test-Path "$voiceRoot/DjGoo Voice.exe")) { throw "DjGoo Voice.exe is missing" }
+          if (!(Test-Path "$voiceRoot/tools/apply_voice_update.py")) { throw "DjGoo Voice update worker is missing" }
+
+      - name: Build updater bundles and release archives
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           python tools/build_update_bundle.py --package-root build/DjGoo-Host-win-x64 --output-zip build/DjGoo-Host-update.zip --output-manifest build/DjGoo-Host-update.json --version $env:DJGOO_VERSION
-          if ($LASTEXITCODE -ne 0) { throw "Updater bundle build failed with exit $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0) { throw "Host updater bundle build failed with exit $LASTEXITCODE" }
+          python tools/build_voice_update_bundle.py --package-root build/DjGoo-Voice-win-x64 --output-zip build/DjGoo-Voice-update.zip --output-manifest build/DjGoo-Voice-update.json --version $env:DJGOO_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "Voice updater bundle build failed with exit $LASTEXITCODE" }
+
           Compress-Archive -Path build/DjGoo-Host-win-x64 -DestinationPath build/DjGoo-Host-win-x64.zip -CompressionLevel Optimal -Force
           Compress-Archive -Path build/DjGoo-Voice-win-x64 -DestinationPath build/DjGoo-Voice-win-x64.zip -CompressionLevel Optimal -Force
-          $assets = @("DjGoo-Host-win-x64.zip", "DjGoo-Voice-win-x64.zip", "DjGoo-Host-update.zip", "DjGoo-Host-update.json")
+          $assets = @(
+            "DjGoo-Host-win-x64.zip",
+            "DjGoo-Voice-win-x64.zip",
+            "DjGoo-Host-update.zip",
+            "DjGoo-Host-update.json",
+            "DjGoo-Voice-update.zip",
+            "DjGoo-Voice-update.json"
+          )
           $lines = foreach ($asset in $assets) {
             $hash = (Get-FileHash "build/$asset" -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $asset"
           }
           $lines | Set-Content -Encoding ASCII build/SHA256SUMS.txt
-          python -c "import json; from pathlib import Path; p=json.loads(Path('build/DjGoo-Host-update.json').read_text()); assert p['version']=='$env:DJGOO_VERSION'; assert p['release_tag']=='v$env:DJGOO_VERSION'; print('Updater manifest verified')"
-          if ($LASTEXITCODE -ne 0) { throw "Updater manifest verification failed with exit $LASTEXITCODE" }
+
+          python -c "import json; from pathlib import Path; p=json.loads(Path('build/DjGoo-Host-update.json').read_text()); assert p['product']=='DjGoo Host'; assert p['version']=='$env:DJGOO_VERSION'; assert p['release_tag']=='v$env:DJGOO_VERSION'; print('Host updater manifest verified')"
+          if ($LASTEXITCODE -ne 0) { throw "Host updater manifest verification failed with exit $LASTEXITCODE" }
+          python -c "import json; from pathlib import Path; p=json.loads(Path('build/DjGoo-Voice-update.json').read_text()); assert p['product']=='DjGoo Voice'; assert p['version']=='$env:DJGOO_VERSION'; assert p['release_tag']=='v$env:DJGOO_VERSION'; assert all(not f['path'].startswith('runtime/') for f in p['files']); print('Voice updater manifest verified')"
+          if ($LASTEXITCODE -ne 0) { throw "Voice updater manifest verification failed with exit $LASTEXITCODE" }
 
       - name: Publish updater-visible GitHub prerelease
         if: steps.version.outputs.publish == 'true'
@@ -221,4 +244,6 @@ jobs:
             build/DjGoo-Voice-win-x64.zip
             build/DjGoo-Host-update.zip
             build/DjGoo-Host-update.json
+            build/DjGoo-Voice-update.zip
+            build/DjGoo-Voice-update.json
             build/SHA256SUMS.txt
