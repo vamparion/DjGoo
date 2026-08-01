@@ -6,10 +6,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tools.build_portable import copy_tree, write_manifest
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from tools.build_portable import copy_tree, write_manifest
 
 
 def build_launcher(output: Path) -> Path:
