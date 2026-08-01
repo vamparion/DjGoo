@@ -6,7 +6,22 @@ from pathlib import Path
 from tools.build_portable import ignore_copy, install_portable_supervisor, write_manifest
 
 
-def test_public_copy_excludes_shell_entrypoints(tmp_path: Path) -> None:
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_repository_contains_no_powershell_or_vbscript_files() -> None:
+    forbidden = sorted(
+        str(path.relative_to(REPOSITORY_ROOT))
+        for path in REPOSITORY_ROOT.rglob("*")
+        if path.is_file()
+        and path.suffix.lower() in {".ps1", ".vbs"}
+        and ".git" not in path.parts
+        and "build" not in path.parts
+    )
+    assert forbidden == []
+
+
+def test_public_copy_excludes_shell_entrypoints_defensively(tmp_path: Path) -> None:
     names = ["Start-DjGoo.ps1", "helper.vbs", "module.py", "README.md", "__pycache__"]
     ignored = ignore_copy(str(tmp_path), names)
     assert ignored == {"Start-DjGoo.ps1", "helper.vbs", "__pycache__"}
