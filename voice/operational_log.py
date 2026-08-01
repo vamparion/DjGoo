@@ -10,6 +10,7 @@ from voice.health import write_heartbeat
 
 
 MAX_VALUE_LENGTH = 1000
+_COMPONENT_READY = {"voice": False, "redbot": False}
 
 
 def _default_log_path() -> Path:
@@ -32,21 +33,35 @@ def _safe_value(value: Any) -> Any:
     return text
 
 
-def _event_heartbeat(event: str, fields: dict[str, Any]) -> None:
-    component = ""
+def _event_component(event: str) -> str:
     if event.startswith("voice."):
-        component = "voice"
-    elif event.startswith("redbot."):
-        component = "redbot"
+        return "voice"
+    if event.startswith("redbot."):
+        return "redbot"
+    return ""
+
+
+def _update_ready_state(component: str, event: str) -> bool:
+    if event in {"voice.listener.starting"}:
+        _COMPONENT_READY[component] = False
+    elif event in {"voice.listener.ready", "redbot.ready", "redbot.heartbeat"}:
+        _COMPONENT_READY[component] = True
+    elif event.endswith((".stopped", ".crashed")):
+        _COMPONENT_READY[component] = False
+    return _COMPONENT_READY.get(component, False)
+
+
+def _event_heartbeat(event: str, fields: dict[str, Any]) -> None:
+    component = _event_component(event)
     if not component:
         return
-    stopped = event.endswith((".stopped", ".crashed"))
+    ready = _update_ready_state(component, event)
     allowed_fields = {"guild_count", "audio_loaded", "discord_ready"}
     try:
         write_heartbeat(
             component,
             fields={
-                "ready": not stopped,
+                "ready": ready,
                 "event": event,
                 **{
                     key: _safe_value(value)
