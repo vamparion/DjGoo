@@ -21,6 +21,39 @@ SESSION_PROFILES: dict[str, tuple[str, str]] = {
 class ProfileDjGooAudioBridge(RequestSemanticsDjGooAudioBridge):
     """Translate game-session profiles into station-engine behavior."""
 
+    def __init__(self, *, bot, project_root, send_payload):
+        super().__init__(
+            bot=bot,
+            project_root=project_root,
+            send_payload=send_payload,
+        )
+        self._recovery_enqueue_depth = 0
+
+    async def resume_saved_playback(self) -> None:
+        self._recovery_enqueue_depth += 1
+        try:
+            await super().resume_saved_playback()
+        finally:
+            self._recovery_enqueue_depth -= 1
+
+    async def resume_active_radio_stations(self) -> None:
+        self._recovery_enqueue_depth += 1
+        try:
+            await super().resume_active_radio_stations()
+        finally:
+            self._recovery_enqueue_depth -= 1
+
+    async def handle_track_enqueue(self, guild: Any, track: Any) -> None:
+        if self._recovery_enqueue_depth > 0:
+            # Skip the request-capture layer while retaining persistence and
+            # Mini Player updates from the lower Experience bridge.
+            await super(RequestSemanticsDjGooAudioBridge, self).handle_track_enqueue(
+                guild,
+                track,
+            )
+            return
+        await super().handle_track_enqueue(guild, track)
+
     def _session_profile(self, seed: str) -> tuple[str, str, str] | None:
         normalized = re.sub(r"\s+", " ", seed.strip())
         first, _separator, rest = normalized.partition(" ")
