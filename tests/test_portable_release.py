@@ -31,7 +31,10 @@ def test_portable_supervisor_adapter_replaces_public_entrypoint(tmp_path: Path) 
     tools = tmp_path / "tools"
     tools.mkdir()
     (tools / "djgoo_stack.py").write_text("CORE = True\n", encoding="utf-8")
-    (tools / "djgoo_portable_stack.py").write_text("PORTABLE = True\n", encoding="utf-8")
+    (tools / "djgoo_portable_stack_entry.py").write_text(
+        "PORTABLE = True\n",
+        encoding="utf-8",
+    )
 
     install_portable_supervisor(tmp_path)
 
