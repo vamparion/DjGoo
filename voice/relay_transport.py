@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import socket
 import uuid
 from dataclasses import asdict, dataclass
@@ -37,7 +38,10 @@ class RelayCredential:
 
 def normalize_relay_url(value: str) -> str:
     normalized = value.strip().rstrip("/") + "/"
-    if not normalized.lower().startswith("wss://"):
+    allow_insecure = os.environ.get("DJGOO_RELAY_ALLOW_INSECURE", "").strip() == "1"
+    if not normalized.lower().startswith("wss://") and not (
+        allow_insecure and normalized.lower().startswith("ws://")
+    ):
         raise ValueError("DjGoo Relay URLs must use wss://")
     return normalized
 
