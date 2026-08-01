@@ -75,6 +75,18 @@ def _has_legacy_core_state(data_path: Path) -> bool:
     return False
 
 
+def _current_registration_ready(root: Path, marker: Path) -> bool:
+    if not marker.exists():
+        return False
+    loaded = _instance_from_config(red_config_dir(root) / "config.json")
+    if loaded is None:
+        return False
+    _, instance = loaded
+    expected = (root / "data" / INSTANCE_NAME).resolve()
+    configured = _resolve_data_path(instance, root)
+    return configured == expected and _has_legacy_core_state(expected)
+
+
 def _candidate_config_paths(root: Path) -> Iterator[tuple[Path, Path]]:
     """Yield current and immediate-sibling portable Red configurations."""
 
@@ -155,20 +167,23 @@ def migrate_existing_music_core(project_root: Path) -> bool:
 
     Alpha builds could contain a valid Red/Discord configuration without the
     newer ``portable-setup.json`` marker. They could also retain an absolute
-    ``DATA_PATH`` after the package folder was moved. This migration detects the
-    current installation or one immediate sibling, copies only user-owned Red
-    state into the current package, preserves the newly bundled Audio Engine,
-    repairs the instance path, and writes the setup marker. It never reads or
-    replaces the Discord token itself.
+    ``DATA_PATH`` or a stale marker after the package folder was moved. This
+    migration detects the current installation or one immediate sibling, copies
+    only user-owned Red state into the current package, preserves the newly
+    bundled Audio Engine, repairs the instance path, and writes a current setup
+    marker. It never interprets or replaces the Discord token itself.
     """
 
     root = project_root.resolve()
     marker = root / "data" / "portable-setup.json"
-    if marker.exists():
+    if _current_registration_ready(root, marker):
         return False
 
     selected = _select_existing_instance(root)
     if selected is None:
+        # A copied marker without usable Red state must not suppress first-run
+        # setup in the launcher.
+        marker.unlink(missing_ok=True)
         return False
     _, _, source_payload, source_instance, source_data = selected
 
