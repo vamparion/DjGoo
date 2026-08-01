@@ -39,16 +39,18 @@ jobs:
       - name: Compile Python sources
         shell: powershell
         run: |
-          $ErrorActionPreference = "Stop"
+          $ErrorActionPreference = "Continue"
           python -m compileall -q launcher voice tools local_cogs relay tests 2>&1 | Tee-Object -FilePath compile.log
-          if ($LASTEXITCODE -ne 0) { throw "Source compilation failed with exit $LASTEXITCODE" }
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { throw "Source compilation failed with exit $exitCode" }
 
       - name: Run complete test suite
         shell: powershell
         run: |
-          $ErrorActionPreference = "Stop"
+          $ErrorActionPreference = "Continue"
           python -m pytest -q 2>&1 | Tee-Object -FilePath pytest.log
-          if ($LASTEXITCODE -ne 0) { throw "Test suite failed with exit $LASTEXITCODE" }
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { throw "Test suite failed with exit $exitCode" }
 
       - name: Upload diagnostics
         if: always()
