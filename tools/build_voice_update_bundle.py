@@ -15,7 +15,6 @@ PRODUCT_NAME = "DjGoo Voice"
 DIRECTORIES = (
     "voice",
     "source/launcher",
-    "runtime/python",
 )
 ROOT_FILES = (
     "DjGoo Voice.exe",
@@ -26,6 +25,7 @@ ROOT_FILES = (
     "manifest.json",
 )
 TOOL_FILES = (
+    "tools/__init__.py",
     "tools/update_auth.py",
     "tools/update_client.py",
     "tools/voice_update_client.py",
@@ -39,7 +39,10 @@ CONFIG_FILES = (
 )
 EXCLUDED_PARTS = {"__pycache__", ".git", ".github"}
 EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".ps1", ".vbs"}
-VERSION_PATTERN = re.compile(r"\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?", re.IGNORECASE)
+VERSION_PATTERN = re.compile(
+    r"\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?",
+    re.IGNORECASE,
+)
 
 
 class VoiceUpdateBundleError(RuntimeError):
@@ -55,7 +58,10 @@ def sha256_file(path: Path) -> str:
 
 
 def eligible(relative: Path) -> bool:
-    return not any(part in EXCLUDED_PARTS for part in relative.parts) and relative.suffix.lower() not in EXCLUDED_SUFFIXES
+    return (
+        not any(part in EXCLUDED_PARTS for part in relative.parts)
+        and relative.suffix.lower() not in EXCLUDED_SUFFIXES
+    )
 
 
 def collect_voice_update_files(package_root: Path) -> list[Path]:
@@ -83,10 +89,23 @@ def collect_voice_update_files(package_root: Path) -> list[Path]:
         "manifest.json",
         "tools/apply_voice_update.py",
         "tools/voice_update_client.py",
+        "voice/djgoo_voice_remote_bound.py",
+        "voice/input_binding.py",
     }
     missing = sorted(required.difference(collected))
     if missing:
-        raise VoiceUpdateBundleError(f"The recipient package is missing update files: {missing}")
+        raise VoiceUpdateBundleError(
+            f"The recipient package is missing update files: {missing}"
+        )
+
+    # The update worker runs from the installed embedded Python. Replacing that
+    # interpreter while it is executing would fail on Windows, so runtime files
+    # stay in place for incremental updates. A future runtime-generation change
+    # must use a full package transition instead.
+    if any(name.startswith("runtime/") for name in collected):
+        raise VoiceUpdateBundleError(
+            "Recipient incremental updates must not replace the active runtime"
+        )
     return [collected[name] for name in sorted(collected)]
 
 
@@ -99,14 +118,21 @@ def build_voice_update_bundle(
     root = package_root.resolve()
     normalized = str(version).strip().lstrip("v")
     if not VERSION_PATTERN.fullmatch(normalized):
-        raise VoiceUpdateBundleError(f"Invalid recipient update version: {version}")
+        raise VoiceUpdateBundleError(
+            f"Invalid recipient update version: {version}"
+        )
     files = collect_voice_update_files(root)
     output_zip.parent.mkdir(parents=True, exist_ok=True)
     output_manifest.parent.mkdir(parents=True, exist_ok=True)
     output_zip.unlink(missing_ok=True)
 
     entries: list[dict[str, object]] = []
-    with zipfile.ZipFile(output_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+    with zipfile.ZipFile(
+        output_zip,
+        "w",
+        zipfile.ZIP_DEFLATED,
+        compresslevel=9,
+    ) as archive:
         for path in files:
             relative = path.relative_to(root).as_posix()
             archive.write(path, relative)
@@ -132,13 +158,18 @@ def build_voice_update_bundle(
         "deletes": [],
     }
     temporary = output_manifest.with_suffix(output_manifest.suffix + ".tmp")
-    temporary.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    temporary.write_text(
+        json.dumps(manifest, indent=2) + "\n",
+        encoding="utf-8",
+    )
     os.replace(temporary, output_manifest)
     return manifest
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build a verified DjGoo Voice incremental update.")
+    parser = argparse.ArgumentParser(
+        description="Build a verified DjGoo Voice incremental update."
+    )
     parser.add_argument("--package-root", type=Path, required=True)
     parser.add_argument("--output-zip", type=Path, required=True)
     parser.add_argument("--output-manifest", type=Path, required=True)
