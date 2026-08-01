@@ -185,7 +185,7 @@ def test_child_process_receives_explicit_component_identity(tmp_path) -> None:
     assert observed["DJGOO_COMPONENT_NAME"] == "redbot"
 
 
-def test_existing_package_lavalink_listener_is_adopted(tmp_path, monkeypatch) -> None:
+def test_existing_lavalink_listener_is_not_adopted_by_supervisor(tmp_path, monkeypatch) -> None:
     root = tmp_path.resolve()
     listener = FakeProcess(
         4321,
@@ -201,8 +201,8 @@ def test_existing_package_lavalink_listener_is_adopted(tmp_path, monkeypatch) ->
     )
 
     assert core.component_running(spec) is True
-    assert core._records["lavalink"]["pid"] == listener.pid
-    assert any(name == "component.adopted" for name, _ in core.LOG.events)
+    assert "lavalink" not in core._records
+    assert not any(name == "component.adopted" for name, _ in core.LOG.events)
 
 
 def test_lavalink_readiness_is_bound_to_recorded_listener(tmp_path, monkeypatch) -> None:
@@ -240,7 +240,6 @@ def test_initial_redbot_ready_event_gets_bounded_startup_grace(monkeypatch) -> N
     assert adapter._portable_redbot_ready(core) is True
     heartbeat["event"] = "redbot.heartbeat"
     assert adapter._portable_redbot_ready(core) is False
-
 
 
 def test_supervisor_delegates_lavalink_to_red_audio(tmp_path, monkeypatch) -> None:
