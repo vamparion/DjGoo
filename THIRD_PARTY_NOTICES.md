@@ -7,7 +7,7 @@ DjGoo is licensed under **GPL-3.0-or-later**. It integrates with or distributes 
 | Project | Purpose in DjGoo | License |
 |---|---|---|
 | CPython | Portable Python runtime | Python Software Foundation License |
-| Eclipse Temurin / OpenJDK | Portable Java runtime | GPL-2.0 with Classpath Exception |
+| Eclipse Temurin / OpenJDK | Portable Java runtime in the Host package | GPL-2.0 with Classpath Exception |
 | Cog-Creators/Red-DiscordBot and Red-Lavalink | Discord framework, Audio cog, and Lavalink client | GPL-3.0 |
 | Cog-Creators/Lavalink-Jars / Lavalink | Red-compatible audio playback server | Apache-2.0 repository tooling; Lavalink MIT |
 | faster-whisper | Local Whisper inference | MIT |
@@ -18,15 +18,17 @@ DjGoo is licensed under **GPL-3.0-or-later**. It integrates with or distributes 
 | NumPy | Numerical audio processing | BSD-3-Clause |
 | SciPy | Resampling and audio filtering | BSD-3-Clause |
 | psutil | Process identity, supervision, and termination | BSD-3-Clause |
-| aiohttp | Discord webhook and command transport HTTP | Apache-2.0 |
+| aiohttp | Discord webhook and authenticated command transport | Apache-2.0 |
+| cryptography | TLS identity generation and certificate processing | Apache-2.0 OR BSD-3-Clause |
+| OpenSSL, as used by CPython/cryptography wheels | TLS and cryptographic primitives | Apache-2.0 |
 
-The portable release includes the license and notice files shipped by the bundled Python and Java distributions. `sbom.cdx.json` records the exact Python packages in each build, while `manifest.json` records every released file and its SHA-256 digest.
+The portable packages retain license and notice files distributed with their runtimes and Python wheels. `sbom.cdx.json` records the exact Python packages in each build, while `manifest.json` records every released file and its SHA-256 digest.
 
 ## Build dependencies
 
 | Project | Purpose | License |
 |---|---|---|
-| PyInstaller | Builds the graphical `DjGoo.exe` launcher | GPL-2.0-or-later with the PyInstaller bootloader exception |
+| PyInstaller | Builds the graphical `DjGoo.exe` and `DjGoo Voice.exe` launchers | GPL-2.0-or-later with the PyInstaller bootloader exception |
 | GitHub Actions | Reproducible tests and release assembly | Service; individual actions retain their licenses |
 
 PyInstaller's exception permits distributing applications produced by its bootloader without imposing PyInstaller's GPL terms on the generated application beyond DjGoo's existing GPL license.
