@@ -37,18 +37,19 @@ def test_bind_red_data_manager_overrides_precomputed_windows_path(tmp_path: Path
     assert fake.config_file == result
 
 
-def test_setup_registers_bundled_local_cogs_and_preserves_settings(tmp_path: Path, monkeypatch) -> None:
+def test_setup_repairs_invalid_red_path_schema_and_preserves_settings(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setenv("REDBOT_CONFIG_DIR", str(red_config_dir(tmp_path)))
     config_dir = red_config_dir(tmp_path)
     config_dir.mkdir(parents=True)
     config_path = config_dir / "config.json"
-    existing_cog = tmp_path / "third-party-cogs"
     config_path.write_text(
         json.dumps(
             {
                 INSTANCE_NAME: {
                     "DATA_PATH": "old-path",
-                    "COG_PATH_APPEND": [str(existing_cog), str(existing_cog)],
+                    "COG_PATH_APPEND": ["third-party-cogs"],
                     "CORE_PATH_APPEND": ["keep-this"],
                     "STORAGE_TYPE": "JSON",
                     "STORAGE_DETAILS": {"custom": True},
@@ -65,14 +66,37 @@ def test_setup_registers_bundled_local_cogs_and_preserves_settings(tmp_path: Pat
     instance = payload[INSTANCE_NAME]
 
     assert Path(instance["DATA_PATH"]) == (tmp_path / "data" / INSTANCE_NAME).resolve()
-    assert instance["COG_PATH_APPEND"] == [
-        str(existing_cog.resolve()),
-        str((tmp_path / "local_cogs").resolve()),
-    ]
-    assert instance["CORE_PATH_APPEND"] == ["keep-this"]
+    assert instance["COG_PATH_APPEND"] == "cogs"
+    assert instance["CORE_PATH_APPEND"] == "core"
     assert instance["STORAGE_DETAILS"] == {"custom": True}
     assert instance["EXTRA_SETTING"] == "preserve-me"
     assert payload["another-instance"] == {"DATA_PATH": "leave-alone"}
+
+
+def test_setup_preserves_valid_custom_red_path_suffixes(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("REDBOT_CONFIG_DIR", str(red_config_dir(tmp_path)))
+    config_dir = red_config_dir(tmp_path)
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                INSTANCE_NAME: {
+                    "COG_PATH_APPEND": "custom-cogs",
+                    "CORE_PATH_APPEND": "custom-core",
+                    "STORAGE_TYPE": "JSON",
+                    "STORAGE_DETAILS": {},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ensure_instance(tmp_path)
+
+    instance = json.loads(config_path.read_text(encoding="utf-8"))[INSTANCE_NAME]
+    assert instance["COG_PATH_APPEND"] == "custom-cogs"
+    assert instance["CORE_PATH_APPEND"] == "custom-core"
 
 
 def test_setup_recovers_from_malformed_config(tmp_path: Path, monkeypatch) -> None:
@@ -86,6 +110,8 @@ def test_setup_recovers_from_malformed_config(tmp_path: Path, monkeypatch) -> No
 
     payload = json.loads(config_path.read_text(encoding="utf-8"))
     assert INSTANCE_NAME in payload
+    assert payload[INSTANCE_NAME]["COG_PATH_APPEND"] == "cogs"
+    assert payload[INSTANCE_NAME]["CORE_PATH_APPEND"] == "core"
     assert list(config_dir.glob("config.invalid-*.json"))
 
 
@@ -96,6 +122,67 @@ def test_startup_forces_audio_and_djgoo_cogs_from_absolute_path(tmp_path: Path) 
 
     assert Path(argv[cog_path_index]) == (tmp_path / "local_cogs").resolve()
     assert tuple(argv[load_index:]) == STARTUP_COGS == ("audio", "djgoowelcome")
+
+
+def test_console_preflight_repairs_old_list_schema(tmp_path: Path, monkeypatch) -> None:
+    config_dir = red_config_dir(tmp_path)
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                INSTANCE_NAME: {
+                    "DATA_PATH": "old-path",
+                    "COG_PATH_APPEND": [],
+                    "CORE_PATH_APPEND": [],
+                    "STORAGE_TYPE": "JSON",
+                    "STORAGE_DETAILS": {},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("REDBOT_CONFIG_DIR", str(config_dir))
+    monkeypatch.setattr(start_redbot_selector, "bind_red_data_manager", lambda _root: config_path)
+    monkeypatch.setattr(
+        start_redbot_selector,
+        "verify_red_instance_runtime",
+        lambda root: (root / "data" / INSTANCE_NAME / "core", root / "data" / INSTANCE_NAME / "cogs"),
+    )
+
+    start_redbot_selector.check_portable_red(tmp_path)
+
+    instance = json.loads(config_path.read_text(encoding="utf-8"))[INSTANCE_NAME]
+    assert instance["COG_PATH_APPEND"] == "cogs"
+    assert instance["CORE_PATH_APPEND"] == "core"
+
+
+def test_run_redbot_repairs_instance_before_loading_red(tmp_path: Path, monkeypatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        start_redbot_selector,
+        "ensure_instance",
+        lambda _root: calls.append("ensure") or Path("config.json"),
+    )
+    monkeypatch.setattr(
+        start_redbot_selector,
+        "bind_red_data_manager",
+        lambda _root: calls.append("bind") or Path("config.json"),
+    )
+    monkeypatch.setattr(
+        start_redbot_selector,
+        "apply_runtime_patches",
+        lambda: calls.append("patch"),
+    )
+    monkeypatch.setattr(
+        start_redbot_selector.runpy,
+        "run_module",
+        lambda *_args, **_kwargs: calls.append("red"),
+    )
+
+    start_redbot_selector.run_redbot(tmp_path)
+
+    assert calls == ["ensure", "bind", "patch", "red"]
 
 
 def test_launcher_layout_exposes_update_and_console_helpers(tmp_path: Path) -> None:
