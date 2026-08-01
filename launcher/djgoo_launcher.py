@@ -11,6 +11,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from tkinter import BOTH, END, LEFT, RIGHT, X, Button, Frame, Label, StringVar, Text, Tk, messagebox
 
+
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
+
 from tools.portable_environment import portable_environment
 
 
@@ -22,7 +27,7 @@ DISCORD_APPS_URL = "https://discord.com/developers/applications"
 def application_root() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parents[1]
+    return SOURCE_ROOT
 
 
 @dataclass(frozen=True)
