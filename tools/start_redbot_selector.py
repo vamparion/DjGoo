@@ -129,22 +129,30 @@ async def configure_external_lavalink(cog: Any) -> None:
         await getattr(cog.config, name).set(value)
 
 
-async def setup_djgoo_audio(bot: Any) -> None:
-    """Load Red Audio after applying DjGoo's external-node settings."""
-
-    from redbot.cogs.audio import Audio
-
-    cog = Audio(bot)
-    await configure_external_lavalink(cog)
-    await bot.add_cog(cog)
-    cog.start_up_task()
-
-
 def install_audio_runtime_patch(audio_package: Any, ll_server_config: Any) -> None:
-    """Install the Audio setup override before Red's extension loader runs."""
+    """Configure Audio before its normal initializer connects to Lavalink.
+
+    Discord.py may re-execute the package-level extension module while loading a
+    cog, so replacing ``redbot.cogs.audio.setup`` is not durable. The Audio class
+    comes from the cached ``redbot.cogs.audio.core`` module; wrapping its
+    initializer survives the extension loader while preserving Red's normal
+    setup, migration, database, and task lifecycle.
+    """
 
     ll_server_config.DEFAULT_LAVALINK_YAML["yaml__server__address"] = LAVALINK_HOST
-    audio_package.setup = setup_djgoo_audio
+    audio_class = audio_package.Audio
+    if bool(getattr(audio_class, "_djgoo_external_lavalink_patch", False)):
+        return
+
+    original_initialize = audio_class.initialize
+
+    async def djgoo_initialize(self: Any) -> None:
+        await configure_external_lavalink(self)
+        await original_initialize(self)
+
+    audio_class.initialize = djgoo_initialize
+    audio_class._djgoo_external_lavalink_patch = True
+    audio_class._djgoo_original_initialize = original_initialize
 
 
 def apply_runtime_patches() -> None:
