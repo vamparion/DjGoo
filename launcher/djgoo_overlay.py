@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sys
 import time
 from pathlib import Path
@@ -34,10 +33,14 @@ class DjGooMiniPlayer:
     def __init__(self, root: Tk, project_root: Path) -> None:
         self.root = root
         self.project_root = project_root
-        self.state = NowPlayingState(project_root / "data" / "djgoo-now-playing.json")
+        self.state = NowPlayingState(
+            project_root / "data" / "djgoo-now-playing.json"
+        )
         self.queue_path = project_root / "data" / "voice-command-queue.jsonl"
         self.title = StringVar(value="DjGoo is waiting for music")
-        self.detail = StringVar(value="Start a radio station or request a song in Discord.")
+        self.detail = StringVar(
+            value="Start a radio station or request a song in Discord."
+        )
         self.progress = StringVar(value="")
         self.tip = StringVar(value="Try saying: “radio balanced 2000s rock”")
         self.request = StringVar()
@@ -46,14 +49,22 @@ class DjGooMiniPlayer:
         self._build()
         self._poll()
 
-    def _button(self, parent, text: str, command, *, danger: bool = False):
+    def _button(
+        self,
+        parent,
+        text: str,
+        command,
+        *,
+        danger: bool = False,
+        accent: bool = False,
+    ):
         return Button(
             parent,
             text=text,
             command=command,
-            bg=DANGER if danger else "#242c3a",
+            bg=DANGER if danger else ACCENT if accent else "#242c3a",
             fg=TEXT,
-            activebackground="#344056",
+            activebackground="#8da2ff" if accent else "#344056",
             activeforeground=TEXT,
             relief="flat",
             padx=8,
@@ -63,21 +74,54 @@ class DjGooMiniPlayer:
 
     def _build(self) -> None:
         self.root.title("DjGoo Mini Player")
-        self.root.geometry("470x210")
-        self.root.minsize(420, 190)
+        self.root.geometry("540x238")
+        self.root.minsize(480, 220)
         self.root.configure(bg=BG)
         self.root.attributes("-topmost", True)
 
         header = Frame(self.root, bg=BG, padx=14, pady=10)
         header.pack(fill=X)
-        Label(header, text="● DJGOO", font=("Segoe UI", 9, "bold"), bg=BG, fg=ACCENT).pack(side=LEFT)
-        Label(header, textvariable=self.progress, font=("Segoe UI", 9), bg=BG, fg=MUTED).pack(side=RIGHT)
+        Label(
+            header,
+            text="● DJGOO",
+            font=("Segoe UI", 9, "bold"),
+            bg=BG,
+            fg=ACCENT,
+        ).pack(side=LEFT)
+        Label(
+            header,
+            textvariable=self.progress,
+            font=("Segoe UI", 9),
+            bg=BG,
+            fg=MUTED,
+        ).pack(side=RIGHT)
 
         now = Frame(self.root, bg=PANEL, padx=14, pady=10)
         now.pack(fill=X, padx=10)
-        Label(now, textvariable=self.title, font=("Segoe UI", 13, "bold"), bg=PANEL, fg=TEXT, anchor="w").pack(fill=X)
-        Label(now, textvariable=self.detail, font=("Segoe UI", 9), bg=PANEL, fg=MUTED, anchor="w").pack(fill=X, pady=(3, 0))
-        Label(now, textvariable=self.tip, font=("Segoe UI", 8), bg=PANEL, fg="#b2bce0", anchor="w").pack(fill=X, pady=(6, 0))
+        Label(
+            now,
+            textvariable=self.title,
+            font=("Segoe UI", 13, "bold"),
+            bg=PANEL,
+            fg=TEXT,
+            anchor="w",
+        ).pack(fill=X)
+        Label(
+            now,
+            textvariable=self.detail,
+            font=("Segoe UI", 9),
+            bg=PANEL,
+            fg=MUTED,
+            anchor="w",
+        ).pack(fill=X, pady=(3, 0))
+        Label(
+            now,
+            textvariable=self.tip,
+            font=("Segoe UI", 8),
+            bg=PANEL,
+            fg="#b2bce0",
+            anchor="w",
+        ).pack(fill=X, pady=(6, 0))
 
         controls = Frame(self.root, bg=BG, padx=10, pady=8)
         controls.pack(fill=X)
@@ -88,10 +132,15 @@ class DjGooMiniPlayer:
             ("More", "more like this"),
             ("Ban", "don't play this again"),
         ):
-            self._button(controls, label, lambda p=phrase: self.send(p), danger=label == "Ban").pack(side=LEFT, padx=(0, 5))
+            self._button(
+                controls,
+                label,
+                lambda p=phrase: self.send(p),
+                danger=label == "Ban",
+            ).pack(side=LEFT, padx=(0, 5))
 
-        request_row = Frame(self.root, bg=BG, padx=10, pady=(0, 10))
-        request_row.pack(fill=BOTH, expand=True)
+        request_row = Frame(self.root, bg=BG, padx=10, pady=0)
+        request_row.pack(fill=BOTH, expand=True, pady=(0, 10))
         entry = Entry(
             request_row,
             textvariable=self.request,
@@ -101,8 +150,24 @@ class DjGooMiniPlayer:
             relief="flat",
         )
         entry.pack(side=LEFT, fill=X, expand=True, ipady=5)
-        entry.bind("<Return>", lambda _event: self.play_request())
-        self._button(request_row, "Play next", self.play_request).pack(side=RIGHT, padx=(7, 0))
+        entry.bind("<Return>", lambda _event: self.play_request("next"))
+        self._button(
+            request_row,
+            "Later",
+            lambda: self.play_request("later"),
+        ).pack(side=RIGHT, padx=(5, 0))
+        self._button(
+            request_row,
+            "Now",
+            lambda: self.play_request("now"),
+            danger=True,
+        ).pack(side=RIGHT, padx=(5, 0))
+        self._button(
+            request_row,
+            "Next",
+            lambda: self.play_request("next"),
+            accent=True,
+        ).pack(side=RIGHT, padx=(7, 0))
 
     def send(self, phrase: str) -> None:
         command = parse_command(phrase, require_wake=False)
@@ -113,12 +178,17 @@ class DjGooMiniPlayer:
         )
         append_queue_item(self.queue_path, item)
 
-    def play_request(self) -> None:
+    def play_request(self, timing: str) -> None:
         query = self.request.get().strip()
         if not query:
             return
         self.request.set("")
-        self.send(f"play {query}")
+        if timing == "now":
+            self.send(f"play now {query}")
+        elif timing == "later":
+            self.send(f"queue request {query}")
+        else:
+            self.send(f"play next {query}")
 
     def _poll(self) -> None:
         payload = self.state.latest()
@@ -127,8 +197,18 @@ class DjGooMiniPlayer:
             title = str(payload.get("title") or "Unknown track")
             artist = str(payload.get("artist") or "").strip()
             station = str(payload.get("station") or "").strip()
-            queue = payload.get("queue") if isinstance(payload.get("queue"), list) else []
+            requester = str(payload.get("requester") or "").strip()
+            timing = str(payload.get("request_timing") or "").strip()
+            queue = (
+                payload.get("queue")
+                if isinstance(payload.get("queue"), list)
+                else []
+            )
             detail_parts = [mode]
+            if requester:
+                detail_parts.append(
+                    f"{requester} • {timing.title() or 'Request'}"
+                )
             if station:
                 detail_parts.append(station)
             if artist:
@@ -140,11 +220,16 @@ class DjGooMiniPlayer:
             self.tip.set(str(payload.get("tip") or ""))
             self._started_at = float(payload.get("started_at") or 0)
             self._duration = int(payload.get("duration_seconds") or 0)
-        elapsed = max(0, int(time.time() - self._started_at)) if self._started_at else 0
+        elapsed = (
+            max(0, int(time.time() - self._started_at))
+            if self._started_at
+            else 0
+        )
         if self._duration:
             elapsed = min(elapsed, self._duration)
             self.progress.set(
-                f"{elapsed // 60}:{elapsed % 60:02d} / {self._duration // 60}:{self._duration % 60:02d}"
+                f"{elapsed // 60}:{elapsed % 60:02d} / "
+                f"{self._duration // 60}:{self._duration % 60:02d}"
             )
         else:
             self.progress.set("")
