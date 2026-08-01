@@ -240,3 +240,24 @@ def test_initial_redbot_ready_event_gets_bounded_startup_grace(monkeypatch) -> N
     assert adapter._portable_redbot_ready(core) is True
     heartbeat["event"] = "redbot.heartbeat"
     assert adapter._portable_redbot_ready(core) is False
+
+
+
+def test_supervisor_delegates_lavalink_to_red_audio(tmp_path, monkeypatch) -> None:
+    touch(tmp_path / "runtime" / "python" / "python.exe")
+    touch(tmp_path / "runtime" / "python" / "pythonw.exe")
+    touch(tmp_path / "runtime" / "java" / "bin" / "java.exe")
+    cleaned: list[Path] = []
+    monkeypatch.setattr(
+        adapter,
+        "cleanup_lavalink_processes",
+        lambda root: cleaned.append(Path(root)) or [],
+    )
+
+    core = adapter.configure_core(make_fake_core(), tmp_path)
+    spec = SimpleNamespace(name="lavalink", command_markers=("lavalink.jar", str(tmp_path)))
+
+    assert core.component_running(spec) is True
+    assert core.lavalink_ready() is True
+    core.terminate_component(spec, "test-stop")
+    assert cleaned == [tmp_path.resolve()]

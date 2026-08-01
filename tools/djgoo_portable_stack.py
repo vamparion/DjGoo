@@ -11,6 +11,8 @@ from typing import Any
 
 import psutil
 
+from tools.lavalink_process import cleanup_lavalink_processes
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CORE_PATH = Path(__file__).with_name("djgoo_stack_core.py")
@@ -357,6 +359,8 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
     core.EVENT_LOG = core.LOG_DIR / "djgoo-events.jsonl"
     core.WINDOWS_DETACHED_FLAGS = portable_windows_flags()
     core.LOG = core.Logger()
+    core.pid_path("lavalink").unlink(missing_ok=True)
+    core.health_path("lavalink").unlink(missing_ok=True)
 
     original_component_running = core.component_running
     original_terminate_component = core.terminate_component
@@ -364,17 +368,27 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
     original_start_component = core.start_component
 
     def portable_component_running(spec: Any) -> bool:
-        if original_component_running(spec):
-            return True
+        # Red Audio owns Lavalink. Keep a virtual supervisor component so
+        # existing status/UI behavior remains compatible without starting
+        # a second Java process.
         if getattr(spec, "name", "") == "lavalink":
-            return _adopt_lavalink_listener(core, spec)
-        return False
+            return True
+        return bool(original_component_running(spec))
 
     def portable_terminate_component(spec: Any, reason: str) -> None:
         if getattr(spec, "name", "") == "lavalink":
-            leftovers = _matching_package_lavalink_processes(root)
-        else:
-            leftovers = _matching_processes(spec)
+            for pid in cleanup_lavalink_processes(root):
+                core.LOG.event(
+                    "component.orphan_stop",
+                    component="lavalink",
+                    pid=int(pid),
+                    reason=reason,
+                )
+            core.pid_path(spec.name).unlink(missing_ok=True)
+            core.health_path(spec.name).unlink(missing_ok=True)
+            return
+
+        leftovers = _matching_processes(spec)
         original_terminate_component(spec, reason)
         for process in leftovers:
             try:
@@ -431,7 +445,7 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
     core.terminate_component = portable_terminate_component
     core.component_environment = portable_component_environment
     core.start_component = guarded_start_component
-    core.lavalink_ready = lambda: _portable_lavalink_ready(core)
+    core.lavalink_ready = lambda: True
     core.redbot_ready = lambda: _portable_redbot_ready(core)
     core.run_supervisor = guarded_run_supervisor
     core.spawn_supervisor = lambda: spawn_portable_supervisor(core)
