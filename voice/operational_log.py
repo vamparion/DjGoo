@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from voice.health import write_heartbeat
+
 
 MAX_VALUE_LENGTH = 1000
 
@@ -30,6 +32,28 @@ def _safe_value(value: Any) -> Any:
     return text
 
 
+def _event_heartbeat(event: str, fields: dict[str, Any]) -> None:
+    component = ""
+    if event.startswith("voice."):
+        component = "voice"
+    elif event.startswith("redbot."):
+        component = "redbot"
+    if not component:
+        return
+    stopped = event.endswith((".stopped", ".crashed"))
+    try:
+        write_heartbeat(
+            component,
+            fields={
+                "ready": not stopped,
+                "event": event,
+                **{key: _safe_value(value) for key, value in fields.items() if key in {"guild_count", "audio_loaded"}},
+            },
+        )
+    except OSError:
+        return
+
+
 def log_event(event: str, **fields: Any) -> None:
     record = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -43,5 +67,5 @@ def log_event(event: str, **fields: Any) -> None:
             fp.write(json.dumps(record, ensure_ascii=True, separators=(",", ":")))
             fp.write("\n")
     except OSError:
-        # Operational logging must never break music playback.
-        return
+        pass
+    _event_heartbeat(event, fields)
