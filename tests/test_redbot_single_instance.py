@@ -48,6 +48,28 @@ def test_recent_start_request_blocks_console_before_pid_file_exists(tmp_path: Pa
     assert launcher._redbot_or_stack_active() is True
 
 
+def test_live_supervisor_pid_blocks_console_before_redbot_starts(tmp_path: Path) -> None:
+    launcher = launcher_without_tk(tmp_path)
+    launcher.layout.supervisor_pid_file.parent.mkdir(parents=True)
+    launcher.layout.supervisor_pid_file.write_text(
+        json.dumps({"pid": os.getpid()}),
+        encoding="utf-8",
+    )
+
+    assert launcher._redbot_or_stack_active() is True
+
+
+def test_stale_desired_state_does_not_block_console_without_live_process(tmp_path: Path) -> None:
+    launcher = launcher_without_tk(tmp_path)
+    launcher.layout.state_file.parent.mkdir(parents=True)
+    launcher.layout.state_file.write_text(
+        json.dumps({"desired_running": True, "supervisor_pid": 99_999_999}),
+        encoding="utf-8",
+    )
+
+    assert launcher._redbot_or_stack_active() is False
+
+
 def test_redbot_single_instance_lock_rejects_second_owner(tmp_path: Path) -> None:
     first = SingleInstance(tmp_path / "redbot.lock")
     second = SingleInstance(tmp_path / "redbot.lock")
