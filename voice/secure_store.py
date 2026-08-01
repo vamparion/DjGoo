@@ -15,7 +15,14 @@ _DPAPI_ENTROPY = b"DjGoo Voice credential v1"
 
 
 class _DataBlob(ctypes.Structure):
-    _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
+    _fields_ = [
+        ("cbData", wintypes.DWORD),
+        ("pbData", ctypes.POINTER(ctypes.c_byte)),
+    ]
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
 
 
 def _blob(data: bytes) -> tuple[_DataBlob, ctypes.Array[ctypes.c_char]]:
@@ -73,8 +80,12 @@ def _unprotect_windows(data: bytes) -> bytes:
 
 
 def save_protected_json(path: Path, payload: Mapping[str, Any]) -> None:
-    raw = json.dumps(dict(payload), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    if os.name == "nt":
+    raw = json.dumps(
+        dict(payload),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if _is_windows():
         encoded = base64.b64encode(_protect_windows(raw)).decode("ascii")
         envelope = {
             "schema": STORE_SCHEMA,
@@ -83,7 +94,7 @@ def save_protected_json(path: Path, payload: Mapping[str, Any]) -> None:
         }
     else:
         # Non-Windows source/test environments lack DPAPI. File permissions are
-        # still restricted, and public Windows packages always use DPAPI.
+        # restricted, and public Windows packages always use DPAPI.
         envelope = {
             "schema": STORE_SCHEMA,
             "protection": "restricted-file",
@@ -91,7 +102,10 @@ def save_protected_json(path: Path, payload: Mapping[str, Any]) -> None:
         }
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_text(json.dumps(envelope, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    temp.write_text(
+        json.dumps(envelope, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
     temp.replace(path)
     try:
         path.chmod(0o600)
@@ -111,12 +125,22 @@ def load_protected_json(path: Path) -> dict[str, Any]:
 
     protection = str(envelope.get("protection") or "")
     if protection == "windows-dpapi-current-user":
-        if os.name != "nt":
-            raise RuntimeError("This DjGoo credential belongs to a Windows account and cannot be opened here")
+        if not _is_windows():
+            raise RuntimeError(
+                "This DjGoo credential belongs to a Windows account and cannot be opened here"
+            )
         try:
-            ciphertext = base64.b64decode(str(envelope["ciphertext"]), validate=True)
+            ciphertext = base64.b64decode(
+                str(envelope["ciphertext"]),
+                validate=True,
+            )
             payload = json.loads(_unprotect_windows(ciphertext).decode("utf-8"))
-        except (KeyError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (
+            KeyError,
+            ValueError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ) as exc:
             raise ValueError("DjGoo credential could not be decrypted") from exc
     elif protection == "restricted-file":
         payload = envelope.get("payload")
