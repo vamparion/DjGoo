@@ -71,22 +71,40 @@ def _lease_is_active(
     return lease > 0 and 0.0 <= now_monotonic - source_monotonic <= lease
 
 
+def _leased_fields(component: str, state: Mapping[str, Any], source_age: float) -> dict[str, Any]:
+    fields = dict(state.get("fields") or {})
+    source_event = fields.get("event")
+    fields["heartbeat_lease_refreshed"] = True
+    fields["heartbeat_source_age_seconds"] = round(max(0.0, source_age), 1)
+    if source_event is not None:
+        fields["heartbeat_source_event"] = source_event
+    if component == "redbot":
+        fields["event"] = "redbot.lease"
+    return fields
+
+
 def _refresh_heartbeat_lease_once(component: str) -> bool:
     with _HEARTBEAT_LOCK:
         state = dict(_HEARTBEAT_LEASES.get(component) or {})
         if not state:
             return False
+        now_monotonic = time.monotonic()
+        source_monotonic = float(state["source_monotonic"])
         if not _lease_is_active(
             component,
-            source_monotonic=float(state["source_monotonic"]),
-            now_monotonic=time.monotonic(),
+            source_monotonic=source_monotonic,
+            now_monotonic=now_monotonic,
         ):
             _HEARTBEAT_LEASES.pop(component, None)
             return False
         _write_payload(
             component,
             project_root=state.get("project_root"),
-            fields=state.get("fields") or {},
+            fields=_leased_fields(
+                component,
+                state,
+                now_monotonic - source_monotonic,
+            ),
         )
         return True
 
@@ -131,7 +149,7 @@ def write_heartbeat(
         _write_payload(
             component,
             project_root=project_root,
-            fields=heartbeat_fields,
+            fields={**heartbeat_fields, "heartbeat_lease_refreshed": False},
         )
         if component in HEARTBEAT_LEASE_SECONDS:
             _HEARTBEAT_LEASES[component] = {
