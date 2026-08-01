@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 
 
+# GitHub Actions invokes this file by path, so add the repository root before
+# importing sibling modules through the ``tools`` package.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
