@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools.portable_environment import apply_portable_environment, red_config_dir
+from tools.portable_environment import bind_red_data_manager, red_config_dir
 
 
 INSTANCE_NAME = "discordbot"
@@ -65,11 +65,8 @@ def redbot_argv(project_root: Path = PROJECT_ROOT) -> list[str]:
 def check_portable_red(project_root: Path = PROJECT_ROOT) -> None:
     """Verify that Red and DjGoo resolve the same portable instance file."""
 
-    apply_portable_environment(project_root)
-    from redbot.core import data_manager
-
+    actual = bind_red_data_manager(project_root).resolve()
     expected = (red_config_dir(project_root) / "config.json").resolve()
-    actual = data_manager.config_file.resolve()
     if actual != expected:
         raise RuntimeError(
             "Red configuration path mismatch. "
@@ -83,7 +80,11 @@ def check_portable_red(project_root: Path = PROJECT_ROOT) -> None:
         raise RuntimeError(f"Portable Red configuration is invalid JSON: {actual}") from exc
     if not isinstance(payload, dict) or INSTANCE_NAME not in payload:
         raise RuntimeError(f"Red instance '{INSTANCE_NAME}' is missing from {actual}")
+
+    import pip
+
     print(f"DjGoo portable Red configuration OK: {actual}")
+    print(f"Bundled pip import OK: {pip.__version__}")
 
 
 def _exit_code(value: object) -> int:
@@ -107,7 +108,7 @@ def _pause_after_error() -> None:
 
 
 def run_redbot(project_root: Path = PROJECT_ROOT) -> None:
-    apply_portable_environment(project_root)
+    bind_red_data_manager(project_root)
     apply_runtime_patches()
     sys.argv = redbot_argv(project_root)
     runpy.run_module("redbot", run_name="__main__")

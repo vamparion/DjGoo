@@ -7,10 +7,7 @@ on:
       - "launcher/**"
       - "voice/**"
       - "local_cogs/djgoowelcome/**"
-      - "tools/build_portable.py"
-      - "tools/build_voice_remote.py"
-      - "tools/generate_sbom.py"
-      - "tools/portable_red_setup.py"
+      - "tools/**"
       - "requirements-*.txt"
       - "pyproject.toml"
       - ".github/workflows/portable-release.yml"
@@ -37,6 +34,19 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Resolve package version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $version = $env:GITHUB_REF_NAME.TrimStart("v")
+          } elseif ($env:GITHUB_REF_NAME -match '^release/v(.+)$') {
+            $version = $Matches[1]
+          } else {
+            $version = "0.3.0-dev+$($env:GITHUB_SHA.Substring(0, 8))"
+          }
+          "DJGOO_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Building DjGoo $version"
+
       - name: Set up build Python
         uses: actions/setup-python@v5
         with:
@@ -55,18 +65,27 @@ jobs:
       - name: Install build and test dependencies
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed with exit $LASTEXITCODE" }
           python -m pip install -r requirements-dev.txt -r requirements-release.txt
+          if ($LASTEXITCODE -ne 0) { throw "Build dependency installation failed with exit $LASTEXITCODE" }
 
       - name: Compile and test source
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           python -m compileall -q launcher voice tools local_cogs tests
+          if ($LASTEXITCODE -ne 0) { throw "Source compilation failed with exit $LASTEXITCODE" }
           python -m pytest -q
+          if ($LASTEXITCODE -ne 0) { throw "Test suite failed with exit $LASTEXITCODE" }
 
       - name: Prepare portable Python runtime
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force build/runtime-python | Out-Null
           $url = "https://www.python.org/ftp/python/$env:PYTHON_VERSION/python-$env:PYTHON_VERSION-embed-amd64.zip"
           Invoke-WebRequest -UseBasicParsing $url -OutFile build/python-embed.zip
@@ -81,42 +100,74 @@ jobs:
       - name: Install Host dependencies into portable runtime
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           python -m pip install --only-binary=:all: --target build/runtime-python/Lib/site-packages -r requirements-bot.txt -r requirements-voice.txt
+          if ($LASTEXITCODE -ne 0) { throw "Portable dependency installation failed with exit $LASTEXITCODE" }
 
       - name: Download Red-compatible Lavalink
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           Invoke-WebRequest -UseBasicParsing "https://github.com/Cog-Creators/Lavalink-Jars/releases/latest/download/Lavalink.jar" -OutFile build/Lavalink.jar
           if ((Get-Item build/Lavalink.jar).Length -lt 1000000) { throw "Lavalink download is unexpectedly small" }
 
       - name: Build Host package
         shell: pwsh
         run: |
-          $version = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME.TrimStart("v") } else { "0.3.0-dev+$($env:GITHUB_SHA.Substring(0, 8))" }
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           python tools/build_portable.py `
             --output "build/$env:PACKAGE_NAME" `
             --runtime-python build/runtime-python `
             --runtime-java "$env:JAVA_HOME" `
             --lavalink-jar build/Lavalink.jar `
-            --version $version
+            --version $env:DJGOO_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "Host package build failed with exit $LASTEXITCODE" }
           python tools/generate_sbom.py `
             --site-packages build/runtime-python/Lib/site-packages `
             --output "build/$env:PACKAGE_NAME/sbom.cdx.json" `
-            --version $version `
+            --version $env:DJGOO_VERSION `
             --name "DjGoo Host"
+          if ($LASTEXITCODE -ne 0) { throw "Host SBOM generation failed with exit $LASTEXITCODE" }
 
       - name: Smoke-test Host package
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           $root = Resolve-Path "build/$env:PACKAGE_NAME"
           & "$root/runtime/python/python.exe" "$root/tools/portable_red_setup.py" --project-root "$root" --non-interactive
-          & "$root/runtime/python/python.exe" -c "import redbot, voice.command_parser, voice.command_gateway, tools.djgoo_stack; print('Host imports OK')"
+          if ($LASTEXITCODE -ne 0) { throw "Portable Red setup failed with exit $LASTEXITCODE" }
+          & "$root/runtime/python/python.exe" "$root/tools/start_redbot_selector.py" --djgoo-check
+          if ($LASTEXITCODE -ne 0) { throw "Portable Red self-check failed with exit $LASTEXITCODE" }
+          & "$root/runtime/python/python.exe" -c "import pip, redbot, voice.command_parser, voice.command_gateway, tools.djgoo_stack; print('Host imports OK; pip', pip.__version__)"
+          if ($LASTEXITCODE -ne 0) { throw "Host import smoke test failed with exit $LASTEXITCODE" }
           if (!(Test-Path "$root/DjGoo.exe")) { throw "DjGoo.exe is missing" }
           if (Get-ChildItem $root -Recurse -Include *.ps1,*.vbs) { throw "Host package contains legacy scripts" }
+
+      - name: Build and verify incremental Host update
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          python tools/build_update_bundle.py `
+            --package-root "build/$env:PACKAGE_NAME" `
+            --output-zip build/DjGoo-Host-update.zip `
+            --output-manifest build/DjGoo-Host-update.json `
+            --version $env:DJGOO_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "Incremental update build failed with exit $LASTEXITCODE" }
+          python -c "import json,zipfile; from pathlib import Path; m=json.loads(Path('build/DjGoo-Host-update.json').read_text()); z=zipfile.ZipFile('build/DjGoo-Host-update.zip'); names=set(z.namelist()); assert 'DjGoo.exe' in names; assert 'data/installed-version.json' in names; assert any(n.startswith('runtime/python/Lib/site-packages/pip/') for n in names); assert not any(n.startswith(('runtime/java/','logs/')) for n in names); assert not any(n.startswith('data/') and n != 'data/installed-version.json' for n in names); assert len(m['files']) == len(names); print('Incremental update verified:', Path('build/DjGoo-Host-update.zip').stat().st_size, 'bytes')"
+          if ($LASTEXITCODE -ne 0) { throw "Incremental update verification failed with exit $LASTEXITCODE" }
+          $updateSize = (Get-Item build/DjGoo-Host-update.zip).Length
+          if ($updateSize -gt 100MB) { throw "Incremental update is unexpectedly large: $updateSize bytes" }
+          $updateHash = (Get-FileHash build/DjGoo-Host-update.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$updateHash  DjGoo-Host-update.zip" | Set-Content -Encoding ASCII build/SHA256SUMS-Update.txt
 
       - name: Archive and checksum Host
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           Compress-Archive -Path "build/$env:PACKAGE_NAME" -DestinationPath "build/$env:PACKAGE_NAME.zip" -CompressionLevel Optimal -Force
           $hash = (Get-FileHash "build/$env:PACKAGE_NAME.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $env:PACKAGE_NAME.zip" | Set-Content -Encoding ASCII build/SHA256SUMS-Host.txt
@@ -127,7 +178,10 @@ jobs:
           name: DjGoo-Host-win-x64
           path: |
             build/DjGoo-Host-win-x64.zip
+            build/DjGoo-Host-update.zip
+            build/DjGoo-Host-update.json
             build/SHA256SUMS-Host.txt
+            build/SHA256SUMS-Update.txt
           if-no-files-found: error
           retention-days: 14
 
@@ -140,6 +194,18 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+
+      - name: Resolve package version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $version = $env:GITHUB_REF_NAME.TrimStart("v")
+          } elseif ($env:GITHUB_REF_NAME -match '^release/v(.+)$') {
+            $version = $Matches[1]
+          } else {
+            $version = "0.3.0-dev+$($env:GITHUB_SHA.Substring(0, 8))"
+          }
+          "DJGOO_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Set up build Python
         uses: actions/setup-python@v5
@@ -154,18 +220,27 @@ jobs:
       - name: Install build and test dependencies
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed with exit $LASTEXITCODE" }
           python -m pip install -r requirements-dev.txt -r requirements-release.txt
+          if ($LASTEXITCODE -ne 0) { throw "Build dependency installation failed with exit $LASTEXITCODE" }
 
       - name: Compile and test source
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           python -m compileall -q launcher voice tools tests
+          if ($LASTEXITCODE -ne 0) { throw "Source compilation failed with exit $LASTEXITCODE" }
           python -m pytest -q tests/test_pairing_store.py tests/test_voice_remote_security.py tests/test_voice_command_parser.py tests/test_voice_audio_processing.py
+          if ($LASTEXITCODE -ne 0) { throw "Voice test suite failed with exit $LASTEXITCODE" }
 
       - name: Prepare portable Python runtime
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force build/voice-runtime-python | Out-Null
           $url = "https://www.python.org/ftp/python/$env:PYTHON_VERSION/python-$env:PYTHON_VERSION-embed-amd64.zip"
           Invoke-WebRequest -UseBasicParsing $url -OutFile build/voice-python-embed.zip
@@ -180,33 +255,43 @@ jobs:
       - name: Install Voice Remote dependencies
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           python -m pip install --only-binary=:all: --target build/voice-runtime-python/Lib/site-packages -r requirements-voice.txt
+          if ($LASTEXITCODE -ne 0) { throw "Portable voice dependency installation failed with exit $LASTEXITCODE" }
 
       - name: Build Voice Remote package
         shell: pwsh
         run: |
-          $version = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME.TrimStart("v") } else { "0.3.0-dev+$($env:GITHUB_SHA.Substring(0, 8))" }
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           python tools/build_voice_remote.py `
             --output "build/$env:PACKAGE_NAME" `
             --runtime-python build/voice-runtime-python `
-            --version $version
+            --version $env:DJGOO_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "Voice Remote build failed with exit $LASTEXITCODE" }
           python tools/generate_sbom.py `
             --site-packages build/voice-runtime-python/Lib/site-packages `
             --output "build/$env:PACKAGE_NAME/sbom.cdx.json" `
-            --version $version `
+            --version $env:DJGOO_VERSION `
             --name "DjGoo Voice Remote"
+          if ($LASTEXITCODE -ne 0) { throw "Voice SBOM generation failed with exit $LASTEXITCODE" }
 
       - name: Smoke-test Voice Remote package
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           $root = Resolve-Path "build/$env:PACKAGE_NAME"
           & "$root/runtime/python/python.exe" -c "import voice.djgoo_voice_remote, voice.remote_transport; print('Voice Remote imports OK')"
+          if ($LASTEXITCODE -ne 0) { throw "Voice Remote import smoke test failed with exit $LASTEXITCODE" }
           if (!(Test-Path "$root/DjGoo Voice.exe")) { throw "DjGoo Voice.exe is missing" }
           if (Get-ChildItem $root -Recurse -Include *.ps1,*.vbs) { throw "Voice Remote package contains legacy scripts" }
 
       - name: Archive and checksum Voice Remote
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           Compress-Archive -Path "build/$env:PACKAGE_NAME" -DestinationPath "build/$env:PACKAGE_NAME.zip" -CompressionLevel Optimal -Force
           $hash = (Get-FileHash "build/$env:PACKAGE_NAME.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $env:PACKAGE_NAME.zip" | Set-Content -Encoding ASCII build/SHA256SUMS-Voice.txt

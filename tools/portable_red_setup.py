@@ -15,10 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools.portable_environment import (
-    apply_portable_environment,
-    red_config_dir as portable_red_config_dir,
-)
+from tools.portable_environment import bind_red_data_manager, red_config_dir as portable_red_config_dir
 
 
 DISCORD_APPS_URL = "https://discord.com/developers/applications"
@@ -87,11 +84,9 @@ def ensure_instance(project_root: Path) -> Path:
 
 
 def verify_red_config_resolution(project_root: Path, prepared_config: Path) -> Path:
-    """Fail setup when Red resolves a different config file than DjGoo prepared."""
+    """Fail setup when Red is not bound to the file DjGoo prepared."""
 
-    from redbot.core import data_manager
-
-    actual = data_manager.config_file.resolve()
+    actual = bind_red_data_manager(project_root).resolve()
     expected = prepared_config.resolve()
     if actual != expected:
         raise RuntimeError(
@@ -99,6 +94,20 @@ def verify_red_config_resolution(project_root: Path, prepared_config: Path) -> P
             f"DjGoo prepared {expected}, but Red resolved {actual}."
         )
     return actual
+
+
+def verify_update_credentials() -> bool:
+    """Verify Windows DPAPI round-trips without persisting a credential."""
+
+    if os.name != "nt":
+        return False
+    from tools.update_auth import protect_secret, unprotect_secret
+
+    sentinel = f"djgoo-update-self-test-{os.getpid()}"
+    protected = protect_secret(sentinel)
+    if protected == sentinel or unprotect_secret(protected) != sentinel:
+        raise RuntimeError("Windows could not verify encrypted DjGoo update credentials")
+    return True
 
 
 def ensure_project_files(project_root: Path) -> None:
@@ -109,6 +118,8 @@ def ensure_project_files(project_root: Path) -> None:
         "data/models",
         "data/health",
         "data/pids",
+        "data/updates",
+        "data/update-backups",
         "local_cogs",
     ):
         (project_root / relative).mkdir(parents=True, exist_ok=True)
@@ -124,7 +135,7 @@ def write_marker(project_root: Path) -> None:
     marker.write_text(
         json.dumps(
             {
-                "schema": 3,
+                "schema": 4,
                 "instance": INSTANCE_NAME,
                 "created_at": time.time(),
                 "project_root": str(project_root),
@@ -150,7 +161,7 @@ def main() -> int:
     parser.add_argument("--non-interactive", action="store_true")
     args = parser.parse_args()
     project_root = Path(args.project_root).resolve()
-    apply_portable_environment(project_root)
+    bind_red_data_manager(project_root)
 
     print("\nDjGoo portable setup")
     print("====================")
@@ -158,10 +169,17 @@ def main() -> int:
     ensure_project_files(project_root)
     config_path = ensure_instance(project_root)
     verify_red_config_resolution(project_root, config_path)
+    dpapi_verified = verify_update_credentials()
     write_marker(project_root)
 
+    import pip
+
     print(f"Created or refreshed the Red instance configuration at:\n  {config_path}\n")
-    print("Verified that Red resolves this same portable configuration file.\n")
+    print("Verified that Red resolves this same portable configuration file.")
+    print(f"Verified bundled pip {pip.__version__}.")
+    if dpapi_verified:
+        print("Verified Windows-encrypted update credential storage.")
+    print()
     print(f"Registered bundled DjGoo cogs from:\n  {(project_root / 'local_cogs').resolve()}\n")
     print("Discord requires each host owner to create their own bot application.")
     print("Never send the bot token to another user and never put it in GitHub.")
