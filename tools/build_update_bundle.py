@@ -26,6 +26,7 @@ ROOT_FILES = (
     "requirements-voice.txt",
     "pyproject.toml",
     "sbom.cdx.json",
+    "data/installed-version.json",
 )
 CONFIG_FILES = (
     "config/secrets.example.json",
@@ -35,6 +36,7 @@ EXCLUDED_PARTS = {"__pycache__", ".git", ".github"}
 EXCLUDED_SUFFIXES = {".pyc", ".pyo"}
 BUNDLE_NAME = "DjGoo-Host-update.zip"
 MANIFEST_NAME = "DjGoo-Host-update.json"
+SAFE_DATA_FILES = {"data/installed-version.json"}
 VERSION_PATTERN = re.compile(
     r"\d+\.\d+\.\d+"
     r"(?:-(?:(?:alpha|beta|rc)\.\d+|dev))?"
@@ -76,7 +78,9 @@ def collect_update_files(package_root: Path) -> list[Path]:
         relative = path.relative_to(root).as_posix()
         if not _eligible(Path(relative)):
             return
-        if relative.startswith(("data/", "logs/", ".localappdata/")):
+        if relative.startswith("data/") and relative not in SAFE_DATA_FILES:
+            return
+        if relative.startswith(("logs/", ".localappdata/")):
             return
         if relative == "config/secrets.json":
             return
@@ -102,6 +106,8 @@ def collect_update_files(package_root: Path) -> list[Path]:
 
     if "DjGoo.exe" not in collected:
         raise UpdateBundleError("DjGoo.exe is missing from the package")
+    if "data/installed-version.json" not in collected:
+        raise UpdateBundleError("The package does not contain installed-version metadata")
     if not any(name.startswith("runtime/python/Lib/site-packages/pip/") for name in collected):
         raise UpdateBundleError("The package does not contain the bundled pip module")
     return [collected[name] for name in sorted(collected)]
