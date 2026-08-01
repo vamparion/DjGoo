@@ -4,10 +4,21 @@ import argparse
 import json
 import os
 import shutil
+import sys
 import time
 import webbrowser
 from pathlib import Path
 from typing import Any
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from tools.portable_environment import (
+    apply_portable_environment,
+    red_config_dir as portable_red_config_dir,
+)
 
 
 DISCORD_APPS_URL = "https://discord.com/developers/applications"
@@ -18,7 +29,7 @@ def red_config_dir(project_root: Path) -> Path:
     configured = os.environ.get("REDBOT_CONFIG_DIR", "").strip()
     if configured:
         return Path(configured).expanduser().resolve()
-    return (project_root / ".localappdata" / "Red-DiscordBot" / "Red-DiscordBot").resolve()
+    return portable_red_config_dir(project_root)
 
 
 def _load_config(config_path: Path) -> dict[str, Any]:
@@ -98,10 +109,11 @@ def write_marker(project_root: Path) -> None:
     marker.write_text(
         json.dumps(
             {
-                "schema": 2,
+                "schema": 3,
                 "instance": INSTANCE_NAME,
                 "created_at": time.time(),
                 "project_root": str(project_root),
+                "red_config_dir": str(red_config_dir(project_root)),
                 "local_cog_path": str((project_root / "local_cogs").resolve()),
                 "startup_cogs": ["audio", "djgoowelcome"],
             },
@@ -119,10 +131,11 @@ def prompt(message: str) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Prepare a portable DjGoo host instance.")
-    parser.add_argument("--project-root", default=str(Path(__file__).resolve().parents[1]))
+    parser.add_argument("--project-root", default=str(PROJECT_ROOT))
     parser.add_argument("--non-interactive", action="store_true")
     args = parser.parse_args()
     project_root = Path(args.project_root).resolve()
+    apply_portable_environment(project_root)
 
     print("\nDjGoo portable setup")
     print("====================")
@@ -143,7 +156,7 @@ def main() -> int:
     print("\nNext steps")
     print("1. Close this window.")
     print("2. In DjGoo, choose 'Test bot console'.")
-    print("3. Red will ask for the bot token, command prefix, and owner information on first start.")
+    print("3. Red will ask for the bot token and command prefix on first start.")
     print("4. DjGoo automatically loads Red Audio and the bundled djgoowelcome cog.")
     print("5. Invite the bot using the URL Red prints after it connects.")
     print("6. Close the test console before using the normal Start button.")
