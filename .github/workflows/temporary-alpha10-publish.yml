@@ -1,0 +1,151 @@
+name: Temporary alpha.10 publisher
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".alpha10-publish-trigger"
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: temporary-alpha10-publisher
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Dispatch clean Windows package build
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BRANCH: release/v0.3.0-alpha.10
+        shell: bash
+        run: |
+          set -euo pipefail
+          started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "started_at=$started_at" >> "$GITHUB_OUTPUT"
+          gh workflow run portable-release.yml --repo "$GITHUB_REPOSITORY" --ref "$RELEASE_BRANCH"
+
+      - name: Wait for verified package build
+        id: packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BRANCH: release/v0.3.0-alpha.10
+          STARTED_AT: ${{ steps.dispatch.outputs.started_at }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id=""
+          for attempt in $(seq 1 180); do
+            runs="$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow portable-release.yml \
+              --branch "$RELEASE_BRANCH" \
+              --event workflow_dispatch \
+              --limit 20 \
+              --json databaseId,status,conclusion,createdAt,headBranch)"
+            run_id="$(jq -r \
+              --arg branch "$RELEASE_BRANCH" \
+              --arg started "$STARTED_AT" \
+              '[.[] | select(.headBranch == $branch and .createdAt >= $started)] | sort_by(.createdAt) | last | .databaseId // empty' \
+              <<<"$runs")"
+            if [[ -z "$run_id" ]]; then
+              sleep 10
+              continue
+            fi
+            status="$(jq -r --argjson id "$run_id" '.[] | select(.databaseId == $id) | .status' <<<"$runs")"
+            conclusion="$(jq -r --argjson id "$run_id" '.[] | select(.databaseId == $id) | .conclusion // empty' <<<"$runs")"
+            echo "Portable build run $run_id: $status ${conclusion:-}"
+            if [[ "$status" == "completed" ]]; then
+              if [[ "$conclusion" != "success" ]]; then
+                gh run view "$run_id" --repo "$GITHUB_REPOSITORY"
+                exit 1
+              fi
+              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Timed out waiting for Portable Releases workflow" >&2
+          exit 1
+
+      - name: Download verified release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.packages.outputs.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p downloaded/host downloaded/voice release-assets
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name DjGoo-Host-win-x64 --dir downloaded/host
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name DjGoo-Voice-win-x64 --dir downloaded/voice
+          find downloaded -maxdepth 3 -type f -exec cp {} release-assets/ \;
+          test -f release-assets/DjGoo-Host-win-x64.zip
+          test -f release-assets/DjGoo-Host-update.zip
+          test -f release-assets/DjGoo-Host-update.json
+          test -f release-assets/DjGoo-Voice-win-x64.zip
+          test -f release-assets/SHA256SUMS-Host.txt
+          test -f release-assets/SHA256SUMS-Update.txt
+          test -f release-assets/SHA256SUMS-Voice.txt
+
+      - name: Publish v0.3.0-alpha.10 prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BRANCH: release/v0.3.0-alpha.10
+          TAG: v0.3.0-alpha.10
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${RELEASE_BRANCH}" --jq '.object.sha')"
+          cat > release-notes.md <<EOF
+          ## DjGoo alpha test release
+
+          This release restores the Red-DiscordBot 3.5.24 Lavalink contract verified against the official Red and Red-Lavalink implementations.
+
+          - Red connects to the supervisor-owned node as an external client at `ws://[::1]:2333`.
+          - The server binds to raw IPv6 loopback `::1`.
+          - Lavalink is pinned to Red's required `3.7.13+red.5` build.
+          - `application.yml` is generated from Red's own managed-node schema and YouTube plugin pin.
+          - Host readiness requires Red-Lavalink's actual node to report `ready=True`.
+          - The incremental update includes the corrected jar and YAML while preserving private Red data and user settings.
+
+          The Windows release workflow started the packaged server and completed a real Red-Lavalink WebSocket connection before these assets were published.
+          EOF
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$target_sha" --prerelease \
+              --title "DjGoo $TAG (Alpha)" --notes-file release-notes.md
+          else
+            gh release create "$TAG" release-assets/* --repo "$GITHUB_REPOSITORY" \
+              --target "$target_sha" --prerelease \
+              --title "DjGoo $TAG (Alpha)" --notes-file release-notes.md
+          fi
+
+      - name: Verify published release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v0.3.0-alpha.10")"
+          jq -e '.prerelease == true' <<<"$release" >/dev/null
+          for asset in \
+            DjGoo-Host-win-x64.zip \
+            DjGoo-Host-update.zip \
+            DjGoo-Host-update.json \
+            DjGoo-Voice-win-x64.zip \
+            SHA256SUMS-Host.txt \
+            SHA256SUMS-Update.txt \
+            SHA256SUMS-Voice.txt; do
+            jq -e --arg name "$asset" '.assets[] | select(.name == $name and .size > 0)' <<<"$release" >/dev/null
+          done
+          echo "v0.3.0-alpha.10 release and assets verified."
