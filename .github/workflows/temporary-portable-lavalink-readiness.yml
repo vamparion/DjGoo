@@ -1,5 +1,6 @@
 name: Temporary portable Lavalink readiness patch
 
+# Second commit triggers this workflow after GitHub registers it on main.
 on:
   push:
     branches:
