@@ -29,19 +29,54 @@ def _input_blob(data: bytes) -> tuple[_DataBlob, object]:
     return blob, buffer
 
 
-def _crypt32() -> object:
+def _windows_libraries() -> tuple[object, object]:
     if os.name != "nt":
         raise UpdateCredentialError("Windows DPAPI is only available on Windows")
-    return ctypes.windll.crypt32
+
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    crypt32.CryptProtectData.argtypes = [
+        ctypes.POINTER(_DataBlob),
+        wintypes.LPCWSTR,
+        ctypes.POINTER(_DataBlob),
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(_DataBlob),
+    ]
+    crypt32.CryptProtectData.restype = wintypes.BOOL
+
+    crypt32.CryptUnprotectData.argtypes = [
+        ctypes.POINTER(_DataBlob),
+        ctypes.POINTER(wintypes.LPWSTR),
+        ctypes.POINTER(_DataBlob),
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(_DataBlob),
+    ]
+    crypt32.CryptUnprotectData.restype = wintypes.BOOL
+
+    kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
+    kernel32.LocalFree.restype = wintypes.HLOCAL
+    return crypt32, kernel32
+
+
+def _raise_windows_error(message: str) -> None:
+    code = ctypes.get_last_error()
+    detail = ctypes.FormatError(code).strip() if code else "unknown Windows error"
+    raise UpdateCredentialError(f"{message} ({code}: {detail})")
 
 
 def protect_secret(secret: str) -> str:
-    if not secret:
+    token = secret.strip()
+    if not token:
         raise UpdateCredentialError("The update token is empty")
-    raw = secret.encode("utf-8")
-    input_blob, input_buffer = _input_blob(raw)
+
+    input_blob, input_buffer = _input_blob(token.encode("utf-8"))
     output_blob = _DataBlob()
-    crypt32 = _crypt32()
+    crypt32, kernel32 = _windows_libraries()
     ok = crypt32.CryptProtectData(
         ctypes.byref(input_blob),
         DESCRIPTION,
@@ -53,11 +88,11 @@ def protect_secret(secret: str) -> str:
     )
     del input_buffer
     if not ok:
-        raise UpdateCredentialError(f"Could not encrypt the update token (Windows error {ctypes.get_last_error()})")
+        _raise_windows_error("Could not encrypt the update token")
     try:
         protected = ctypes.string_at(output_blob.pbData, output_blob.cbData)
     finally:
-        ctypes.windll.kernel32.LocalFree(output_blob.pbData)
+        kernel32.LocalFree(ctypes.cast(output_blob.pbData, wintypes.HLOCAL))
     return base64.b64encode(protected).decode("ascii")
 
 
@@ -66,12 +101,14 @@ def unprotect_secret(protected: str) -> str:
         encrypted = base64.b64decode(protected.encode("ascii"), validate=True)
     except (ValueError, UnicodeError) as exc:
         raise UpdateCredentialError("The saved update credential is malformed") from exc
+
     input_blob, input_buffer = _input_blob(encrypted)
     output_blob = _DataBlob()
-    crypt32 = _crypt32()
+    description = wintypes.LPWSTR()
+    crypt32, kernel32 = _windows_libraries()
     ok = crypt32.CryptUnprotectData(
         ctypes.byref(input_blob),
-        None,
+        ctypes.byref(description),
         None,
         None,
         None,
@@ -80,13 +117,13 @@ def unprotect_secret(protected: str) -> str:
     )
     del input_buffer
     if not ok:
-        raise UpdateCredentialError(
-            "Could not decrypt the saved update token for this Windows account"
-        )
+        _raise_windows_error("Could not decrypt the saved update token for this Windows account")
     try:
         raw = ctypes.string_at(output_blob.pbData, output_blob.cbData)
     finally:
-        ctypes.windll.kernel32.LocalFree(output_blob.pbData)
+        if description:
+            kernel32.LocalFree(ctypes.cast(description, wintypes.HLOCAL))
+        kernel32.LocalFree(ctypes.cast(output_blob.pbData, wintypes.HLOCAL))
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -111,7 +148,7 @@ def save_token(path: Path, token: str) -> None:
     payload = {
         "schema": 1,
         "provider": "github",
-        "protected_token": protect_secret(token.strip()),
+        "protected_token": protect_secret(token),
     }
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
