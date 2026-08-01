@@ -380,12 +380,12 @@ def run_update(root: Path, bundle: Path, manifest_path: Path, parent_pid: int) -
 
     started_at = time.time()
     resume_stack = stack_was_running(root)
-    supervisor_pid = recorded_supervisor_pid(root)
-    invoke_stack(root, "shutdown", log)
-    if supervisor_pid:
-        wait_for_process_exit(supervisor_pid, timeout=PARENT_EXIT_TIMEOUT_SECONDS)
-        log(f"Supervisor PID {supervisor_pid} exited before file replacement.")
     try:
+        supervisor_pid = recorded_supervisor_pid(root)
+        invoke_stack(root, "shutdown", log)
+        if supervisor_pid:
+            wait_for_process_exit(supervisor_pid, timeout=PARENT_EXIT_TIMEOUT_SECONDS)
+            log(f"Supervisor PID {supervisor_pid} exited before file replacement.")
         manifest = load_manifest(manifest_path)
         expected = validate_bundle(bundle, manifest)
         version = str(manifest.get("version") or "unknown")
