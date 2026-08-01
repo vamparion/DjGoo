@@ -74,22 +74,21 @@ def _lease_is_active(
 def _refresh_heartbeat_lease_once(component: str) -> bool:
     with _HEARTBEAT_LOCK:
         state = dict(_HEARTBEAT_LEASES.get(component) or {})
-    if not state:
-        return False
-    if not _lease_is_active(
-        component,
-        source_monotonic=float(state["source_monotonic"]),
-        now_monotonic=time.monotonic(),
-    ):
-        with _HEARTBEAT_LOCK:
+        if not state:
+            return False
+        if not _lease_is_active(
+            component,
+            source_monotonic=float(state["source_monotonic"]),
+            now_monotonic=time.monotonic(),
+        ):
             _HEARTBEAT_LEASES.pop(component, None)
-        return False
-    _write_payload(
-        component,
-        project_root=state.get("project_root"),
-        fields=state.get("fields") or {},
-    )
-    return True
+            return False
+        _write_payload(
+            component,
+            project_root=state.get("project_root"),
+            fields=state.get("fields") or {},
+        )
+        return True
 
 
 def _heartbeat_lease_loop(component: str) -> None:
@@ -101,6 +100,9 @@ def _heartbeat_lease_loop(component: str) -> None:
     finally:
         with _HEARTBEAT_LOCK:
             _HEARTBEAT_THREADS.discard(component)
+            restart = component in _HEARTBEAT_LEASES
+        if restart:
+            _ensure_heartbeat_lease_thread(component)
 
 
 def _ensure_heartbeat_lease_thread(component: str) -> None:
@@ -125,19 +127,19 @@ def write_heartbeat(
     fields: Mapping[str, Any] | None = None,
 ) -> None:
     heartbeat_fields = dict(fields or {})
-    _write_payload(
-        component,
-        project_root=project_root,
-        fields=heartbeat_fields,
-    )
-    if component in HEARTBEAT_LEASE_SECONDS:
-        with _HEARTBEAT_LOCK:
+    with _HEARTBEAT_LOCK:
+        _write_payload(
+            component,
+            project_root=project_root,
+            fields=heartbeat_fields,
+        )
+        if component in HEARTBEAT_LEASE_SECONDS:
             _HEARTBEAT_LEASES[component] = {
                 "source_monotonic": time.monotonic(),
                 "project_root": project_root,
                 "fields": heartbeat_fields,
             }
-        _ensure_heartbeat_lease_thread(component)
+    _ensure_heartbeat_lease_thread(component)
 
 
 def read_heartbeat(
