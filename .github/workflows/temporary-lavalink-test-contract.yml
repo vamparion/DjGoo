@@ -1,5 +1,6 @@
 name: Temporary Lavalink test contract patch
 
+# Second commit triggers this workflow after GitHub registers it on main.
 on:
   push:
     branches:
