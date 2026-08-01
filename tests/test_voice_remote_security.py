@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from voice import secure_store
 from voice.remote_transport import (
     RemoteCredential,
     load_credential,
@@ -38,7 +39,16 @@ def test_tls_identity_is_stable(tmp_path: Path) -> None:
     assert len(private_key.read_bytes()) > 1000
 
 
-def test_remote_credential_round_trip_and_redaction(tmp_path: Path) -> None:
+def test_remote_credential_is_dpapi_protected_on_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Exercise the Windows envelope without requiring the Linux CI runner to
+    # expose the Windows CryptProtectData API.
+    monkeypatch.setattr(secure_store.os, "name", "nt")
+    monkeypatch.setattr(secure_store, "_protect_windows", lambda value: value[::-1])
+    monkeypatch.setattr(secure_store, "_unprotect_windows", lambda value: value[::-1])
+
     credential = RemoteCredential(
         gateway_url="https://djgoo.local:47632",
         tls_fingerprint_sha256="ab" * 32,
@@ -50,6 +60,31 @@ def test_remote_credential_round_trip_and_redaction(tmp_path: Path) -> None:
     path = tmp_path / "credential.json"
     save_credential(path, credential)
     loaded = load_credential(path)
+
     assert loaded == credential
     assert loaded.redacted()["device_token"] == "<redacted>"
-    assert json.loads(path.read_text(encoding="utf-8"))["device_token"] == "secret-device-token"
+    raw = path.read_text(encoding="utf-8")
+    envelope = json.loads(raw)
+    assert envelope["protection"] == "windows-dpapi-current-user"
+    assert "secret-device-token" not in raw
+
+
+def test_plaintext_alpha_credential_is_migratable(tmp_path: Path) -> None:
+    path = tmp_path / "credential.json"
+    path.write_text(
+        json.dumps(
+            {
+                "gateway_url": "https://djgoo.local:47632",
+                "tls_fingerprint_sha256": "cd" * 32,
+                "device_id": "old-device",
+                "device_token": "old-token-value-that-is-long-enough",
+                "discord_user_id": "123",
+                "guild_id": "456",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_credential(path)
+    assert loaded.device_id == "old-device"
+    assert loaded.transport == "direct"
