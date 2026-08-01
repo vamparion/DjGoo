@@ -1,8 +1,15 @@
+from __future__ import annotations
+
 import asyncio
 import runpy
 import socket
 import sys
 from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+INSTANCE_NAME = "discordbot"
+STARTUP_COGS = ("audio", "djgoowelcome")
 
 
 def _ipv6_socketpair(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0):
@@ -22,6 +29,7 @@ def _ipv6_socketpair(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0):
         listener.close()
     return client, server
 
+
 socket.socketpair = _ipv6_socketpair
 
 if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
@@ -31,16 +39,21 @@ from redbot.cogs.audio.managed_node import ll_server_config
 
 ll_server_config.DEFAULT_LAVALINK_YAML["yaml__server__address"] = "::1"
 
-def main() -> None:
-    sys.argv = [
+
+def redbot_argv(project_root: Path = PROJECT_ROOT) -> list[str]:
+    local_cogs = (project_root / "local_cogs").resolve()
+    return [
         "redbot",
-        "discordbot",
+        INSTANCE_NAME,
         "--cog-path",
-        str(Path("local_cogs").resolve()),
+        str(local_cogs),
         "--load-cogs",
-        "audio",
-        "djgoowelcome",
+        *STARTUP_COGS,
     ]
+
+
+def main() -> None:
+    sys.argv = redbot_argv(PROJECT_ROOT)
     runpy.run_module("redbot", run_name="__main__")
 
 
