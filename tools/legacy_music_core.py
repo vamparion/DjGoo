@@ -87,8 +87,16 @@ def _current_registration_ready(root: Path, marker: Path) -> bool:
     return configured == expected and _has_legacy_core_state(expected)
 
 
+def _looks_like_djgoo_install(path: Path) -> bool:
+    """Limit sibling migration discovery to plausible DjGoo packages."""
+
+    if "djgoo" in path.name.lower():
+        return True
+    return (path / "DjGoo.exe").is_file() or (path / "DjGoo Voice.exe").is_file()
+
+
 def _candidate_config_paths(root: Path) -> Iterator[tuple[Path, Path]]:
-    """Yield current and immediate-sibling portable Red configurations."""
+    """Yield the current config and plausible immediate-sibling DjGoo configs."""
 
     current = red_config_dir(root) / "config.json"
     yielded: set[Path] = set()
@@ -109,7 +117,11 @@ def _candidate_config_paths(root: Path) -> Iterator[tuple[Path, Path]]:
     except OSError:
         siblings = []
     for sibling in siblings:
-        if not sibling.is_dir() or sibling.resolve() == root:
+        if (
+            not sibling.is_dir()
+            or sibling.resolve() == root
+            or not _looks_like_djgoo_install(sibling)
+        ):
             continue
         candidate = red_config_dir(sibling) / "config.json"
         item = emit(sibling, candidate)
@@ -168,10 +180,11 @@ def migrate_existing_music_core(project_root: Path) -> bool:
     Alpha builds could contain a valid Red/Discord configuration without the
     newer ``portable-setup.json`` marker. They could also retain an absolute
     ``DATA_PATH`` or a stale marker after the package folder was moved. This
-    migration detects the current installation or one immediate sibling, copies
-    only user-owned Red state into the current package, preserves the newly
-    bundled Audio Engine, repairs the instance path, and writes a current setup
-    marker. It never interprets or replaces the Discord token itself.
+    migration detects the current installation or a plausible immediate DjGoo
+    sibling, copies only user-owned Red state into the current package,
+    preserves the newly bundled Audio Engine, repairs the instance path, and
+    writes a current setup marker. It never interprets or replaces the Discord
+    token itself.
     """
 
     root = project_root.resolve()
