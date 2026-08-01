@@ -1,33 +1,43 @@
 from __future__ import annotations
 
 import argparse
-import ctypes
-import getpass
 import json
 import os
 import socket
+import socketserver
 import ssl
 import subprocess
 import sys
+import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import psutil
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOG_DIR = PROJECT_ROOT / "logs"
-RUN_LOG_DIR = LOG_DIR / "startup-runs"
+COMPONENT_LOG_DIR = LOG_DIR / "components"
 PID_DIR = PROJECT_ROOT / "data" / "pids"
-JAVA = Path(r"C:\Program Files\Eclipse Adoptium\jdk-17.0.17.10-hotspot\bin\java.exe")
+STATE_PATH = PROJECT_ROOT / "data" / "djgoo-supervisor-state.json"
+LOCK_PATH = PROJECT_ROOT / "data" / "djgoo-supervisor.lock"
+SUPERVISOR_PID_PATH = PID_DIR / "supervisor.json"
+CONTROL_HOST = "127.0.0.1"
+CONTROL_PORT = int(os.environ.get("DJGOO_CONTROL_PORT", "47631"))
+
+JAVA = Path(os.environ.get("DJGOO_JAVA", r"C:\Program Files\Eclipse Adoptium\jdk-17.0.17.10-hotspot\bin\java.exe"))
 BOT_PYTHON = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
 VOICE_PYTHON = PROJECT_ROOT / ".voice-venv" / "Scripts" / "python.exe"
+PYTHONW = PROJECT_ROOT / ".venv" / "Scripts" / "pythonw.exe"
 REDBOT_SELECTOR = PROJECT_ROOT / "tools" / "start_redbot_selector.py"
 LAVALINK_DIR = PROJECT_ROOT / "data" / "discordbot" / "cogs" / "Audio"
 LAVALINK_JAR = LAVALINK_DIR / "Lavalink.jar"
 REDBOT_LOG = PROJECT_ROOT / "data" / "discordbot" / "core" / "logs" / "red.log"
+EVENT_LOG = LOG_DIR / "djgoo-events.jsonl"
+
 WINDOWS_DETACHED_FLAGS = 0
 if os.name == "nt":
     WINDOWS_DETACHED_FLAGS = (
@@ -37,20 +47,11 @@ if os.name == "nt":
     )
 
 
-def session_id(pid: int | None = None) -> int | None:
-    if os.name != "nt":
-        return None
-    value = ctypes.c_ulong()
-    target = os.getpid() if pid is None else pid
-    ok = ctypes.windll.kernel32.ProcessIdToSessionId(ctypes.c_ulong(target), ctypes.byref(value))
-    return int(value.value) if ok else None
-
-
 class Logger:
-    def __init__(self, run_dir: Path):
-        self.run_dir = run_dir
-        self.path = run_dir / "launcher.jsonl"
-        self.text_path = LOG_DIR / "startup.log"
+    def __init__(self) -> None:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        self.path = LOG_DIR / "startup.log"
+        self._lock = threading.Lock()
 
     def event(self, event: str, **fields: Any) -> None:
         record = {
@@ -59,81 +60,189 @@ class Logger:
             **fields,
         }
         line = json.dumps(record, ensure_ascii=False, default=str)
+        with self._lock:
+            with self.path.open("a", encoding="utf-8") as fp:
+                fp.write(line + "\n")
+
+
+LOG = Logger()
+
+
+@dataclass(frozen=True)
+class ComponentSpec:
+    name: str
+    command: list[str]
+    cwd: Path
+    command_markers: tuple[str, ...]
+    ready: Callable[[], bool]
+    ready_timeout: float
+
+
+class SingleInstance:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.handle = None
+
+    def acquire(self) -> bool:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as fp:
-            fp.write(line + "\n")
-        with self.text_path.open("a", encoding="utf-8") as fp:
-            fp.write(line + "\n")
-
-
-def new_logger() -> Logger:
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    RUN_LOG_DIR.mkdir(parents=True, exist_ok=True)
-    PID_DIR.mkdir(parents=True, exist_ok=True)
-    run_dir = RUN_LOG_DIR / datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_dir.mkdir(parents=True, exist_ok=True)
-    return Logger(run_dir)
-
-
-def run_capture(command: list[str], *, cwd: Path = PROJECT_ROOT, timeout: int = 20, max_chars: int | None = 8000) -> dict[str, Any]:
-    try:
-        completed = subprocess.run(
-            command,
-            cwd=str(cwd),
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            encoding="utf-8",
-            errors="replace",
-        )
-        return {
-            "command": command,
-            "returncode": completed.returncode,
-            "stdout": completed.stdout if max_chars is None else completed.stdout[-max_chars:],
-            "stderr": completed.stderr if max_chars is None else completed.stderr[-max_chars:],
-        }
-    except Exception as exc:
-        return {"command": command, "error": type(exc).__name__, "detail": str(exc)}
-
-
-def dns_servers() -> dict[str, Any]:
-    return run_capture(
-        ["ipconfig", "/all"],
-        timeout=15,
-    )
-
-
-def ip_state() -> dict[str, Any]:
-    return run_capture(
-        ["netsh", "interface", "ipv4", "show", "interfaces"],
-        timeout=15,
-    )
-
-
-def process_snapshot() -> dict[str, Any]:
-    processes: list[dict[str, Any]] = []
-    for proc in psutil.process_iter(["pid", "ppid", "name", "exe", "cmdline", "create_time"]):
+        self.handle = self.path.open("a+b")
+        self.handle.seek(0)
+        if self.handle.tell() == 0:
+            self.handle.write(b"0")
+            self.handle.flush()
         try:
-            info = proc.info
-            processes.append(
-                {
-                    "ProcessId": info.get("pid"),
-                    "ParentProcessId": info.get("ppid"),
-                    "SessionId": session_id(int(info.get("pid") or 0)),
-                    "Name": info.get("name"),
-                    "ExecutablePath": info.get("exe"),
-                    "CommandLine": " ".join(info.get("cmdline") or []),
-                    "CreateTime": info.get("create_time"),
-                }
-            )
-        except (psutil.Error, OSError, ValueError):
-            continue
-    return {"processes": processes}
+            if os.name == "nt":
+                import msvcrt
+
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, BlockingIOError):
+            self.handle.close()
+            self.handle = None
+            return False
+        return True
+
+    def close(self) -> None:
+        if self.handle is None:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        self.handle.close()
+        self.handle = None
+
+
+class SupervisorState:
+    def __init__(self) -> None:
+        self.lock = threading.RLock()
+        self.desired_running = False
+        self.reset_requested = False
+        self.shutdown_requested = False
+        self.last_error = ""
+        self.started_at = time.time()
+        self.component_status: dict[str, dict[str, Any]] = {}
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            return {
+                "supervisor_pid": os.getpid(),
+                "desired_running": self.desired_running,
+                "reset_requested": self.reset_requested,
+                "shutdown_requested": self.shutdown_requested,
+                "last_error": self.last_error,
+                "started_at": self.started_at,
+                "components": self.component_status,
+            }
+
+
+STATE = SupervisorState()
+
+
+def atomic_json_write(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    temp.replace(path)
+
+
+def pid_path(name: str) -> Path:
+    return PID_DIR / f"{name}.json"
+
+
+def read_json(path: Path) -> dict[str, Any] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def process_record_matches(record: dict[str, Any] | None, spec: ComponentSpec) -> bool:
+    if not record:
+        return False
+    try:
+        pid = int(record.get("pid") or 0)
+        recorded_create_time = float(record.get("create_time") or 0)
+        proc = psutil.Process(pid)
+        actual_create_time = float(proc.create_time())
+        cmdline = " ".join(proc.cmdline()).lower()
+    except (psutil.Error, OSError, TypeError, ValueError):
+        return False
+    if recorded_create_time and abs(actual_create_time - recorded_create_time) > 1.0:
+        return False
+    return all(marker.lower() in cmdline for marker in spec.command_markers)
+
+
+def component_record(name: str) -> dict[str, Any] | None:
+    return read_json(pid_path(name))
+
+
+def component_running(spec: ComponentSpec) -> bool:
+    return process_record_matches(component_record(spec.name), spec)
+
+
+def write_component_record(spec: ComponentSpec, process: subprocess.Popen[Any]) -> None:
+    try:
+        create_time = psutil.Process(process.pid).create_time()
+    except psutil.Error:
+        create_time = time.time()
+    atomic_json_write(
+        pid_path(spec.name),
+        {
+            "component": spec.name,
+            "pid": process.pid,
+            "create_time": create_time,
+            "command": spec.command,
+            "cwd": str(spec.cwd),
+            "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        },
+    )
+
+
+def terminate_component(spec: ComponentSpec, reason: str) -> None:
+    record = component_record(spec.name)
+    path = pid_path(spec.name)
+    if not process_record_matches(record, spec):
+        path.unlink(missing_ok=True)
+        return
+    pid = int(record["pid"])
+    LOG.event("component.stop", component=spec.name, pid=pid, reason=reason)
+    try:
+        proc = psutil.Process(pid)
+        children = proc.children(recursive=True)
+        for child in reversed(children):
+            try:
+                child.terminate()
+            except psutil.Error:
+                pass
+        proc.terminate()
+        _, alive = psutil.wait_procs([*children, proc], timeout=5)
+        for item in alive:
+            try:
+                item.kill()
+            except psutil.Error:
+                pass
+    except psutil.Error:
+        pass
+    path.unlink(missing_ok=True)
 
 
 def resolved_addresses(host: str) -> list[str]:
     try:
-        return sorted({item[4][0] for item in socket.getaddrinfo(host, 443, 0, socket.SOCK_STREAM)})
+        return sorted({entry[4][0] for entry in socket.getaddrinfo(host, 443, 0, socket.SOCK_STREAM)})
     except OSError:
         return []
 
@@ -148,365 +257,344 @@ def tls_ready(host: str, timeout: float = 2.0) -> bool:
         return False
 
 
-def wait_for_discord(log: Logger, *, timeout: int = 45) -> bool:
-    deadline = time.monotonic() + timeout
-    attempt = 0
-    while time.monotonic() < deadline:
-        attempt += 1
-        results = {host: {"addresses": resolved_addresses(host), "tls": tls_ready(host)} for host in ("discord.com", "gateway.discord.gg")}
-        log.event("network.check", attempt=attempt, results=results)
-        if all(result["addresses"] and result["tls"] for result in results.values()):
-            log.event("network.ready", attempt=attempt)
-            return True
-        time.sleep(1)
-    log.event("network.timeout", timeout=timeout)
-    return False
-
-
-def pid_path(name: str) -> Path:
-    return PID_DIR / f"{name}.json"
-
-
-def read_pid(name: str) -> dict[str, Any] | None:
-    path = pid_path(name)
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-
-
-def write_pid(name: str, proc: subprocess.Popen, command: list[str], cwd: Path, log: Logger) -> None:
-    data = {
-        "component": name,
-        "pid": proc.pid,
-        "session_id": session_id(proc.pid),
-        "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "command": command,
-        "cwd": str(cwd),
-        "run_log_dir": str(log.run_dir),
-    }
-    pid_path(name).write_text(json.dumps(data, indent=2), encoding="utf-8")
-    log.event("pid.written", **data)
-
-
-def is_running(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    return psutil.pid_exists(pid)
-
-
-def process_children(pid: int) -> list[int]:
-    try:
-        return [child.pid for child in psutil.Process(pid).children(recursive=True)]
-    except psutil.Error:
-        return []
-
-
-def process_command_line(proc: psutil.Process) -> str:
-    try:
-        return " ".join(proc.cmdline())
-    except psutil.Error:
-        return ""
-
-
-def process_session_id(proc: psutil.Process) -> int | None:
-    try:
-        return session_id(proc.pid)
-    except (psutil.Error, OSError):
-        return None
-
-
-def is_project_owned_process(proc: psutil.Process) -> bool:
-    try:
-        name = (proc.name() or "").lower()
-    except psutil.Error:
-        return False
-    if name not in {"python.exe", "pythonw.exe", "java.exe"}:
-        return False
-    command_line = process_command_line(proc)
-    if str(PROJECT_ROOT).lower() not in command_line.lower():
-        return False
-    lowered = command_line.lower()
-    return (
-        "djgoo_voice_listener" in lowered
-        or "start_redbot_selector.py" in lowered
-        or "lavalink.jar" in lowered
-    )
-
-
-def child_pids(pid: int) -> list[int]:
-    return process_children(pid)
-
-
-def project_owned_processes() -> list[dict[str, Any]]:
-    owned: list[dict[str, Any]] = []
-    for proc in psutil.process_iter(["pid", "ppid", "name", "exe"]):
-        try:
-            if not is_project_owned_process(proc):
-                continue
-            owned.append(
-                {
-                    "ProcessId": proc.pid,
-                    "ParentProcessId": proc.ppid(),
-                    "SessionId": process_session_id(proc),
-                    "Name": proc.name(),
-                    "ExecutablePath": proc.exe(),
-                    "CommandLine": process_command_line(proc),
-                }
-            )
-        except psutil.Error:
-            continue
-    return owned
-
-
-def stop_pid(pid: int, log: Logger, *, reason: str) -> None:
-    log.event("process.stop", pid=pid, reason=reason)
-    result = run_capture(["taskkill", "/PID", str(pid), "/T", "/F"], timeout=8)
-    log.event("process.stop.result", pid=pid, reason=reason, result=result)
-
-
-def stop_pids(pids: list[int], log: Logger, *, reason: str) -> None:
-    targets = sorted({pid for pid in pids if pid > 0 and pid != os.getpid()})
-    if not targets:
-        return
-    command = ["taskkill"]
-    for pid in targets:
-        log.event("process.stop", pid=pid, reason=reason)
-        command.extend(["/PID", str(pid)])
-    command.extend(["/T", "/F"])
-    result = run_capture(command, timeout=12)
-    log.event("process.stop.result", pids=targets, reason=reason, result=result)
-
-
-def stop_owned(log: Logger) -> None:
-    targets: list[int] = []
-    for name in ("voice", "redbot", "lavalink"):
-        data = read_pid(name)
-        if data and isinstance(data.get("pid"), int):
-            pid = int(data["pid"])
-            log.event("process.stop.queued", pid=pid, reason=f"stop-owned:{name}")
-            targets.append(pid)
-        pid_path(name).unlink(missing_ok=True)
-
-    # Full command-line process scans are slow under ASTER/ProtoInput on this PC.
-    # PID files are the primary ownership mechanism; taskkill /T handles children.
-    if targets:
-        log.event("process.discovery.skipped", reason="pid-files-present", pids=targets)
-        stop_pids(targets, log, reason="stop-owned")
-        log.event("stop.complete")
-        return
-
-    for proc in project_owned_processes():
-        try:
-            pid = int(proc.get("ProcessId") or 0)
-        except (TypeError, ValueError):
-            continue
-        if pid <= 0 or pid in targets or pid == os.getpid():
-            continue
-        log.event(
-            "process.stop.discovered",
-            pid=pid,
-            name=proc.get("Name"),
-            session_id=proc.get("SessionId"),
-            command_line=proc.get("CommandLine"),
-        )
-        targets.append(pid)
-    stop_pids(targets, log, reason="stop-owned")
-    log.event("stop.complete")
-
-
-def owned_stack_running(log: Logger) -> bool:
-    status: dict[str, Any] = {}
-    for name in ("lavalink", "redbot", "voice"):
-        data = read_pid(name)
-        pid = int(data.get("pid") or 0) if data else 0
-        status[name] = {"pid": pid, "running": is_running(pid)}
-    status["lavalink"]["listening"] = lavalink_ready() if status["lavalink"]["running"] else False
-    ready = all(status[name]["running"] for name in ("lavalink", "redbot", "voice")) and bool(status["lavalink"]["listening"])
-    log.event("stack.running_check", ready=ready, components=status)
-    return ready
-
-
-def start_process(
-    name: str,
-    command: list[str],
-    cwd: Path,
-    log: Logger,
-    stdout_name: str,
-    stderr_name: str,
-    *,
-    resume_playback: bool = False,
-) -> subprocess.Popen:
-    stdout_path = log.run_dir / stdout_name
-    stderr_path = log.run_dir / stderr_name
-    env = os.environ.copy()
-    env["REDBOT_CONFIG_DIR"] = str(PROJECT_ROOT / ".localappdata" / "Red-DiscordBot" / "Red-DiscordBot")
-    env["DJGOO_SECRETS_FILE"] = str(PROJECT_ROOT / "config" / "secrets.json")
-    env["DJGOO_EVENT_LOG"] = str(LOG_DIR / "djgoo-events.jsonl")
-    if resume_playback:
-        env["DJGOO_RESUME_PLAYBACK"] = "1"
-        env["DJGOO_RESUME_ACTIVE_RADIO"] = "1"
-    log.event("process.start", component=name, command=command, cwd=str(cwd), stdout=str(stdout_path), stderr=str(stderr_path))
-    stdout = stdout_path.open("ab")
-    stderr = stderr_path.open("ab")
-    flags = WINDOWS_DETACHED_FLAGS if os.name == "nt" else 0
-    try:
-        proc = subprocess.Popen(command, cwd=str(cwd), env=env, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL, creationflags=flags)
-    except OSError as exc:
-        if os.name != "nt" or not flags:
-            raise
-        log.event("process.start.detached_failed", component=name, error=type(exc).__name__, detail=str(exc), flags=flags)
-        fallback_flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-        proc = subprocess.Popen(command, cwd=str(cwd), env=env, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL, creationflags=fallback_flags)
-    finally:
-        stdout.close()
-        stderr.close()
-    write_pid(name, proc, command, cwd, log)
-    return proc
+def discord_network_ready() -> bool:
+    return all(resolved_addresses(host) and tls_ready(host) for host in ("discord.com", "gateway.discord.gg"))
 
 
 def lavalink_ready() -> bool:
     try:
-        with socket.create_connection(("::1", 2333), timeout=0.25):
+        with socket.create_connection(("::1", 2333), timeout=0.35):
             return True
     except OSError:
         return False
 
 
-def wait_lavalink(log: Logger, *, timeout: int = 45) -> bool:
-    deadline = time.monotonic() + timeout
-    attempt = 0
+def redbot_ready() -> bool:
+    if not REDBOT_LOG.exists():
+        return False
+    try:
+        text = REDBOT_LOG.read_text(encoding="utf-8", errors="replace")[-200_000:]
+    except OSError:
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "Connected to Discord. Getting ready",
+            "has connected to Gateway",
+            "successfully RESUMED",
+        )
+    ) and "Lavalink WS connected" in text
+
+
+def voice_ready() -> bool:
+    if not EVENT_LOG.exists():
+        return False
+    try:
+        text = EVENT_LOG.read_text(encoding="utf-8", errors="replace")[-100_000:]
+    except OSError:
+        return False
+    return "voice.listener.ready" in text
+
+
+def build_specs() -> list[ComponentSpec]:
+    specs = [
+        ComponentSpec(
+            name="lavalink",
+            command=[str(JAVA), "-Xms64M", "-Xmx512M", "-jar", str(LAVALINK_JAR)],
+            cwd=LAVALINK_DIR,
+            command_markers=("lavalink.jar", str(PROJECT_ROOT)),
+            ready=lavalink_ready,
+            ready_timeout=45,
+        ),
+        ComponentSpec(
+            name="redbot",
+            command=[str(BOT_PYTHON), str(REDBOT_SELECTOR)],
+            cwd=PROJECT_ROOT,
+            command_markers=("start_redbot_selector.py", str(PROJECT_ROOT)),
+            ready=redbot_ready,
+            ready_timeout=90,
+        ),
+    ]
+    if VOICE_PYTHON.exists():
+        specs.append(
+            ComponentSpec(
+                name="voice",
+                command=[str(VOICE_PYTHON), "-m", "voice.djgoo_voice_listener", "--project-root", str(PROJECT_ROOT)],
+                cwd=PROJECT_ROOT,
+                command_markers=("voice.djgoo_voice_listener", str(PROJECT_ROOT)),
+                ready=voice_ready,
+                ready_timeout=45,
+            )
+        )
+    return specs
+
+
+def component_environment(resume_playback: bool = False) -> dict[str, str]:
+    env = os.environ.copy()
+    env["REDBOT_CONFIG_DIR"] = str(PROJECT_ROOT / ".localappdata" / "Red-DiscordBot" / "Red-DiscordBot")
+    env["DJGOO_SECRETS_FILE"] = str(PROJECT_ROOT / "config" / "secrets.json")
+    env["DJGOO_EVENT_LOG"] = str(EVENT_LOG)
+    if resume_playback:
+        env["DJGOO_RESUME_PLAYBACK"] = "1"
+        env["DJGOO_RESUME_ACTIVE_RADIO"] = "1"
+    return env
+
+
+def start_component(spec: ComponentSpec, *, resume_playback: bool = False) -> bool:
+    if component_running(spec):
+        return True
+    required = [Path(spec.command[0])]
+    if spec.name == "lavalink":
+        required.append(LAVALINK_JAR)
+    if any(not path.exists() for path in required):
+        LOG.event("component.missing_dependency", component=spec.name, paths=[str(path) for path in required])
+        return False
+
+    COMPONENT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    stdout_path = COMPONENT_LOG_DIR / f"{spec.name}.out.log"
+    stderr_path = COMPONENT_LOG_DIR / f"{spec.name}.err.log"
+    LOG.event("component.start", component=spec.name, command=spec.command, cwd=str(spec.cwd))
+    with stdout_path.open("ab") as stdout, stderr_path.open("ab") as stderr:
+        process = subprocess.Popen(
+            spec.command,
+            cwd=str(spec.cwd),
+            env=component_environment(resume_playback=resume_playback),
+            stdout=stdout,
+            stderr=stderr,
+            stdin=subprocess.DEVNULL,
+            creationflags=WINDOWS_DETACHED_FLAGS if os.name == "nt" else 0,
+        )
+    write_component_record(spec, process)
+    return True
+
+
+def wait_until_ready(spec: ComponentSpec) -> bool:
+    deadline = time.monotonic() + spec.ready_timeout
     while time.monotonic() < deadline:
-        attempt += 1
-        ready = lavalink_ready()
-        log.event("lavalink.check", attempt=attempt, ready=ready)
-        if ready:
-            log.event("lavalink.ready", attempt=attempt)
+        with STATE.lock:
+            if not STATE.desired_running or STATE.shutdown_requested:
+                return False
+        if not component_running(spec):
+            return False
+        if spec.ready():
+            LOG.event("component.ready", component=spec.name)
             return True
         time.sleep(0.5)
-    log.event("lavalink.timeout", timeout=timeout)
+    LOG.event("component.ready_timeout", component=spec.name, timeout=spec.ready_timeout)
     return False
 
 
-def wait_redbot(log: Logger, *, timeout: int = 90) -> bool:
-    start_size = REDBOT_LOG.stat().st_size if REDBOT_LOG.exists() else 0
-    deadline = time.monotonic() + timeout
-    seen_discord = False
-    seen_lavalink = False
-    while time.monotonic() < deadline:
-        text = ""
-        if REDBOT_LOG.exists():
-            with REDBOT_LOG.open("r", encoding="utf-8", errors="replace") as fp:
-                fp.seek(min(start_size, REDBOT_LOG.stat().st_size))
-                text = fp.read()
-        if "Connected to Discord. Getting ready" in text or "has connected to Gateway" in text or "successfully RESUMED" in text:
-            seen_discord = True
-        if "Lavalink WS connected" in text:
-            seen_lavalink = True
-        log.event("redbot.check", seen_discord=seen_discord, seen_lavalink=seen_lavalink)
-        if seen_discord and seen_lavalink:
-            log.event("redbot.ready")
-            return True
-        time.sleep(0.75)
-    log.event("redbot.timeout", timeout=timeout, seen_discord=seen_discord, seen_lavalink=seen_lavalink)
-    return False
+def stop_stack(specs: list[ComponentSpec], reason: str) -> None:
+    for spec in reversed(specs):
+        terminate_component(spec, reason)
+    with STATE.lock:
+        STATE.component_status = {spec.name: {"running": False, "ready": False} for spec in specs}
+    persist_state()
 
 
-def wait_voice(log: Logger, *, timeout: int = 30) -> bool:
-    event_log = LOG_DIR / "djgoo-events.jsonl"
-    start_size = event_log.stat().st_size if event_log.exists() else 0
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        text = ""
-        if event_log.exists():
-            with event_log.open("r", encoding="utf-8", errors="replace") as fp:
-                fp.seek(min(start_size, event_log.stat().st_size))
-                text = fp.read()
-        ready = "voice.listener.ready" in text
-        hotkey = "voice.hotkey.registration" in text
-        log.event("voice.check", ready=ready, hotkey_registered=hotkey)
-        if ready and (hotkey or '"push_to_talk": false' in text):
-            log.event("voice.ready", hotkey_registered=hotkey)
-            return True
-        time.sleep(0.5)
-    log.event("voice.timeout", timeout=timeout)
-    return False
+def persist_state() -> None:
+    atomic_json_write(STATE_PATH, STATE.snapshot())
 
 
-def log_environment(log: Logger) -> None:
-    log.event(
-        "startup.begin",
-        project_root=str(PROJECT_ROOT),
-        cwd=os.getcwd(),
-        username=getpass.getuser(),
-        userdomain=os.environ.get("USERDOMAIN"),
-        session_id=session_id(),
-        path=os.environ.get("PATH", ""),
-        java=str(JAVA),
-        java_exists=JAVA.exists(),
-        bot_python=str(BOT_PYTHON),
-        bot_python_exists=BOT_PYTHON.exists(),
-        voice_python=str(VOICE_PYTHON),
-        voice_python_exists=VOICE_PYTHON.exists(),
+def update_component_status(specs: list[ComponentSpec]) -> None:
+    status: dict[str, dict[str, Any]] = {}
+    for spec in specs:
+        record = component_record(spec.name) or {}
+        running = component_running(spec)
+        status[spec.name] = {
+            "pid": int(record.get("pid") or 0),
+            "running": running,
+            "ready": bool(running and spec.ready()),
+        }
+    with STATE.lock:
+        STATE.component_status = status
+    persist_state()
+
+
+def ensure_stack(specs: list[ComponentSpec], *, resume_playback: bool = False) -> None:
+    if not discord_network_ready():
+        with STATE.lock:
+            STATE.last_error = "Discord network is not ready"
+        LOG.event("network.not_ready")
+        persist_state()
+        return
+
+    for spec in specs:
+        with STATE.lock:
+            if not STATE.desired_running or STATE.shutdown_requested:
+                return
+        if component_running(spec) and spec.ready():
+            continue
+        if component_running(spec):
+            terminate_component(spec, "unhealthy")
+        if not start_component(spec, resume_playback=resume_playback):
+            with STATE.lock:
+                STATE.last_error = f"Could not start {spec.name}"
+            persist_state()
+            return
+        if not wait_until_ready(spec):
+            terminate_component(spec, "readiness-failed")
+            with STATE.lock:
+                STATE.last_error = f"{spec.name} did not become ready"
+            persist_state()
+            return
+    with STATE.lock:
+        STATE.last_error = ""
+    update_component_status(specs)
+
+
+def reconcile(specs: list[ComponentSpec]) -> None:
+    with STATE.lock:
+        reset = STATE.reset_requested
+        desired = STATE.desired_running
+        STATE.reset_requested = False
+    if reset:
+        stop_stack(specs, "reset")
+        desired = True
+    if not desired:
+        stop_stack(specs, "requested-stop")
+        return
+
+    # Initial ordering matters. Once ready, crashed components are restarted independently.
+    ensure_stack(specs, resume_playback=reset)
+    update_component_status(specs)
+
+
+class ControlHandler(socketserver.StreamRequestHandler):
+    def handle(self) -> None:
+        try:
+            payload = json.loads(self.rfile.readline(64_000).decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self.wfile.write(b'{"ok":false,"error":"invalid request"}\n')
+            return
+        action = str(payload.get("action", "status")).lower()
+        with STATE.lock:
+            if action == "start":
+                STATE.desired_running = True
+            elif action == "reset":
+                STATE.desired_running = True
+                STATE.reset_requested = True
+            elif action == "stop":
+                STATE.desired_running = False
+            elif action == "shutdown":
+                STATE.desired_running = False
+                STATE.shutdown_requested = True
+            elif action != "status":
+                self.wfile.write(json.dumps({"ok": False, "error": f"unknown action: {action}"}).encode("utf-8") + b"\n")
+                return
+        LOG.event("control.request", action=action)
+        response = {"ok": True, "action": action, "state": STATE.snapshot()}
+        self.wfile.write(json.dumps(response, default=str).encode("utf-8") + b"\n")
+
+
+class ControlServer(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
+def write_supervisor_pid() -> None:
+    PID_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        create_time = psutil.Process(os.getpid()).create_time()
+    except psutil.Error:
+        create_time = time.time()
+    atomic_json_write(
+        SUPERVISOR_PID_PATH,
+        {
+            "pid": os.getpid(),
+            "create_time": create_time,
+            "port": CONTROL_PORT,
+            "project_root": str(PROJECT_ROOT),
+        },
     )
-    if os.environ.get("DJGOO_DEEP_STARTUP_LOG", "").strip() == "1":
-        log.event("network.ip_state", result=ip_state())
-        log.event("network.dns_servers", result=dns_servers())
-        log.event("process.snapshot.begin", result=process_snapshot())
 
 
-def start_stack(log: Logger, *, retries: int = 2, resume_playback: bool = False) -> int:
-    log_environment(log)
-    log.event("stack.start.mode", resume_playback=resume_playback)
-    if not resume_playback and owned_stack_running(log):
-        log.event("stack.already_running")
+def run_supervisor() -> int:
+    instance = SingleInstance(LOCK_PATH)
+    if not instance.acquire():
         return 0
-    for attempt in range(1, retries + 1):
-        log.event("stack.start.attempt", attempt=attempt, retries=retries)
-        stop_owned(log)
-        if not wait_for_discord(log):
-            log.event("stack.retry", attempt=attempt, reason="network")
-            continue
-        if not JAVA.exists() or not LAVALINK_JAR.exists():
-            log.event("stack.failed", reason="missing-java-or-lavalink", java_exists=JAVA.exists(), jar_exists=LAVALINK_JAR.exists())
+    write_supervisor_pid()
+    specs = build_specs()
+    LOG.event("supervisor.started", pid=os.getpid(), port=CONTROL_PORT, components=[spec.name for spec in specs])
+    try:
+        with ControlServer((CONTROL_HOST, CONTROL_PORT), ControlHandler) as server:
+            thread = threading.Thread(target=server.serve_forever, name="djgoo-control", daemon=True)
+            thread.start()
+            while True:
+                reconcile(specs)
+                with STATE.lock:
+                    if STATE.shutdown_requested:
+                        break
+                time.sleep(2)
+            stop_stack(specs, "supervisor-shutdown")
+            server.shutdown()
+            thread.join(timeout=2)
+    finally:
+        SUPERVISOR_PID_PATH.unlink(missing_ok=True)
+        instance.close()
+        LOG.event("supervisor.stopped")
+    return 0
+
+
+def control_request(action: str, timeout: float = 1.5) -> dict[str, Any] | None:
+    try:
+        with socket.create_connection((CONTROL_HOST, CONTROL_PORT), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            sock.sendall(json.dumps({"action": action}).encode("utf-8") + b"\n")
+            with sock.makefile("rb") as fp:
+                line = fp.readline(256_000)
+        response = json.loads(line.decode("utf-8"))
+        return response if isinstance(response, dict) else None
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+
+
+def spawn_supervisor() -> bool:
+    executable = PYTHONW if PYTHONW.exists() else Path(sys.executable)
+    COMPONENT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    stdout_path = COMPONENT_LOG_DIR / "supervisor.out.log"
+    stderr_path = COMPONENT_LOG_DIR / "supervisor.err.log"
+    with stdout_path.open("ab") as stdout, stderr_path.open("ab") as stderr:
+        subprocess.Popen(
+            [str(executable), str(Path(__file__).resolve()), "supervise"],
+            cwd=str(PROJECT_ROOT),
+            stdout=stdout,
+            stderr=stderr,
+            stdin=subprocess.DEVNULL,
+            creationflags=WINDOWS_DETACHED_FLAGS if os.name == "nt" else 0,
+        )
+    deadline = time.monotonic() + 4.0
+    while time.monotonic() < deadline:
+        if control_request("status", timeout=0.35):
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def run_client(action: str) -> int:
+    response = control_request(action)
+    if response is None and action in {"start", "reset"}:
+        if not spawn_supervisor():
+            LOG.event("client.failed", action=action, reason="supervisor-unavailable")
             return 1
-        start_process("lavalink", [str(JAVA), "-Xms64M", "-Xmx512M", "-jar", str(LAVALINK_JAR)], LAVALINK_DIR, log, "lavalink.out.log", "lavalink.err.log", resume_playback=resume_playback)
-        if not wait_lavalink(log):
-            log.event("stack.retry", attempt=attempt, reason="lavalink")
-            continue
-        start_process("redbot", [str(BOT_PYTHON), str(REDBOT_SELECTOR)], PROJECT_ROOT, log, "redbot.out.log", "redbot.err.log", resume_playback=resume_playback)
-        if not wait_redbot(log):
-            log.event("stack.retry", attempt=attempt, reason="redbot")
-            continue
-        if VOICE_PYTHON.exists():
-            start_process("voice", [str(VOICE_PYTHON), "-m", "voice.djgoo_voice_listener", "--project-root", str(PROJECT_ROOT)], PROJECT_ROOT, log, "voice.out.log", "voice.err.log", resume_playback=resume_playback)
-            if not wait_voice(log):
-                log.event("stack.retry", attempt=attempt, reason="voice")
-                continue
-        log.event("stack.ready", attempt=attempt)
-        return 0
-    log.event("stack.failed", reason="retries-exhausted")
-    log.event("process.snapshot.failed", result=process_snapshot())
-    return 1
+        response = control_request(action)
+    if response is None:
+        if action in {"stop", "shutdown"}:
+            return 0
+        print(json.dumps({"ok": False, "error": "DjGoo supervisor is not running"}))
+        return 1
+    if action == "status":
+        print(json.dumps(response, indent=2, default=str))
+    return 0 if response.get("ok") else 1
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("start", "stop", "reset"))
+    parser = argparse.ArgumentParser(description="Control the supervised DjGoo stack.")
+    parser.add_argument("action", choices=("start", "stop", "reset", "status", "shutdown", "supervise"))
     args = parser.parse_args()
-    log = new_logger()
-    log.event("launcher.invoked", argv=sys.argv, action=args.action)
-    if args.action == "stop":
-        log_environment(log)
-        stop_owned(log)
-        return 0
-    if args.action == "reset":
-        log_environment(log)
-        stop_owned(log)
-        return start_stack(log, resume_playback=True)
-    return start_stack(log, resume_playback=False)
+    if args.action == "supervise":
+        return run_supervisor()
+    return run_client(args.action)
 
 
 if __name__ == "__main__":
