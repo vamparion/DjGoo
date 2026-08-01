@@ -45,4 +45,5 @@ jobs:
             tests/test_sqlite_stations.py \
             tests/test_extended_voice_commands.py \
             tests/test_voice_audio_processing.py \
-            tests/test_stack_supervisor.py
+            tests/test_stack_supervisor.py \
+            tests/test_health_heartbeat.py
