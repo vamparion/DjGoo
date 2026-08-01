@@ -133,6 +133,33 @@ def build_voice_command_payload(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def build_fast_control_payload(item: Dict[str, Any]) -> Dict[str, Any]:
+    intent = str(item.get("intent", "unknown")).strip().lower()
+    labels = {
+        "skip": "Skipping",
+        "stop": "Stopping",
+        "pause": "Pausing",
+        "resume": "Resuming",
+        "toggle_pause": "Pause/resume",
+        "volume_up": "Volume up",
+        "volume_down": "Volume down",
+    }
+    label = labels.get(intent, intent.replace("_", " ").title() or "Command")
+    raw = str(item.get("raw", "")).strip()
+    description = f"Heard: `{raw}`" if raw else "Voice control received."
+    return {
+        "username": "DjGoo",
+        "content": f"DjGoo: {label}.",
+        "embeds": [
+            {
+                "title": label,
+                "description": description,
+                "color": 0x2F80ED,
+            }
+        ],
+    }
+
+
 def build_station_track_payload(
     *,
     station_name: str,

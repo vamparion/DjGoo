@@ -10,11 +10,6 @@ import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
 
-try:
-    import keyboard as keyboard_backend
-except Exception:
-    keyboard_backend = None
-
 from voice.command_queue import append_queue_item, command_to_queue_item, followup_to_queue_item
 from voice.command_parser import PendingChoice, parse_command, parse_emergency_control, parse_followup
 from voice.listener_settings import voice_settings
@@ -28,129 +23,40 @@ HOTKEYS = {
     "F11": 0x7A,
     "F12": 0x7B,
 }
-KEYBOARD_BACKEND_NAMES = {
-    "F10": "f10",
-    "F11": "f11",
-    "F12": "f12",
-}
-WM_HOTKEY = 0x0312
-WM_KEYDOWN = 0x0100
-WM_SYSKEYDOWN = 0x0104
-PM_REMOVE = 0x0001
-MOD_NOREPEAT = 0x4000
-WH_KEYBOARD_LL = 13
-
-LowLevelKeyboardProc = ctypes.WINFUNCTYPE(
-    ctypes.c_ssize_t,
-    ctypes.c_int,
-    ctypes.c_size_t,
-    ctypes.c_void_p,
-)
 
 if sys.platform == "win32":
-    ctypes.windll.user32.RegisterHotKey.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_uint, ctypes.c_uint]
-    ctypes.windll.user32.RegisterHotKey.restype = ctypes.c_bool
-    ctypes.windll.user32.UnregisterHotKey.argtypes = [ctypes.c_void_p, ctypes.c_int]
-    ctypes.windll.user32.UnregisterHotKey.restype = ctypes.c_bool
-    ctypes.windll.user32.SetWindowsHookExW.argtypes = [
-        ctypes.c_int,
-        LowLevelKeyboardProc,
-        ctypes.c_void_p,
-        ctypes.c_uint,
-    ]
-    ctypes.windll.user32.SetWindowsHookExW.restype = ctypes.c_void_p
-    ctypes.windll.user32.UnhookWindowsHookEx.argtypes = [ctypes.c_void_p]
-    ctypes.windll.user32.UnhookWindowsHookEx.restype = ctypes.c_bool
-    ctypes.windll.user32.CallNextHookEx.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t, ctypes.c_void_p]
-    ctypes.windll.user32.CallNextHookEx.restype = ctypes.c_ssize_t
-    ctypes.windll.user32.PeekMessageW.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint]
-    ctypes.windll.user32.PeekMessageW.restype = ctypes.c_bool
-    ctypes.windll.kernel32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
-    ctypes.windll.kernel32.GetModuleHandleW.restype = ctypes.c_void_p
-    ctypes.windll.kernel32.GetLastError.restype = ctypes.c_uint
-
-
-class MSG(ctypes.Structure):
-    _fields_ = [
-        ("hwnd", ctypes.c_void_p),
-        ("message", ctypes.c_uint),
-        ("wParam", ctypes.c_size_t),
-        ("lParam", ctypes.c_ssize_t),
-        ("time", ctypes.c_uint),
-        ("pt", ctypes.c_long * 2),
-    ]
-
-
-class KBDLLHOOKSTRUCT(ctypes.Structure):
-    _fields_ = [
-        ("vkCode", ctypes.c_uint),
-        ("scanCode", ctypes.c_uint),
-        ("flags", ctypes.c_uint),
-        ("time", ctypes.c_uint),
-        ("dwExtraInfo", ctypes.c_size_t),
-    ]
+    ctypes.windll.user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+    ctypes.windll.user32.GetAsyncKeyState.restype = ctypes.c_short
 
 
 class HotkeyWaiter:
     def __init__(self, hotkey: str):
         self.hotkey = hotkey.upper()
         self.vk_code = HOTKEYS.get(self.hotkey)
-        self.keyboard_name = KEYBOARD_BACKEND_NAMES.get(self.hotkey, self.hotkey.lower())
-        self.hotkey_id = 0xD600
-        self.registered = False
-        self.hook_handle = None
-        self._hook_hit = False
-        self._hook_callback = None
-        self._keyboard_backend_failed = False
-        if sys.platform == "win32" and self.vk_code is not None:
-            self.registered = bool(
-                ctypes.windll.user32.RegisterHotKey(None, self.hotkey_id, MOD_NOREPEAT, self.vk_code)
-            )
-            if not self.registered:
-                self._install_keyboard_hook()
         log_event(
             "voice.hotkey.registration",
             hotkey=self.hotkey,
-            registered=self.registered,
-            hook_installed=bool(self.hook_handle),
-            keyboard_backend=bool(keyboard_backend),
             mode=self.mode,
         )
 
     def close(self) -> None:
-        if self.registered:
-            ctypes.windll.user32.UnregisterHotKey(None, self.hotkey_id)
-            self.registered = False
-        if self.hook_handle:
-            ctypes.windll.user32.UnhookWindowsHookEx(self.hook_handle)
-            self.hook_handle = None
+        return None
 
     @property
     def mode(self) -> str:
-        if self.registered:
-            return "RegisterHotKey"
-        if self.hook_handle:
-            return "low-level keyboard hook"
-        return "GetAsyncKeyState fallback"
+        return "GetAsyncKeyState hold-to-talk"
 
     def wait(
         self,
         *,
         heartbeat_seconds: float = 30.0,
-        poll_seconds: float = 0.03,
+        poll_seconds: float = 0.05,
         timeout_seconds: float | None = None,
     ) -> bool:
         last_heartbeat = time.monotonic()
         started = last_heartbeat
         while True:
-            if self._consume_hotkey_message():
-                return True
-            if self._hook_hit:
-                self._hook_hit = False
-                return True
             if is_hotkey_down(self.hotkey):
-                return True
-            if self._is_keyboard_backend_pressed():
                 return True
             now = time.monotonic()
             if timeout_seconds is not None and now - started >= timeout_seconds:
@@ -159,71 +65,35 @@ class HotkeyWaiter:
                 log_event(
                     "voice.hotkey.waiting",
                     hotkey=self.hotkey,
-                    registered=self.registered,
-                    hook_installed=bool(self.hook_handle),
-                    keyboard_backend=bool(keyboard_backend) and not self._keyboard_backend_failed,
                     mode=self.mode,
                 )
                 last_heartbeat = now
             time.sleep(poll_seconds)
 
-    def _consume_hotkey_message(self) -> bool:
-        msg = MSG()
-        while ctypes.windll.user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, PM_REMOVE):
-            if msg.message == WM_HOTKEY and int(msg.wParam) == self.hotkey_id:
-                return True
-            ctypes.windll.user32.TranslateMessage(ctypes.byref(msg))
-            ctypes.windll.user32.DispatchMessageW(ctypes.byref(msg))
-        return False
-
-    def _is_keyboard_backend_pressed(self) -> bool:
-        if keyboard_backend is None or self._keyboard_backend_failed:
-            return False
-        try:
-            return bool(keyboard_backend.is_pressed(self.keyboard_name))
-        except Exception as exc:
-            self._keyboard_backend_failed = True
-            log_event(
-                "voice.hotkey.keyboard_backend_failed",
-                hotkey=self.hotkey,
-                error=type(exc).__name__,
-                detail=str(exc),
-            )
-            return False
-
-    def _install_keyboard_hook(self) -> None:
-        if self.vk_code is None:
-            return
-
-        def callback(n_code, w_param, l_param):
-            if n_code >= 0 and w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
-                data = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
-                if int(data.vkCode) == int(self.vk_code):
-                    self._hook_hit = True
-            return ctypes.windll.user32.CallNextHookEx(self.hook_handle, n_code, w_param, l_param)
-
-        self._hook_callback = LowLevelKeyboardProc(callback)
-        module_handle = ctypes.windll.kernel32.GetModuleHandleW(None)
-        self.hook_handle = ctypes.windll.user32.SetWindowsHookExW(
-            WH_KEYBOARD_LL,
-            self._hook_callback,
-            module_handle,
-            0,
-        )
-        if not self.hook_handle:
-            log_event(
-                "voice.hotkey.hook_failed",
-                hotkey=self.hotkey,
-                error_code=ctypes.windll.kernel32.GetLastError(),
-            )
-            self._hook_callback = None
-
 
 def record_chunk(seconds: float, *, device: int | str | None = None) -> np.ndarray:
-    frames = int(SAMPLE_RATE * seconds)
-    audio = sd.rec(frames, samplerate=SAMPLE_RATE, channels=1, dtype="float32", device=device)
+    samplerate = input_device_samplerate(device)
+    frames = int(samplerate * seconds)
+    audio = sd.rec(frames, samplerate=samplerate, channels=1, dtype="float32", device=device)
     sd.wait()
-    return audio.reshape(-1)
+    return resample_to_whisper_rate(audio.reshape(-1), samplerate)
+
+
+def input_device_samplerate(device: int | str | None) -> int:
+    try:
+        info = sd.query_devices(device, "input")
+        return int(float(info.get("default_samplerate") or SAMPLE_RATE))
+    except Exception:
+        return SAMPLE_RATE
+
+
+def resample_to_whisper_rate(audio: np.ndarray, samplerate: int) -> np.ndarray:
+    if samplerate == SAMPLE_RATE or audio.size == 0:
+        return audio.astype("float32", copy=False)
+    target_size = max(1, int(audio.size * SAMPLE_RATE / samplerate))
+    original = np.linspace(0.0, 1.0, num=audio.size, endpoint=False)
+    target = np.linspace(0.0, 1.0, num=target_size, endpoint=False)
+    return np.interp(target, original, audio).astype("float32")
 
 
 def is_hotkey_down(hotkey: str) -> bool:
@@ -300,22 +170,29 @@ def record_hotkey_command(
     device: int | str | None = None,
     block_seconds: float = 0.1,
 ) -> np.ndarray:
-    block_frames = max(1, int(SAMPLE_RATE * block_seconds))
-    max_frames = int(SAMPLE_RATE * max_seconds)
-    min_frames = int(SAMPLE_RATE * min_seconds)
+    samplerate = input_device_samplerate(device)
+    block_frames = max(1, int(samplerate * block_seconds))
+    max_frames = int(samplerate * max_seconds)
+    min_frames = int(samplerate * min_seconds)
+    tap_frames = int(samplerate * min(max_seconds, tap_seconds))
     chunks = []
     total_frames = 0
+    was_held_after_minimum = False
     while total_frames < max_frames:
-        data = sd.rec(block_frames, samplerate=SAMPLE_RATE, channels=1, dtype="float32", device=device)
+        data = sd.rec(block_frames, samplerate=samplerate, channels=1, dtype="float32", device=device)
         sd.wait()
         chunks.append(data.reshape(-1).copy())
         total_frames += len(chunks[-1])
 
-        if total_frames >= min_frames and not is_hotkey_down(hotkey):
+        if total_frames >= min_frames and is_hotkey_down(hotkey):
+            was_held_after_minimum = True
+        if total_frames >= min_frames and not is_hotkey_down(hotkey) and was_held_after_minimum:
+            break
+        if total_frames >= tap_frames and not is_hotkey_down(hotkey):
             break
     if not chunks:
         return np.array([], dtype="float32")
-    return np.concatenate(chunks)
+    return resample_to_whisper_rate(np.concatenate(chunks), samplerate)
 
 
 def transcribe(
@@ -332,8 +209,7 @@ def transcribe(
         language=language,
         beam_size=beam_size,
         best_of=beam_size,
-        vad_filter=True,
-        vad_parameters={"min_silence_duration_ms": 250},
+        vad_filter=False,
         condition_on_previous_text=False,
         initial_prompt=initial_prompt or None,
         hotwords=hotwords or None,
@@ -421,7 +297,7 @@ def run(project_root: Path) -> None:
                     "voice.audio.too_quiet",
                     rms=round(rms, 6),
                     threshold=settings["silence_rms_threshold"],
-                    hint="Tap the hotkey, release it, then speak toward the selected microphone.",
+                    hint="Hold the hotkey while speaking toward the selected microphone.",
                 )
                 print("Recorded audio was too quiet; skipping transcription.", flush=True)
                 continue

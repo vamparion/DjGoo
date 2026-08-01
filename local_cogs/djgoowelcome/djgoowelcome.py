@@ -23,6 +23,7 @@ from voice.operational_log import log_event
 
 from .audio_bridge import DjGooAudioBridge, PlaybackControlsView
 from .helpers import (
+    build_fast_control_payload,
     build_voice_command_payload,
     build_welcome_payload,
     load_secrets,
@@ -32,6 +33,15 @@ from .helpers import (
 
 
 log = logging.getLogger("red.djgoowelcome")
+FAST_CONTROL_INTENTS = {
+    "skip",
+    "stop",
+    "pause",
+    "resume",
+    "toggle_pause",
+    "volume_up",
+    "volume_down",
+}
 
 
 class DjGooWelcome(commands.Cog):
@@ -113,7 +123,7 @@ class DjGooWelcome(commands.Cog):
     async def _command_queue_loop(self) -> None:
         await self.bot.wait_until_red_ready()
         log_event("redbot.ready", guild_count=len(self.bot.guilds))
-        await self._audio_bridge.resume_active_radio_stations()
+        await self._audio_bridge.resume_saved_playback()
         while True:
             try:
                 items = drain_queue(self._queue_path())
@@ -130,7 +140,11 @@ class DjGooWelcome(commands.Cog):
                         playlist=item.get("playlist"),
                         raw=item.get("raw"),
                     )
-                    await self._send_webhook_payload(build_voice_command_payload(item))
+                    if item.get("intent") not in FAST_CONTROL_INTENTS:
+                        await self._send_webhook_payload(build_voice_command_payload(item))
+                    else:
+                        await self._send_webhook_payload(build_fast_control_payload(item))
+                        log_event("voice.command.fast_notification_sent", intent=item.get("intent"))
                     result = await self._audio_bridge.handle(item)
                     log.info(
                         "DjGoo handled %s command from %s: %s",
@@ -150,7 +164,7 @@ class DjGooWelcome(commands.Cog):
             except Exception:
                 log.exception("DjGoo voice command queue loop failed.")
                 log_event("voice.queue.loop.exception")
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.2)
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):

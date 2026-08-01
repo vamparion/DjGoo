@@ -55,6 +55,14 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip())
 
 
+def _command_key(text: str) -> str:
+    text = re.sub(r"[^\w\s']", " ", text.lower())
+    words = text.split()
+    if len(words) >= 2 and len(set(words)) == 1:
+        words = words[:1]
+    return " ".join(words)
+
+
 def _after_wake(transcript: str) -> Optional[str]:
     match = WAKE_AT_START_RE.search(transcript) or WAKE_EARLY_RE.search(transcript)
     if not match:
@@ -84,7 +92,7 @@ def parse_command(transcript: str, *, require_wake: bool = True) -> ParsedComman
     if not command:
         return ParsedCommand(intent="ignore", confidence=0.0, raw=raw)
 
-    lowered = command.lower()
+    lowered = _command_key(command)
 
     if lowered in ("radio status", "station status"):
         return ParsedCommand(intent="station_status", raw=raw)

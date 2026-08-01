@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import contextlib
 import asyncio
+import json
 import logging
 import os
 import random
 import re
 import time
+from urllib.parse import parse_qs, urlparse
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import discord
 import lavalink
@@ -28,8 +30,10 @@ from .helpers import (
 
 
 log = logging.getLogger("red.djgoowelcome.audio_bridge")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 MAX_TRACK_SECONDS = 10 * 60
+MAX_PLAY_EXPANSION_TRACKS = 25
 
 RADIO_REJECT_TITLE_PHRASES = (
     "instrumental",
@@ -80,6 +84,11 @@ RADIO_SEARCH_EXCLUSIONS = (
     "live",
 )
 
+VOICE_NON_MUSIC_QUERY_RE = re.compile(
+    r"\b(?:settings?|turn\s+off|turn\s+on|tutorial|how\s+to|updated\s+\d{4})\b",
+    re.IGNORECASE,
+)
+
 
 class _NoopTyping:
     async def __aenter__(self):
@@ -121,11 +130,14 @@ class DjGooAudioContext:
         self.invoked_subcommand = None
         self.message = _FakeMessage()
         self._send_payload = send_payload
+        self.suppress_sends = False
 
     def typing(self):
         return _NoopTyping()
 
     async def send(self, content=None, **kwargs):
+        if self.suppress_sends:
+            return _FakeMessage()
         payload: Dict[str, Any] = {"username": "DjGoo"}
         if content:
             payload["content"] = str(content)
@@ -204,16 +216,28 @@ class DjGooAudioBridge:
         self.project_root = project_root
         self.playlists = DjGooPlaylists(project_root / "data" / "djgoo-playlists.json")
         self.stations = DjGooStations(project_root / "data" / "djgoo-stations.json")
-        if not self._should_resume_active_radio():
+        self.playback_state_path = project_root / "data" / "djgoo-playback-state.json"
+        if not self._should_resume_playback():
             self.stations.clear_all_active()
+            self._clear_playback_state()
         self.nuclear = NuclearResolver()
         self._send_payload = send_payload
         self._recent_control_posts: Dict[int, tuple[str, float]] = {}
         self._ytmusic = None
-        log_event("bridge.initialized", resume_active_radio=self._should_resume_active_radio())
+        log_event("bridge.initialized", resume_playback=self._should_resume_playback())
 
     def _should_resume_active_radio(self) -> bool:
-        return os.environ.get("DJGOO_RESUME_ACTIVE_RADIO", "").strip() == "1"
+        return self._should_resume_playback()
+
+    def _should_resume_playback(self) -> bool:
+        return os.environ.get("DJGOO_RESUME_PLAYBACK", "").strip() == "1" or os.environ.get("DJGOO_RESUME_ACTIVE_RADIO", "").strip() == "1"
+
+    def _playback_state_path(self) -> Path:
+        configured = getattr(self, "playback_state_path", None)
+        if isinstance(configured, Path):
+            return configured
+        project_root = getattr(self, "project_root", PROJECT_ROOT)
+        return Path(project_root) / "data" / "djgoo-playback-state.json"
 
     async def handle(self, item: Dict[str, Any]) -> str:
         log_event(
@@ -278,15 +302,18 @@ class DjGooAudioBridge:
                 if not query:
                     await self._notice("I need a song name or URL.")
                     return "Missing query"
-                resolved_query = await self._resolve_play_query(query)
-                if not await self._play_query_when_ready(audio, ctx, resolved_query):
+                resolved_queries = await self._resolve_play_queries(query, source=str(item.get("source", "")))
+                if not resolved_queries:
+                    await self._notice("I could not find a clean playable version of that.")
+                    return "No clean play query"
+                if not await self._play_queries_when_ready(audio, ctx, resolved_queries):
                     await self._notice(
                         "DjGoo is still warming up the music engine. I did not start playback yet, "
                         "so try that command again in a few seconds if nothing starts."
                     )
                     return "Playback startup failed"
                 await self._send_controls_for_player(ctx)
-                return f"Playing {resolved_query}"
+                return f"Playing {resolved_queries[0]}"
             if intent == "play_album":
                 return await self._play_album(audio, ctx, str(item.get("query", "")))
             if intent == "play_playlist":
@@ -456,6 +483,14 @@ class DjGooAudioBridge:
         cog = self.bot.get_cog("Audio")
         return await callback(cog, ctx, *args, **kwargs)
 
+    async def _invoke_silently(self, command, ctx: DjGooAudioContext, *args, **kwargs):
+        previous_suppress_sends = getattr(ctx, "suppress_sends", False)
+        ctx.suppress_sends = True
+        try:
+            return await self._invoke(command, ctx, *args, **kwargs)
+        finally:
+            ctx.suppress_sends = previous_suppress_sends
+
     async def resume_active_radio_stations(self) -> None:
         if not self._should_resume_active_radio():
             log_event("radio.resume.skipped", reason="resume_flag_not_set")
@@ -481,6 +516,143 @@ class DjGooAudioBridge:
             log_event("radio.resume.playing", guild_id=guild.id, station=station["name"], seed=station["seed"], query=query)
             await self._play_query_when_ready(audio, ctx, query)
 
+    async def resume_saved_playback(self) -> None:
+        if not self._should_resume_playback():
+            log_event("playback.resume.skipped", reason="resume_flag_not_set")
+            return
+        audio = self.bot.get_cog("Audio")
+        if audio is None:
+            log_event("playback.resume.skipped", reason="missing_audio")
+            return
+        state = self._read_playback_state()
+        if not state:
+            log_event("playback.resume.skipped", reason="missing_state")
+            await self.resume_active_radio_stations()
+            return
+        resumed_any = False
+        for guild in self.bot.guilds:
+            guild_state = state.get(str(guild.id))
+            if not isinstance(guild_state, dict):
+                continue
+            if self._player_has_music(guild.id):
+                log_event("playback.resume.skipped_guild", guild_id=guild.id, reason="music_already_present")
+                continue
+            author = self._active_voice_member_for_guild(guild)
+            channel = self._best_text_channel(guild)
+            if author is None or channel is None:
+                log_event("playback.resume.skipped_guild", guild_id=guild.id, reason="missing_author_or_channel")
+                continue
+            ctx = self._context_for(guild, author, channel)
+            tracks = self._state_tracks_to_queries(guild_state)
+            if tracks:
+                log_event(
+                    "playback.resume.playing",
+                    guild_id=guild.id,
+                    query_count=len(tracks),
+                    mode=guild_state.get("mode"),
+                    current=(guild_state.get("current") or {}).get("title"),
+                )
+                if await self._play_queries_when_ready(audio, ctx, tracks):
+                    resumed_any = True
+                    station = self.stations.get_active(guild.id)
+                    if station is not None:
+                        await self._top_up_station_queue(guild.id)
+                continue
+            station = self.stations.get_active(guild.id)
+            if station is not None:
+                query = await self._radio_fallback_query(station["seed"])
+                log_event("playback.resume.radio_fallback", guild_id=guild.id, station=station["name"], seed=station["seed"], query=query)
+                if await self._play_query_when_ready(audio, ctx, query):
+                    resumed_any = True
+        if not resumed_any:
+            await self.resume_active_radio_stations()
+
+    def _read_playback_state(self) -> Dict[str, Any]:
+        path = self._playback_state_path()
+        if not path.exists():
+            return {}
+        try:
+            with path.open(encoding="utf-8") as fp:
+                data = json.load(fp)
+        except (OSError, json.JSONDecodeError):
+            log_event("playback.state.read_failed", path=str(path))
+            return {}
+        guilds = data.get("guilds", {}) if isinstance(data, dict) else {}
+        return guilds if isinstance(guilds, dict) else {}
+
+    def _write_playback_state(self, guild_id: int, state: Dict[str, Any]) -> None:
+        all_state = self._read_playback_state()
+        all_state[str(guild_id)] = state
+        path = self._playback_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_suffix(".json.tmp")
+        with temp_path.open("w", encoding="utf-8") as fp:
+            json.dump({"guilds": all_state}, fp, indent=2, ensure_ascii=True)
+            fp.write("\n")
+        temp_path.replace(path)
+        log_event("playback.state.saved", guild_id=guild_id, mode=state.get("mode"), queue_count=len(state.get("queue", [])))
+
+    def _clear_playback_state(self, guild_id: Optional[int] = None) -> None:
+        path = self._playback_state_path()
+        if guild_id is None:
+            path.unlink(missing_ok=True)
+            log_event("playback.state.cleared", scope="all")
+            return
+        all_state = self._read_playback_state()
+        all_state.pop(str(guild_id), None)
+        if not all_state:
+            path.unlink(missing_ok=True)
+        else:
+            temp_path = path.with_suffix(".json.tmp")
+            with temp_path.open("w", encoding="utf-8") as fp:
+                json.dump({"guilds": all_state}, fp, indent=2, ensure_ascii=True)
+                fp.write("\n")
+            temp_path.replace(path)
+        log_event("playback.state.cleared", scope="guild", guild_id=guild_id)
+
+    def _persist_player_state(self, guild_id: int, *, reason: str) -> None:
+        try:
+            player = lavalink.get_player(guild_id)
+        except (NodeNotFound, PlayerNotFound):
+            log_event("playback.state.save_skipped", guild_id=guild_id, reason="no_player")
+            return
+        current = self._track_data(player.current) if player.current else {}
+        queue = [self._track_data(track) for track in list(getattr(player, "queue", []) or [])[:50]]
+        if not current and not queue:
+            log_event("playback.state.save_skipped", guild_id=guild_id, reason="empty_player")
+            return
+        station = self.stations.get_active(guild_id)
+        state = {
+            "mode": "radio" if station is not None else "playback",
+            "saved_at": time.time(),
+            "reason": reason,
+            "current": current,
+            "queue": queue,
+            "station": {
+                "name": station.get("name", ""),
+                "seed": station.get("seed", ""),
+            }
+            if station is not None
+            else None,
+        }
+        self._write_playback_state(guild_id, state)
+
+    def _state_tracks_to_queries(self, guild_state: Dict[str, Any]) -> List[str]:
+        tracks = []
+        current = guild_state.get("current")
+        if isinstance(current, dict):
+            tracks.append(current)
+        tracks.extend(track for track in guild_state.get("queue", []) or [] if isinstance(track, dict))
+        queries = []
+        seen = set()
+        for track in tracks:
+            query = str(track.get("uri") or track.get("title") or "").strip()
+            if not query or query in seen:
+                continue
+            seen.add(query)
+            queries.append(query)
+        return queries[:50]
+
     def _player_has_music(self, guild_id: int) -> bool:
         try:
             player = lavalink.get_player(guild_id)
@@ -504,9 +676,38 @@ class DjGooAudioBridge:
         return f"Queued playlist {playlist_name}"
 
     async def _resolve_play_query(self, query: str) -> str:
+        resolved = await self._resolve_play_queries(query)
+        return resolved[0] if resolved else query
+
+    async def _resolve_play_queries(self, query: str, *, source: str = "") -> List[str]:
+        original_query = query
+        query = self._repair_voice_play_query(query) if source == "voice" else query
+        if query != original_query:
+            log_event("play.voice_query.repaired", original_query=original_query, repaired_query=query)
+        cleaned_youtube = await self._resolve_youtube_play_query(query)
+        if cleaned_youtube is not None:
+            log_event("play.resolve.done", query=query, resolved_query=cleaned_youtube, used_youtube_guard=True)
+            return cleaned_youtube
         resolved = await asyncio.to_thread(self.nuclear.resolve_track_query, query)
-        log_event("play.resolve.done", query=query, resolved_query=resolved or query, used_nuclear=bool(resolved))
-        return resolved or query
+        if resolved:
+            log_event("play.resolve.done", query=query, resolved_query=resolved, used_nuclear=True)
+            return [resolved]
+        ytmusic_resolved = await asyncio.to_thread(self._ytmusic_song_search_query, query)
+        if ytmusic_resolved:
+            log_event("play.resolve.done", query=query, resolved_query=ytmusic_resolved, used_ytmusic=True)
+            return [ytmusic_resolved]
+        if source == "voice" and VOICE_NON_MUSIC_QUERY_RE.search(query):
+            log_event("play.resolve.blocked_raw_voice_query", query=query, original_query=original_query)
+            return []
+        log_event("play.resolve.done", query=query, resolved_query=query, used_nuclear=False, used_ytmusic=False)
+        return [query]
+
+    def _repair_voice_play_query(self, query: str) -> str:
+        repaired = re.sub(r"\blindy\s+stirling\b", "Lindsey Stirling", query, flags=re.IGNORECASE)
+        repaired = re.sub(r"\blindsey\s+sterling\b", "Lindsey Stirling", repaired, flags=re.IGNORECASE)
+        if re.search(r"\bshadow[s]?\b", repaired, re.IGNORECASE) and re.search(r"\bdensity\s+turn\s+off\b", repaired, re.IGNORECASE):
+            return "Shadows Lindsey Stirling"
+        return re.sub(r"\s+", " ", repaired).strip()
 
     async def _resolve_radio_seed_query(self, seed: str) -> str:
         return await self._radio_fallback_query(seed)
@@ -579,17 +780,24 @@ class DjGooAudioBridge:
         return f"Started {station['name']}"
 
     async def _play_query_when_ready(self, audio, ctx, query: str) -> bool:
+        return await self._play_queries_when_ready(audio, ctx, [query])
+
+    async def _play_queries_when_ready(self, audio, ctx, queries: List[str]) -> bool:
+        queries = [query for query in queries if str(query).strip()]
+        if not queries:
+            return False
         if not self._lavalink_node_ready(ctx.guild.id):
             await self._notice("DjGoo is warming up the music engine. I will start this as soon as it is ready.")
-            log_event("play.lavalink.waiting", guild_id=ctx.guild.id, query=query)
+            log_event("play.lavalink.waiting", guild_id=ctx.guild.id, query=queries[0], query_count=len(queries))
         if not await self._wait_for_lavalink_node(ctx.guild.id):
             log.warning("Lavalink was not ready after waiting for guild %s.", ctx.guild.id)
-            log_event("play.lavalink.timeout", guild_id=ctx.guild.id, query=query)
+            log_event("play.lavalink.timeout", guild_id=ctx.guild.id, query=queries[0], query_count=len(queries))
             return False
-        log_event("play.command.start", guild_id=ctx.guild.id, query=query)
-        await self._invoke(audio.command_play, ctx, query=query)
+        log_event("play.command.start", guild_id=ctx.guild.id, query=queries[0], query_count=len(queries))
+        for query in queries:
+            await self._invoke_silently(audio.command_play, ctx, query=query)
         success = await self._wait_for_track_after_play(ctx.guild.id)
-        log_event("play.command.result", guild_id=ctx.guild.id, query=query, track_detected=success)
+        log_event("play.command.result", guild_id=ctx.guild.id, query=queries[0], query_count=len(queries), track_detected=success)
         return success
 
     async def _wait_for_lavalink_node(self, guild_id: int, *, timeout: float = 35.0) -> bool:
@@ -654,8 +862,9 @@ class DjGooAudioBridge:
     async def _stop_radio(self, audio, ctx) -> str:
         station = self.stations.get_active(ctx.guild.id)
         self.stations.clear_active(ctx.guild.id)
+        self._clear_playback_state(ctx.guild.id)
         log_event("radio.stop", guild_id=ctx.guild.id, had_station=station is not None, station=(station or {}).get("name"))
-        await self._invoke(audio.command_stop, ctx)
+        await self._invoke_silently(audio.command_stop, ctx)
         if station is None:
             await self._notice("Radio mode is already off.")
             return "Radio already off"
@@ -665,8 +874,9 @@ class DjGooAudioBridge:
     async def _stop_playback(self, audio, ctx) -> str:
         station = self.stations.get_active(ctx.guild.id)
         self.stations.clear_active(ctx.guild.id)
+        self._clear_playback_state(ctx.guild.id)
         log_event("play.stop", guild_id=ctx.guild.id, cleared_station=(station or {}).get("name"))
-        await self._invoke(audio.command_stop, ctx)
+        await self._invoke_silently(audio.command_stop, ctx)
         if station is not None:
             await self._notice(f"Stopped playback and turned off `{station['name']}`.")
         return "Stopped"
@@ -718,26 +928,26 @@ class DjGooAudioBridge:
         try:
             player = lavalink.get_player(ctx.guild.id)
         except (NodeNotFound, PlayerNotFound):
-            await self._invoke(audio.command_pause, ctx)
+            await self._invoke_silently(audio.command_pause, ctx)
             return
         if player.paused == want_pause:
             await self._notice("Already paused." if want_pause else "Already playing.")
             return
-        await self._invoke(audio.command_pause, ctx)
+        await self._invoke_silently(audio.command_pause, ctx)
 
     async def _toggle_pause(self, audio, ctx) -> str:
         try:
             player = lavalink.get_player(ctx.guild.id)
         except (NodeNotFound, PlayerNotFound):
-            await self._invoke(audio.command_pause, ctx)
+            await self._invoke_silently(audio.command_pause, ctx)
             return "Toggled pause."
         was_paused = player.paused
-        await self._invoke(audio.command_pause, ctx)
+        await self._invoke_silently(audio.command_pause, ctx)
         return "Resumed." if was_paused else "Paused."
 
     async def _relative_volume(self, audio, ctx, delta: int) -> None:
         current = await audio.config.guild(ctx.guild).volume()
-        await self._invoke(audio.command_volume, ctx, vol=max(0, min(150, int(current) + delta)))
+        await self._invoke_silently(audio.command_volume, ctx, vol=max(0, min(150, int(current) + delta)))
 
     async def _mark_station_skip(self, ctx) -> None:
         station = self.stations.get_active(ctx.guild.id)
@@ -754,7 +964,7 @@ class DjGooAudioBridge:
         station = self.stations.get_active(ctx.guild.id)
         await self._mark_station_skip(ctx)
         log_event("play.skip", guild_id=ctx.guild.id, station=(station or {}).get("name"))
-        await self._invoke(audio.command_skip, ctx)
+        await self._invoke_silently(audio.command_skip, ctx)
         if station is not None:
             await self._top_up_station_queue(ctx.guild.id)
 
@@ -836,21 +1046,31 @@ class DjGooAudioBridge:
         return 0
 
     async def _skip_rejected_station_track(self, guild_id: int) -> None:
+        await self._skip_rejected_track(guild_id, top_up_station=True)
+
+    async def _skip_rejected_track(self, guild_id: int, *, top_up_station: bool = False) -> None:
         audio = self.bot.get_cog("Audio")
         ctx = self._context()
         if audio is None or ctx is None:
+            log_event("red_audio.rejected_skip.unavailable", guild_id=guild_id, has_audio=audio is not None, has_context=ctx is not None)
             return
-        await self._invoke(audio.command_skip, ctx)
-        await self._top_up_station_queue(guild_id)
+        await self._invoke_silently(audio.command_skip, ctx)
+        log_event("red_audio.rejected_skip.sent", guild_id=guild_id, top_up_station=top_up_station)
+        if top_up_station:
+            await self._top_up_station_queue(guild_id)
 
     async def handle_track_start(self, guild, track) -> None:
         log.info("DjGoo saw track start in guild %s: %s", guild.id, getattr(track, "title", track))
         data = self._track_data(track)
         log_event("red_audio.track.start", guild_id=guild.id, track=data)
+        self._persist_player_state(guild.id, reason="track_start")
         if self._should_reject_playing_track(data):
             log.info("DjGoo blocking overlong or repeated-format track before controls: %s", data.get("title", ""))
             log_event("red_audio.track.blocked", guild_id=guild.id, reason="bad_title_or_duration", track=data)
-            await self.handle_station_track_start(guild, track)
+            station = self.stations.get_active(guild.id)
+            if station is not None:
+                self.stations.add_feedback(station["seed"], "banned", data)
+            await self._skip_rejected_track(guild.id, top_up_station=station is not None)
             return
         await self._send_playback_controls(guild, track, force=True)
         await self.handle_station_track_start(guild, track)
@@ -858,6 +1078,7 @@ class DjGooAudioBridge:
     async def handle_track_enqueue(self, guild, track) -> None:
         log.info("DjGoo saw track enqueue in guild %s: %s", guild.id, getattr(track, "title", track))
         log_event("red_audio.track.enqueue", guild_id=guild.id, track=self._track_data(track))
+        self._persist_player_state(guild.id, reason="track_enqueue")
 
     async def handle_red_track_enqueue_message(self, message) -> None:
         track = self._current_track_for_controls(message.guild.id)
@@ -874,6 +1095,10 @@ class DjGooAudioBridge:
                 reason="bad_title_or_duration",
                 track=data,
             )
+            station = self.stations.get_active(message.guild.id)
+            if station is not None:
+                self.stations.add_feedback(station["seed"], "banned", data)
+            await self._skip_rejected_track(message.guild.id, top_up_station=station is not None)
             return
         log.info("DjGoo saw visible Track Enqueued message in #%s.", message.channel)
         log_event("red_audio.visible_enqueue.after_playback", guild_id=message.guild.id, channel_id=message.channel.id, track=data)
@@ -910,7 +1135,9 @@ class DjGooAudioBridge:
         if self._should_reject_playing_track(data):
             log_event("discord.controls.blocked_bad_track", guild_id=guild.id, track=data)
             return
-        if not force and not self._should_post_playback_controls(guild.id, track):
+        if force:
+            self._mark_playback_controls_posted(guild.id, track)
+        elif not self._should_post_playback_controls(guild.id, track):
             log_event("discord.controls.skipped_duplicate", guild_id=guild.id, track=data)
             return
         channel = preferred_channel or self._best_text_channel(guild)
@@ -932,7 +1159,8 @@ class DjGooAudioBridge:
         )
         view = PlaybackControlsView(self, guild.id)
         try:
-            await channel.send(embed=embed, view=view)
+            content = f"Now playing: {data.get('title', 'Unknown track')}"[:2000]
+            await channel.send(content=content, embed=embed, view=view)
             log.info(
                 "DjGoo posted playback controls in #%s for %s.",
                 channel,
@@ -953,6 +1181,9 @@ class DjGooAudioBridge:
                 return False
         self._recent_control_posts[guild_id] = (key, now)
         return True
+
+    def _mark_playback_controls_posted(self, guild_id: int, track) -> None:
+        self._recent_control_posts[guild_id] = (self._track_key(track), time.monotonic())
 
     def _track_key(self, track) -> str:
         identifier = getattr(track, "track_identifier", "")
@@ -1075,12 +1306,224 @@ class DjGooAudioBridge:
         log_event("radio.recommendation.fetched", station=station.get("name"), video_id=video_id, count=len(tracks or []))
         return self._pick_recommended_track(station, tracks)
 
-    def _ytmusic_watch_tracks(self, video_id: str):
+    async def _resolve_youtube_play_query(self, query: str) -> Optional[List[str]]:
+        if not self._is_youtube_url(query):
+            return None
+        playlist_id = self._youtube_playlist_id(query)
+        video_id = self._youtube_video_id(query)
+        if playlist_id and self._is_real_youtube_playlist_id(playlist_id):
+            playlist_url = f"https://www.youtube.com/playlist?list={playlist_id}"
+            log_event("play.youtube.real_playlist", query=query, playlist_id=playlist_id, resolved_query=playlist_url)
+            return [playlist_url]
+        if not video_id:
+            return [query]
+        tracks = await self._watch_playlist_tracks_for_url(video_id, playlist_id)
+        if playlist_id and self._is_youtube_radio_playlist_id(playlist_id):
+            expanded = self._watch_tracks_to_queries(tracks)
+            if expanded:
+                log_event(
+                    "play.youtube.radio_url.expanded",
+                    query=query,
+                    playlist_id=playlist_id,
+                    video_id=video_id,
+                    track_count=len(expanded),
+                )
+                return expanded
+            resolved = await self._resolve_dirty_youtube_title(query, tracks)
+            return [resolved or query]
+        first = self._first_watch_track(tracks)
+        if first and self._is_bad_youtube_play_item(first):
+            title = self._watch_track_display_title(first)
+            if self._is_album_like_youtube_title(title):
+                playlist_url = await self._resolve_dirty_youtube_playlist(title)
+                if playlist_url:
+                    log_event("play.youtube.bad_video.playlist_resolved", query=query, video_id=video_id, title=title, resolved_query=playlist_url)
+                    return [playlist_url]
+            resolved = await self._resolve_dirty_youtube_title(query, tracks)
+            if resolved:
+                log_event("play.youtube.bad_video.cleaned", query=query, video_id=video_id, resolved_query=resolved, first_track=first)
+                return [resolved]
+        return [query]
+
+    async def _watch_playlist_tracks_for_url(self, video_id: str, playlist_id: str = ""):
+        try:
+            return await asyncio.to_thread(
+                self._ytmusic_watch_tracks,
+                video_id,
+                playlist_id if playlist_id and not self._is_youtube_radio_playlist_id(playlist_id) else None,
+                self._is_youtube_radio_playlist_id(playlist_id),
+            )
+        except Exception:
+            log.exception("DjGoo could not inspect YouTube URL before playback.")
+            log_event("play.youtube.inspect_failed", video_id=video_id, playlist_id=playlist_id)
+            return []
+
+    async def _resolve_dirty_youtube_title(self, original_query: str, tracks) -> Optional[str]:
+        first = self._first_watch_track(tracks)
+        title = str((first or {}).get("title") or "").strip()
+        artists = self._ytmusic_artists(first or {})
+        search_text = self._clean_bad_youtube_title(title)
+        if artists:
+            search_text = f"{', '.join(artists)} - {search_text}"
+        if not search_text:
+            search_text = original_query
+        resolved = await asyncio.to_thread(self.nuclear.resolve_track_query, search_text)
+        log_event(
+            "play.youtube.dirty_title.resolve",
+            original_query=original_query,
+            title=title,
+            artists=artists,
+            search_text=search_text,
+            resolved_query=resolved,
+        )
+        return resolved
+
+    async def _resolve_dirty_youtube_playlist(self, title: str) -> Optional[str]:
+        search_text = self._clean_bad_youtube_title(title) or title
+        try:
+            playlists = await asyncio.to_thread(self._ytmusic_playlist_search, search_text)
+        except Exception:
+            log.exception("DjGoo could not search YouTube Music playlists for a bad video.")
+            log_event("play.youtube.playlist_search_failed", title=title, search_text=search_text)
+            return None
+        for item in playlists or []:
+            if not isinstance(item, dict):
+                continue
+            playlist_id = str(item.get("playlistId") or item.get("browseId") or "").strip()
+            if playlist_id.startswith("VL"):
+                playlist_id = playlist_id[2:]
+            if not playlist_id or self._is_youtube_radio_playlist_id(playlist_id):
+                continue
+            item_title = str(item.get("title") or "").strip()
+            if self._is_bad_radio_title(item_title) and not self._is_album_like_youtube_title(item_title):
+                continue
+            resolved = f"https://www.youtube.com/playlist?list={playlist_id}"
+            log_event("play.youtube.playlist_search.accepted", title=title, search_text=search_text, playlist_title=item_title, playlist_id=playlist_id)
+            return resolved
+        log_event("play.youtube.playlist_search.empty", title=title, search_text=search_text, count=len(playlists or []))
+        return None
+
+    def _first_watch_track(self, tracks) -> Optional[Dict[str, Any]]:
+        for item in tracks or []:
+            if isinstance(item, dict) and str(item.get("videoId") or "").strip():
+                return item
+        return None
+
+    def _watch_tracks_to_queries(self, tracks, *, limit: int = MAX_PLAY_EXPANSION_TRACKS) -> List[str]:
+        queries: List[str] = []
+        seen: set[str] = set()
+        for item in tracks or []:
+            if not isinstance(item, dict):
+                continue
+            video_id = str(item.get("videoId") or "").strip()
+            title = str(item.get("title") or "").strip()
+            if not video_id or not title or video_id in seen:
+                continue
+            seen.add(video_id)
+            data = {
+                "title": self._watch_track_display_title(item),
+                "uri": f"https://www.youtube.com/watch?v={video_id}",
+                "duration_seconds": str(self._track_length_seconds(str(item.get("length") or "")) or 0),
+            }
+            if self._should_reject_playing_track(data):
+                log_event("play.youtube.expansion.rejected", reason="bad_title_or_duration", track=data)
+                continue
+            queries.append(data["uri"])
+            if len(queries) >= limit:
+                break
+        return queries
+
+    def _watch_track_display_title(self, item: Dict[str, Any]) -> str:
+        title = str(item.get("title") or "").strip()
+        artists = self._ytmusic_artists(item)
+        return f"{', '.join(artists)} - {title}" if artists else title
+
+    def _ytmusic_artists(self, item: Dict[str, Any]) -> List[str]:
+        return [
+            str(artist.get("name", "")).strip()
+            for artist in item.get("artists", [])
+            if isinstance(artist, dict) and str(artist.get("name", "")).strip()
+        ]
+
+    def _is_bad_youtube_play_item(self, item: Dict[str, Any]) -> bool:
+        data = {
+            "title": self._watch_track_display_title(item),
+            "uri": f"https://www.youtube.com/watch?v={str(item.get('videoId') or '').strip()}",
+            "duration_seconds": str(self._track_length_seconds(str(item.get("length") or "")) or 0),
+        }
+        return self._should_reject_playing_track(data)
+
+    def _clean_bad_youtube_title(self, title: str) -> str:
+        cleaned = re.sub(r"[\[\(].*?(?:\d+\s*(?:hour|hours|hr|hrs)|loop|repeat|full album|album|mix|playlist|collection).*?[\]\)]", " ", title, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\b(?:\d+\s*(?:hour|hours|hr|hrs)|loop(?:ed)?|repeat(?:ed)?|full album|album|mix|playlist|collection|compilation)\b", " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" -_|")
+        return cleaned
+
+    def _is_album_like_youtube_title(self, title: str) -> bool:
+        lowered = f" {re.sub(r'[^a-z0-9]+', ' ', title.lower()).strip()} "
+        return any(
+            phrase in lowered
+            for phrase in (
+                " full album ",
+                " album ",
+                " collection ",
+                " compilation ",
+                " greatest hits ",
+                " playlist ",
+                " mix ",
+            )
+        )
+
+    def _ytmusic_watch_tracks(self, video_id: str, playlist_id: Optional[str] = None, radio: bool = False):
         if self._ytmusic is None:
             from ytmusicapi import YTMusic
 
             self._ytmusic = YTMusic()
-        return self._ytmusic.get_watch_playlist(videoId=video_id, limit=25).get("tracks", [])
+        return self._ytmusic.get_watch_playlist(
+            videoId=video_id,
+            playlistId=playlist_id,
+            limit=MAX_PLAY_EXPANSION_TRACKS,
+            radio=radio,
+        ).get("tracks", [])
+
+    def _ytmusic_playlist_search(self, query: str):
+        if self._ytmusic is None:
+            from ytmusicapi import YTMusic
+
+            self._ytmusic = YTMusic()
+        return self._ytmusic.search(query, filter="playlists", limit=8)
+
+    def _ytmusic_song_search_query(self, query: str) -> Optional[str]:
+        if getattr(self, "_ytmusic", None) is None:
+            from ytmusicapi import YTMusic
+
+            self._ytmusic = YTMusic()
+        try:
+            results = self._ytmusic.search(query, filter="songs", limit=5)
+        except Exception:
+            log.exception("DjGoo could not search YouTube Music songs.")
+            log_event("ytmusic.song_search.failed", query=query)
+            return None
+        for index, item in enumerate(results or []):
+            if not isinstance(item, dict):
+                continue
+            video_id = str(item.get("videoId") or "").strip()
+            title = str(item.get("title") or "").strip()
+            duration = self._track_length_seconds(str(item.get("duration") or ""))
+            artists = self._ytmusic_artists(item)
+            data = {
+                "title": f"{', '.join(artists)} - {title}" if artists else title,
+                "uri": f"https://www.youtube.com/watch?v={video_id}" if video_id else "",
+                "duration_seconds": str(duration or 0),
+            }
+            if not video_id or not title or self._should_reject_playing_track(data):
+                log_event("ytmusic.song_search.rejected", query=query, index=index, track=data)
+                continue
+            resolved = data["uri"]
+            log_event("ytmusic.song_search.accepted", query=query, index=index, track=data, resolved_query=resolved)
+            return resolved
+        log_event("ytmusic.song_search.empty", query=query, count=len(results or []))
+        return None
 
     def _pick_recommended_track(self, station: Dict[str, Any], tracks) -> Optional[Dict[str, str]]:
         candidates = []
@@ -1113,6 +1556,28 @@ class DjGooAudioBridge:
     def _youtube_video_id(self, uri: str) -> str:
         match = re.search(r"(?:v=|youtu\.be/|embed/|shorts/)([A-Za-z0-9_-]{11})", uri)
         return match.group(1) if match else ""
+
+    def _youtube_playlist_id(self, uri: str) -> str:
+        try:
+            parsed = urlparse(uri)
+        except ValueError:
+            return ""
+        values = parse_qs(parsed.query).get("list") or []
+        if values:
+            return str(values[0]).strip()
+        match = re.search(r"(?:youtube\.com|music\.youtube\.com)/playlist\?[^ ]*list=([A-Za-z0-9_-]+)", uri)
+        return match.group(1) if match else ""
+
+    def _is_youtube_url(self, query: str) -> bool:
+        lowered = query.lower()
+        return "youtube.com/" in lowered or "youtu.be/" in lowered or "music.youtube.com/" in lowered
+
+    def _is_youtube_radio_playlist_id(self, playlist_id: str) -> bool:
+        return playlist_id.upper().startswith("RD")
+
+    def _is_real_youtube_playlist_id(self, playlist_id: str) -> bool:
+        upper = playlist_id.upper()
+        return upper.startswith(("PL", "OLAK5UY", "VL", "UU", "LL")) and not self._is_youtube_radio_playlist_id(playlist_id)
 
     def _track_length_seconds(self, length: str) -> int:
         if not length:

@@ -81,6 +81,7 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
             bridge.stations = DjGooStations(Path(temp_dir) / "stations.json")
+            bridge.playback_state_path = Path(temp_dir) / "playback-state.json"
             bridge.stations.set_active(FakeGuild.id, "Sandstorm")
             bridge.notices = []
             bridge.invoked = []
@@ -414,6 +415,69 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bridge._track_data(Track())["duration_seconds"], "245")
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_rejected_track_start_skips_without_controls(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            class Track:
+                title = "Toto - Africa [10 Hour]"
+                uri = "https://www.youtube.com/watch?v=EiOgy4AWPkg"
+                length = 36093000
+                info = {}
+
+            bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+            bridge.stations = DjGooStations(Path(temp_dir) / "stations.json")
+            bridge.skips = []
+            bridge.controls = []
+            bridge._persist_player_state = lambda *args, **kwargs: None
+
+            async def skip_rejected(guild_id, *, top_up_station=False):
+                bridge.skips.append((guild_id, top_up_station))
+
+            async def send_controls(*args, **kwargs):
+                bridge.controls.append((args, kwargs))
+
+            bridge._skip_rejected_track = skip_rejected
+            bridge._send_playback_controls = send_controls
+
+            await bridge.handle_track_start(FakeGuild(), Track())
+
+        self.assertEqual(bridge.skips, [(FakeGuild.id, False)])
+        self.assertEqual(bridge.controls, [])
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_visible_enqueue_for_rejected_current_track_skips(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            class Channel:
+                id = 456
+
+            class Message:
+                guild = FakeGuild()
+                channel = Channel()
+
+            class Track:
+                title = "Toto - Africa [10 Hour]"
+                uri = "https://www.youtube.com/watch?v=EiOgy4AWPkg"
+                length = 36093000
+                info = {}
+
+            bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+            bridge.stations = DjGooStations(Path(temp_dir) / "stations.json")
+            bridge.skips = []
+            bridge._current_track_for_controls = lambda guild_id: Track()
+
+            async def skip_rejected(guild_id, *, top_up_station=False):
+                bridge.skips.append((guild_id, top_up_station))
+
+            bridge._skip_rejected_track = skip_rejected
+
+            await bridge.handle_red_track_enqueue_message(Message())
+
+        self.assertEqual(bridge.skips, [(FakeGuild.id, False)])
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     def test_controls_track_lookup_prefers_current_song_over_queue(self):
         from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
 
@@ -443,6 +507,46 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bridge.sent, [])
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_playback_controls_send_visible_content_embed_and_buttons(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        class Perms:
+            send_messages = True
+
+        class Channel:
+            id = 456
+            sent = []
+
+            def permissions_for(self, me):
+                return Perms()
+
+            async def send(self, **kwargs):
+                self.sent.append(kwargs)
+
+        class Guild:
+            id = 123
+            me = object()
+
+        class Track:
+            title = "Visible Song"
+            uri = "https://example.test/song"
+            length = 180000
+            info = {}
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge.stations = DjGooStations(Path(tempfile.mkdtemp()) / "stations.json")
+        bridge._recent_control_posts = {}
+
+        channel = Channel()
+
+        await bridge._send_playback_controls(Guild(), Track(), preferred_channel=channel, force=True)
+
+        self.assertEqual(len(channel.sent), 1)
+        self.assertIn("Now playing: Visible Song", channel.sent[0]["content"])
+        self.assertIsNotNone(channel.sent[0]["embed"])
+        self.assertIsNotNone(channel.sent[0]["view"])
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     async def test_resolve_play_query_uses_nuclear_when_available(self):
         from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
 
@@ -465,8 +569,161 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
 
         bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
         bridge.nuclear = Resolver()
+        bridge._ytmusic_song_search_query = lambda query: None
 
         self.assertEqual(await bridge._resolve_play_query("song"), "song")
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_voice_query_repairs_shadow_density_turn_off_to_lindsey_stirling(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        class Resolver:
+            def resolve_track_query(self, query):
+                return None
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge.nuclear = Resolver()
+        bridge._ytmusic_song_search_query = lambda query: f"resolved:{query}"
+
+        self.assertEqual(
+            await bridge._resolve_play_queries("shadow density turn off", source="voice"),
+            ["resolved:Shadows Lindsey Stirling"],
+        )
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_voice_query_blocks_raw_non_music_fallback_when_resolvers_fail(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        class Resolver:
+            def resolve_track_query(self, query):
+                return None
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge.nuclear = Resolver()
+        bridge._ytmusic_song_search_query = lambda query: None
+
+        self.assertEqual(await bridge._resolve_play_queries("destiny settings turn off", source="voice"), [])
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_resolve_play_query_uses_ytmusic_when_nuclear_returns_empty(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        class Resolver:
+            def resolve_track_query(self, query):
+                return None
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge.nuclear = Resolver()
+        bridge._ytmusic_song_search_query = lambda query: "https://www.youtube.com/watch?v=Xyvuu4dNAWc"
+
+        self.assertEqual(
+            await bridge._resolve_play_queries("Shadows by Lindy Stirling", source="voice"),
+            ["https://www.youtube.com/watch?v=Xyvuu4dNAWc"],
+        )
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_resolve_play_query_converts_real_youtube_playlist_to_playlist_url(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+
+        url = "https://www.youtube.com/watch?v=nVohJKUiK6o&list=PLFfDTu7b6FEBXlDz18cghi4zCcBVUN4Um"
+
+        self.assertEqual(
+            await bridge._resolve_play_queries(url),
+            ["https://www.youtube.com/playlist?list=PLFfDTu7b6FEBXlDz18cghi4zCcBVUN4Um"],
+        )
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_resolve_play_query_expands_youtube_radio_url_into_clean_tracks(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge._ytmusic = None
+
+        async def watch(video_id, playlist_id):
+            return [
+                {"videoId": "AAAAAAAAAAA", "title": "Good Song", "length": "3:30", "artists": [{"name": "Artist"}]},
+                {"videoId": "BBBBBBBBBBB", "title": "Ten Hour Loop", "length": "10:00:00", "artists": [{"name": "Loop"}]},
+                {"videoId": "CCCCCCCCCCC", "title": "Another Song", "length": "4:00", "artists": [{"name": "Band"}]},
+            ]
+
+        bridge._watch_playlist_tracks_for_url = watch
+        url = "https://www.youtube.com/watch?v=nVohJKUiK6o&list=RDnVohJKUiK6o&start_radio=1"
+
+        self.assertEqual(
+            await bridge._resolve_play_queries(url),
+            [
+                "https://www.youtube.com/watch?v=AAAAAAAAAAA",
+                "https://www.youtube.com/watch?v=CCCCCCCCCCC",
+            ],
+        )
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_resolve_play_query_cleans_ten_hour_video_to_song_search(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        class Resolver:
+            def __init__(self):
+                self.queries = []
+
+            def resolve_track_query(self, query):
+                self.queries.append(query)
+                return "Artist - Sandstorm official audio"
+
+        resolver = Resolver()
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge.nuclear = resolver
+
+        async def watch(video_id, playlist_id):
+            return [
+                {
+                    "videoId": "AAAAAAAAAAA",
+                    "title": "Sandstorm [10 Hour Loop]",
+                    "length": "10:00:00",
+                    "artists": [{"name": "Darude"}],
+                }
+            ]
+
+        bridge._watch_playlist_tracks_for_url = watch
+
+        self.assertEqual(
+            await bridge._resolve_play_queries("https://www.youtube.com/watch?v=AAAAAAAAAAA"),
+            ["Artist - Sandstorm official audio"],
+        )
+        self.assertEqual(resolver.queries, ["Darude - Sandstorm"])
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_resolve_play_query_prefers_playlist_for_full_album_video(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        class Resolver:
+            def resolve_track_query(self, query):
+                return "Should not need single track fallback"
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge.nuclear = Resolver()
+
+        async def watch(video_id, playlist_id):
+            return [
+                {
+                    "videoId": "AAAAAAAAAAA",
+                    "title": "Best Rock Album Full Album",
+                    "length": "1:10:00",
+                    "artists": [{"name": "Various Artists"}],
+                }
+            ]
+
+        async def playlist(title):
+            return "https://www.youtube.com/playlist?list=PLcleanAlbumTracks"
+
+        bridge._watch_playlist_tracks_for_url = watch
+        bridge._resolve_dirty_youtube_playlist = playlist
+
+        self.assertEqual(
+            await bridge._resolve_play_queries("https://www.youtube.com/watch?v=AAAAAAAAAAA"),
+            ["https://www.youtube.com/playlist?list=PLcleanAlbumTracks"],
+        )
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     async def test_play_album_queues_resolved_album_tracks(self):
