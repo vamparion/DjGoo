@@ -8,9 +8,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+import psutil
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CORE_PATH = Path(__file__).with_name("djgoo_stack_core.py")
+LAVALINK_PORT = 2333
 
 
 def load_core():
@@ -29,6 +32,169 @@ def portable_windows_flags() -> int:
     if os.name != "nt":
         return 0
     return subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+
+
+def _process_cmdline(process: Any) -> list[str]:
+    try:
+        return [str(part) for part in process.cmdline()]
+    except (psutil.Error, OSError, TypeError):
+        return []
+
+
+def _process_matches_spec(process: Any, spec: Any) -> bool:
+    cmdline = " ".join(_process_cmdline(process)).lower()
+    if not cmdline:
+        return False
+    return all(str(marker).lower() in cmdline for marker in tuple(spec.command_markers))
+
+
+def _connection_port(connection: Any) -> int | None:
+    local_address = getattr(connection, "laddr", None)
+    value = getattr(local_address, "port", None)
+    if value is None and isinstance(local_address, (tuple, list)) and len(local_address) >= 2:
+        value = local_address[1]
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _process_listens_on(process: Any, port: int) -> bool:
+    try:
+        connection_reader = getattr(process, "net_connections", None)
+        if connection_reader is None:
+            connection_reader = process.connections
+        connections = connection_reader(kind="tcp")
+    except (psutil.Error, OSError, AttributeError):
+        return False
+
+    for connection in connections:
+        status = str(getattr(connection, "status", "")).upper()
+        if _connection_port(connection) == int(port) and status in {
+            str(psutil.CONN_LISTEN).upper(),
+            "LISTEN",
+        }:
+            return True
+    return False
+
+
+def _matching_processes(spec: Any) -> list[Any]:
+    matches: list[Any] = []
+    for process in psutil.process_iter():
+        try:
+            if int(process.pid) == os.getpid():
+                continue
+            if _process_matches_spec(process, spec):
+                matches.append(process)
+        except (psutil.Error, OSError, TypeError, ValueError):
+            continue
+    return matches
+
+
+def _terminate_process_tree(process: Any) -> None:
+    try:
+        children = process.children(recursive=True)
+    except psutil.Error:
+        children = []
+
+    targets = [*reversed(children), process]
+    for target in targets:
+        try:
+            target.terminate()
+        except psutil.Error:
+            pass
+    _, alive = psutil.wait_procs(targets, timeout=5)
+    for target in alive:
+        try:
+            target.kill()
+        except psutil.Error:
+            pass
+
+
+def _adopt_lavalink_listener(core: Any, spec: Any) -> bool:
+    listeners = [
+        process
+        for process in _matching_processes(spec)
+        if _process_listens_on(process, LAVALINK_PORT)
+    ]
+    if not listeners:
+        return False
+
+    def process_age(process: Any) -> float:
+        try:
+            return float(process.create_time())
+        except (psutil.Error, OSError, TypeError, ValueError):
+            return float("inf")
+
+    listener = min(listeners, key=process_age)
+    core.write_component_record(spec, listener)
+    core.LOG.event(
+        "component.adopted",
+        component=spec.name,
+        pid=int(listener.pid),
+        reason="matching-lavalink-listener",
+    )
+
+    for duplicate in _matching_processes(spec):
+        if int(duplicate.pid) == int(listener.pid):
+            continue
+        core.LOG.event(
+            "component.duplicate_stop",
+            component=spec.name,
+            pid=int(duplicate.pid),
+            reason="listener-already-owned",
+        )
+        _terminate_process_tree(duplicate)
+    return True
+
+
+def _portable_lavalink_ready(core: Any) -> bool:
+    record = core.component_record("lavalink")
+    if not record:
+        return False
+    try:
+        pid = int(record.get("pid") or 0)
+        process = psutil.Process(pid)
+        create_time = float(process.create_time())
+        recorded_create_time = float(record.get("create_time") or 0)
+    except (psutil.Error, OSError, TypeError, ValueError):
+        return False
+    if recorded_create_time and abs(create_time - recorded_create_time) > 1.0:
+        return False
+
+    command = " ".join(_process_cmdline(process)).lower()
+    if "lavalink.jar" not in command or str(core.PROJECT_ROOT).lower() not in command:
+        return False
+    return _process_listens_on(process, LAVALINK_PORT)
+
+
+def _portable_redbot_ready(core: Any) -> bool:
+    """Allow the first Red-ready event time to finish playback restoration.
+
+    After the normal recurring heartbeat begins, the original fifteen-second
+    failure detection is restored. This prevents a slow Lavalink reconnect from
+    causing Red to be killed while it is still completing its startup work.
+    """
+
+    record = core.component_record("redbot")
+    heartbeat = core.read_json(core.health_path("redbot"))
+    if not record or not heartbeat:
+        return False
+    try:
+        expected_pid = int(record.get("pid") or 0)
+        heartbeat_pid = int(heartbeat.get("pid") or 0)
+        age = time.time() - float(heartbeat.get("timestamp") or 0)
+    except (TypeError, ValueError):
+        return False
+    if expected_pid <= 0 or heartbeat_pid != expected_pid:
+        return False
+    if heartbeat.get("ready") is not True:
+        return False
+    if heartbeat.get("audio_loaded") is not True or heartbeat.get("discord_ready") is not True:
+        return False
+
+    max_age = 120.0 if heartbeat.get("event") == "redbot.ready" else 15.0
+    return -5.0 <= age <= max_age
 
 
 def spawn_portable_supervisor(core: Any) -> bool:
@@ -101,9 +267,47 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
     core.WINDOWS_DETACHED_FLAGS = portable_windows_flags()
     core.LOG = core.Logger()
 
+    original_component_running = core.component_running
+    original_terminate_component = core.terminate_component
+    original_component_environment = core.component_environment
     original_start_component = core.start_component
 
+    def portable_component_running(spec: Any) -> bool:
+        if original_component_running(spec):
+            return True
+        if getattr(spec, "name", "") == "lavalink":
+            return _adopt_lavalink_listener(core, spec)
+        return False
+
+    def portable_terminate_component(spec: Any, reason: str) -> None:
+        leftovers = _matching_processes(spec)
+        original_terminate_component(spec, reason)
+        for process in leftovers:
+            try:
+                if not process.is_running():
+                    continue
+            except psutil.Error:
+                continue
+            core.LOG.event(
+                "component.orphan_stop",
+                component=getattr(spec, "name", "unknown"),
+                pid=int(process.pid),
+                reason=reason,
+            )
+            _terminate_process_tree(process)
+        core.pid_path(spec.name).unlink(missing_ok=True)
+        core.health_path(spec.name).unlink(missing_ok=True)
+
+    def portable_component_environment(resume_playback: bool = False) -> dict[str, str]:
+        env = original_component_environment(resume_playback=resume_playback)
+        component_name = str(getattr(core, "_djgoo_starting_component", "")).strip()
+        if component_name:
+            env["DJGOO_COMPONENT_NAME"] = component_name
+        return env
+
     def guarded_start_component(spec: Any, *, resume_playback: bool = False) -> bool:
+        previous_component = getattr(core, "_djgoo_starting_component", "")
+        core._djgoo_starting_component = str(getattr(spec, "name", ""))
         try:
             return bool(original_start_component(spec, resume_playback=resume_playback))
         except OSError as exc:
@@ -114,6 +318,8 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
                 error=f"{type(exc).__name__}: {exc}",
             )
             return False
+        finally:
+            core._djgoo_starting_component = previous_component
 
     original_run_supervisor = core.run_supervisor
 
@@ -127,7 +333,12 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
             )
             return 1
 
+    core.component_running = portable_component_running
+    core.terminate_component = portable_terminate_component
+    core.component_environment = portable_component_environment
     core.start_component = guarded_start_component
+    core.lavalink_ready = lambda: _portable_lavalink_ready(core)
+    core.redbot_ready = lambda: _portable_redbot_ready(core)
     core.run_supervisor = guarded_run_supervisor
     core.spawn_supervisor = lambda: spawn_portable_supervisor(core)
     return core
