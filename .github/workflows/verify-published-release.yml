@@ -1,4 +1,4 @@
-# Release publication verification contract: 6
+# Release publication verification contract: 7
 name: Verify Published Release
 
 on:
