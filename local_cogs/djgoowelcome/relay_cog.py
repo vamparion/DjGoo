@@ -8,8 +8,9 @@ from typing import Any
 from redbot.core import commands
 
 from voice.command_acceptance import AuthenticatedCommandProcessor
+from voice.network_routes import gateway_urls
 from voice.operational_log import log_event
-from voice.pairing_bundle import build_invite
+from voice.pairing_bundle import PairingEndpoint, PairingInvite
 from voice.relay_crypto import load_or_create_host_identity
 from voice.relay_host import RelayHostClient
 
@@ -82,60 +83,72 @@ class DjGooRelay(commands.Cog):
             300,
         )
 
+    async def _direct_endpoints(self, ctx: commands.Context) -> list[PairingEndpoint]:
+        gateway = self.djgoo_cog._gateway
+        if gateway is None:
+            return []
+        settings = self.djgoo_cog._gateway_settings()
+        urls = gateway_urls(
+            port=int(gateway.port),
+            configured_url=str(settings.get("advertise_url") or ""),
+        )
+        endpoints: list[PairingEndpoint] = []
+        for url in urls:
+            endpoints.append(
+                PairingEndpoint(
+                    transport="direct",
+                    endpoint=url,
+                    security=gateway.fingerprint,
+                    code=await self._new_pairing_code(ctx),
+                )
+            )
+        return endpoints
+
+    async def _relay_endpoint(self, ctx: commands.Context) -> PairingEndpoint | None:
+        if self.client is None:
+            return None
+        return PairingEndpoint(
+            transport="relay",
+            endpoint=self.client.relay_url.rstrip("/"),
+            security=self.client.encryption_fingerprint,
+            code=await self._new_pairing_code(ctx),
+            room_id=self.client.room_id,
+            host_public_key=self.client.encryption_public_key,
+        )
+
     @link_group.command(name="pair")
     @commands.guild_only()
     async def link_pair(self, ctx: commands.Context) -> None:
         """Send one secure invite containing every available connection path."""
-        gateway = self.djgoo_cog._gateway
-        if gateway is None and self.client is None:
+
+        direct_endpoints = await self._direct_endpoints(ctx)
+        relay_endpoint = await self._relay_endpoint(ctx)
+        endpoints = [*direct_endpoints]
+        if relay_endpoint is not None:
+            endpoints.append(relay_endpoint)
+        if not endpoints:
             await ctx.send("DjGoo Link is disabled on this Host.")
             return
 
-        direct_code = await self._new_pairing_code(ctx) if gateway is not None else ""
-        relay_code = await self._new_pairing_code(ctx) if self.client is not None else ""
-        direct_url = (
-            self.djgoo_cog._advertised_gateway_url()
-            if gateway is not None
-            else ""
-        )
-        invite = build_invite(
+        invite = PairingInvite(
+            code="",
+            endpoints=tuple(endpoints),
             expires_at=time.time() + 300,
-            direct_url=direct_url,
-            direct_fingerprint=(
-                gateway.fingerprint
-                if gateway is not None
-                else ""
-            ),
-            direct_code=direct_code,
-            relay_url=(
-                self.client.relay_url.rstrip("/")
-                if self.client is not None
-                else ""
-            ),
-            relay_fingerprint=(
-                self.client.encryption_fingerprint
-                if self.client is not None
-                else ""
-            ),
-            relay_code=relay_code,
-            room_id=(
-                self.client.room_id
-                if self.client is not None
-                else ""
-            ),
-            host_public_key=(
-                self.client.encryption_public_key
-                if self.client is not None
-                else ""
-            ),
             host_name="DjGoo Host",
             guild_name=getattr(ctx.guild, "name", ""),
         )
-        route_text = "same-network secure link"
-        if self.client is not None and gateway is not None:
-            route_text += " with encrypted internet fallback"
-        elif self.client is not None:
+        invite.validate(allow_expired=True)
+
+        if direct_endpoints and relay_endpoint is not None:
+            route_text = (
+                f"{len(direct_endpoints)} same-network secure routes with an "
+                "end-to-end encrypted internet fallback"
+            )
+        elif relay_endpoint is not None:
             route_text = "end-to-end encrypted internet link"
+        else:
+            route_text = f"{len(direct_endpoints)} same-network secure route(s)"
+
         message = (
             "**DjGoo Link invite**\n\n"
             "1. Open **DjGoo Voice**.\n"
@@ -144,7 +157,9 @@ class DjGooRelay(commands.Cog):
             f"```\n{invite.to_uri()}\n```\n"
             f"Safety number: `{invite.safety_number()}`\n"
             f"Connection: {route_text}.\n\n"
-            "The invite expires in five minutes. Each secure route has its own one-time credential, so fallback remains available if another route cannot complete. Microphone audio stays on the recipient computer."
+            "The invite expires in five minutes. DjGoo Voice probes every pinned "
+            "route and uses the first reachable one. After pairing, the same device "
+            "identity automatically fails over between saved local, public, and relay routes."
         )
         try:
             await ctx.author.send(message)
@@ -153,16 +168,13 @@ class DjGooRelay(commands.Cog):
                 "I could not send the private DjGoo Link invite. Enable direct messages from this server and try again."
             )
             return
-        await ctx.send(
-            "Your private DjGoo Link invite was sent.",
-            delete_after=12,
-        )
+        await ctx.send("Your private DjGoo Link invite was sent.", delete_after=12)
         log_event(
             "voice.link.pairing_invite_created",
             user_id=ctx.author.id,
             guild_id=ctx.guild.id,
-            direct_available=gateway is not None,
-            relay_available=self.client is not None,
+            direct_route_count=len(direct_endpoints),
+            relay_available=relay_endpoint is not None,
             route_specific_codes=True,
         )
 
@@ -171,14 +183,20 @@ class DjGooRelay(commands.Cog):
     @commands.admin_or_permissions(manage_guild=True)
     async def link_status(self, ctx: commands.Context) -> None:
         """Show non-secret DjGoo Link state."""
+
         gateway = self.djgoo_cog._gateway
-        direct_ready = gateway is not None
+        direct_urls = gateway_urls(
+            port=int(gateway.port),
+            configured_url=str(
+                self.djgoo_cog._gateway_settings().get("advertise_url") or ""
+            ),
+        ) if gateway is not None else []
         relay_task = self.client._task if self.client is not None else None
         relay_ready = bool(relay_task is not None and not relay_task.done())
         await ctx.send(
             "DjGoo Link\n"
-            f"Same-network secure connection: `{direct_ready}`\n"
+            f"Same-network/public secure routes: `{len(direct_urls)}`\n"
             f"Encrypted internet fallback: `{relay_ready}`\n"
-            "Paired devices are individually revocable with "
-            "`djgoo revoke <device-id>`."
+            "Paired devices automatically try every saved route and are individually "
+            "revocable with `djgoo revoke <device-id>`."
         )
