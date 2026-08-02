@@ -119,16 +119,21 @@ jobs:
             --clobber
 
       - name: Verify updater-visible release is complete
+        id: verify
         shell: bash
         run: |
           set -euo pipefail
           tag='${{ steps.version.outputs.tag }}'
           assets_json="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets)"
-          python - "$assets_json" <<'PY'
+          mkdir -p release-receipts
+          python - "$assets_json" "release-receipts/$tag.json" "$tag" <<'PY'
+          import datetime
           import json
           import sys
 
           payload = json.loads(sys.argv[1])
+          output_path = sys.argv[2]
+          tag = sys.argv[3]
           sizes = {
               str(item.get("name")): int(item.get("size") or 0)
               for item in payload.get("assets", [])
@@ -145,7 +150,30 @@ jobs:
           missing = sorted(name for name in required if sizes.get(name, 0) <= 0)
           if missing:
               raise SystemExit("Release is incomplete: " + ", ".join(missing))
+          receipt = {
+              "schema": 1,
+              "tag": tag,
+              "verified_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "assets": {name: sizes[name] for name in sorted(required)},
+          }
+          with open(output_path, "w", encoding="utf-8") as stream:
+              json.dump(receipt, stream, indent=2)
+              stream.write("\n")
           print("Updater-visible release verified:")
           for name in sorted(required):
               print(f"  {name}: {sizes[name]} bytes")
           PY
+
+      - name: Commit release verification receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag='${{ steps.version.outputs.tag }}'
+          git config user.name 'djgoo-release-verifier'
+          git config user.email 'actions@users.noreply.github.com'
+          git add "release-receipts/$tag.json"
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Record verified release $tag"
+          git push origin HEAD:main
