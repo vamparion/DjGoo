@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -11,11 +12,49 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from tools.djgoo_portable_stack import configure_core, load_core
 from tools.input_binding_adapter import install_input_binding
+from tools.portable_environment import clean_subprocess_environment
 from tools.recovery_policy import install_recovery_policy
 
 
 SUPERVISOR_CONTRACT = 3
 VOICE_LISTENER_MODULE = "voice.djgoo_voice_listener_bound"
+PENDING_LAUNCHER_DIRECTORY = Path("tools") / "pending_launchers"
+
+
+def schedule_pending_launcher_completion(
+    project_root: Path = PROJECT_ROOT,
+) -> bool:
+    root = project_root.resolve()
+    pending = root / PENDING_LAUNCHER_DIRECTORY
+    if not any((pending / name).is_file() for name in ("DjGoo.exe", "DjGoo Mini Player.exe")):
+        return False
+    helper = root / "tools" / "complete_launcher_update.py"
+    python = root / "runtime" / "python" / "pythonw.exe"
+    if not python.is_file():
+        python = root / "runtime" / "python" / "python.exe"
+    if not helper.is_file() or not python.is_file():
+        return False
+    flags = (
+        int(getattr(subprocess, "DETACHED_PROCESS", 0))
+        | int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+        | int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    )
+    subprocess.Popen(
+        [
+            str(python),
+            str(helper),
+            "--root",
+            str(root),
+        ],
+        cwd=root,
+        env=clean_subprocess_environment(),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=flags,
+        close_fds=True,
+    )
+    return True
 
 
 def install_supervisor_contract(core: Any) -> None:
@@ -41,6 +80,7 @@ def install_supervisor_contract(core: Any) -> None:
 
 
 def main() -> int:
+    schedule_pending_launcher_completion()
     core = configure_core(load_core())
     install_recovery_policy(core)
     install_input_binding(core)
