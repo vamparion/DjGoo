@@ -11,6 +11,7 @@ from tools.build_update_bundle import build_update_bundle
 def test_update_bundle_excludes_large_runtimes_and_user_state(tmp_path: Path) -> None:
     package = tmp_path / "package"
     (package / "tools").mkdir(parents=True)
+    (package / "control_panel").mkdir(parents=True)
     audio_dir = package / "data" / "discordbot" / "cogs" / "Audio"
     audio_dir.mkdir(parents=True)
     (package / "logs").mkdir(parents=True)
@@ -24,9 +25,12 @@ def test_update_bundle_excludes_large_runtimes_and_user_state(tmp_path: Path) ->
     (package / "DjGoo.exe").write_bytes(b"launcher")
     (package / "DjGoo Mini Player.exe").write_bytes(b"mini-player")
     (package / "tools" / "worker.py").write_text("print('updated')", encoding="utf-8")
+    (package / "tools" / "djgoo_stack.py").write_text("# portable adapter\n", encoding="utf-8")
+    (package / "tools" / "djgoo_stack_core.py").write_text("# supervisor core\n", encoding="utf-8")
+    (package / "control_panel" / "state.py").write_text("# health backend\n", encoding="utf-8")
     (package / "data" / "history.json").write_text("private history", encoding="utf-8")
     (package / "data" / "installed-version.json").write_text(
-        json.dumps({"version": "0.3.0-alpha.10"}),
+        json.dumps({"version": "0.3.0-alpha.15"}),
         encoding="utf-8",
     )
     (package / "data" / "lavalink-contract.json").write_text(
@@ -47,13 +51,16 @@ def test_update_bundle_excludes_large_runtimes_and_user_state(tmp_path: Path) ->
 
     output_zip = tmp_path / "DjGoo-Host-update.zip"
     output_manifest = tmp_path / "DjGoo-Host-update.json"
-    manifest = build_update_bundle(package, output_zip, output_manifest, "0.3.0-alpha.10")
+    manifest = build_update_bundle(package, output_zip, output_manifest, "0.3.0-alpha.15")
 
     with zipfile.ZipFile(output_zip) as archive:
         names = set(archive.namelist())
         assert "DjGoo.exe" in names
         assert "DjGoo Mini Player.exe" in names
         assert "tools/worker.py" in names
+        assert "tools/djgoo_stack.py" in names
+        assert "tools/djgoo_stack_core.py" in names
+        assert "control_panel/state.py" in names
         assert "config/secrets.example.json" in names
         assert "data/installed-version.json" in names
         assert "data/lavalink-contract.json" in names
@@ -67,7 +74,7 @@ def test_update_bundle_excludes_large_runtimes_and_user_state(tmp_path: Path) ->
 
     disk_manifest = json.loads(output_manifest.read_text(encoding="utf-8"))
     assert disk_manifest == manifest
-    assert manifest["release_tag"] == "v0.3.0-alpha.10"
+    assert manifest["release_tag"] == "v0.3.0-alpha.15"
     assert manifest["runtime_generation"] == 3
     assert manifest["bundle_size"] == output_zip.stat().st_size
     assert manifest["bundle_sha256"] == hashlib.sha256(output_zip.read_bytes()).hexdigest()

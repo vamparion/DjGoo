@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Dict, List
+
+
+CORE_COMPONENTS = ("redbot", "lavalink", "voice")
 
 
 def read_json_file(path: Path, fallback: Dict[str, Any]) -> Dict[str, Any]:
@@ -27,13 +31,25 @@ def read_recent_log_lines(path: Path, *, limit: int = 80) -> List[str]:
 
 
 def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
-    playlists_data = read_json_file(project_root / "data" / "djgoo-playlists.json", {"playlists": {}})
-    stations_data = read_json_file(project_root / "data" / "djgoo-stations.json", {"active": {}, "stations": {}})
+    playlists_data = read_json_file(
+        project_root / "data" / "djgoo-playlists.json",
+        {"playlists": {}},
+    )
+    stations_data = read_json_file(
+        project_root / "data" / "djgoo-stations.json",
+        {"active": {}, "stations": {}},
+    )
     playlists = _playlist_summaries(playlists_data)
     stations = _station_summaries(stations_data)
     active_station = _active_station(stations_data)
     last_track = active_station.get("last_track") if active_station else None
     last_title = last_track.get("title", "") if isinstance(last_track, dict) else ""
+    health = build_health(project_root)
+    failed = [
+        name
+        for name in CORE_COMPONENTS
+        if str((health.get(name) or {}).get("status") or "") != "online"
+    ]
     return {
         "playback": {
             "title": last_title,
@@ -47,24 +63,182 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
         "playlists": playlists,
         "stations": stations,
         "active_station": active_station,
-        "health": build_health(project_root),
-        "logs": {
-            "redbot": read_recent_log_lines(
-                project_root / "data" / "discordbot" / "core" / "logs" / "latest.log",
-                limit=20,
+        "health": health,
+        "health_summary": {
+            "ok": not failed,
+            "failed_components": failed,
+            "message": (
+                "DjGoo is healthy"
+                if not failed
+                else "Failed components: " + ", ".join(failed)
             ),
-            "voice": read_recent_log_lines(project_root / "logs" / "voice-listener.log", limit=20),
+        },
+        "logs": {
+            "startup": read_recent_log_lines(
+                project_root / "logs" / "startup.log",
+                limit=30,
+            ),
+            "supervisor": read_recent_log_lines(
+                project_root / "logs" / "components" / "supervisor.err.log",
+                limit=30,
+            ),
+            "redbot": read_recent_log_lines(
+                project_root / "logs" / "components" / "redbot.err.log",
+                limit=30,
+            )
+            or read_recent_log_lines(
+                project_root / "data" / "discordbot" / "core" / "logs" / "latest.log",
+                limit=30,
+            ),
+            "voice": read_recent_log_lines(
+                project_root / "logs" / "components" / "voice.err.log",
+                limit=30,
+            )
+            or read_recent_log_lines(
+                project_root / "logs" / "voice-listener.log",
+                limit=30,
+            ),
         },
     }
 
 
+def _integer(value: object) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _supervisor_component_status(
+    project_root: Path,
+    component: str,
+) -> Dict[str, Any] | None:
+    supervisor = read_json_file(
+        project_root / "data" / "djgoo-supervisor-state.json",
+        {},
+    )
+    components = supervisor.get("components")
+    if not isinstance(components, dict):
+        return None
+    item = components.get(component)
+    if not isinstance(item, dict):
+        return None
+
+    pid = _integer(item.get("pid"))
+    running = bool(item.get("running"))
+    ready = bool(item.get("ready"))
+    last_error = str(supervisor.get("last_error") or "").strip()
+    if ready and running:
+        return {
+            "status": "online",
+            "pid": str(pid) if pid else "",
+            "detail": "Supervisor reports ready",
+            "source": "supervisor",
+        }
+    if running:
+        return {
+            "status": "starting",
+            "pid": str(pid) if pid else "",
+            "detail": last_error or "Process is running but has not become ready",
+            "source": "supervisor",
+        }
+    return {
+        "status": "offline",
+        "pid": str(pid) if pid else "",
+        "detail": last_error or "Supervisor reports the component is stopped",
+        "source": "supervisor",
+    }
+
+
+def _heartbeat_status(
+    project_root: Path,
+    component: str,
+    *,
+    max_age_seconds: float,
+) -> Dict[str, Any] | None:
+    heartbeat = read_json_file(
+        project_root / "data" / "health" / f"{component}.json",
+        {},
+    )
+    if not heartbeat:
+        return None
+    try:
+        age = time.time() - float(heartbeat.get("timestamp") or 0)
+    except (TypeError, ValueError):
+        return None
+    pid = _integer(heartbeat.get("pid"))
+    if heartbeat.get("ready") is True and -5.0 <= age <= max_age_seconds:
+        return {
+            "status": "online",
+            "pid": str(pid) if pid else "",
+            "detail": f"Heartbeat is {max(0.0, age):.1f} seconds old",
+            "source": "heartbeat",
+        }
+    return None
+
+
+def _component_status(
+    project_root: Path,
+    component: str,
+    *,
+    process_name: str,
+    command_marker: str,
+    heartbeat_max_age: float,
+) -> Dict[str, Any]:
+    supervisor = _supervisor_component_status(project_root, component)
+    if supervisor and supervisor.get("status") in {"online", "starting"}:
+        return supervisor
+
+    heartbeat = _heartbeat_status(
+        project_root,
+        component,
+        max_age_seconds=heartbeat_max_age,
+    )
+    if heartbeat:
+        return heartbeat
+
+    process = _process_status(process_name, command_marker)
+    if process.get("status") == "online":
+        process["detail"] = "Matching portable process found; readiness heartbeat is pending"
+        process["source"] = "process"
+        return process
+    return supervisor or process
+
+
 def build_health(project_root: Path) -> Dict[str, Any]:
     return {
-        "redbot": _process_status("redbot.exe", "redbot.exe"),
-        "lavalink": _process_status("java.exe", "Lavalink.jar"),
-        "voice": _process_status("python.exe", "voice.djgoo_voice_listener"),
-        "nuclear": {"status": "unknown", "detail": "Checked by search endpoint"},
-        "webhook": {"status": "configured" if (project_root / "config" / "secrets.json").exists() else "missing"},
+        "redbot": _component_status(
+            project_root,
+            "redbot",
+            process_name="python.exe",
+            command_marker="start_redbot_selector.py",
+            heartbeat_max_age=120.0,
+        ),
+        "lavalink": _component_status(
+            project_root,
+            "lavalink",
+            process_name="java.exe",
+            command_marker="Lavalink.jar",
+            heartbeat_max_age=45.0,
+        ),
+        "voice": _component_status(
+            project_root,
+            "voice",
+            process_name="python.exe",
+            command_marker="voice.djgoo_voice_listener",
+            heartbeat_max_age=45.0,
+        ),
+        "nuclear": {
+            "status": "unknown",
+            "detail": "Checked by search endpoint",
+        },
+        "webhook": {
+            "status": (
+                "configured"
+                if (project_root / "config" / "secrets.json").exists()
+                else "missing"
+            )
+        },
     }
 
 
@@ -78,7 +252,9 @@ def _playlist_summaries(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         result.append(
             {
                 "name": str(name),
-                "track_count": len([track for track in tracks if isinstance(track, dict)]),
+                "track_count": len(
+                    [track for track in tracks if isinstance(track, dict)]
+                ),
                 "tracks": tracks,
             }
         )
@@ -124,15 +300,29 @@ def _active_station(data: Dict[str, Any]) -> Dict[str, Any] | None:
     return station if isinstance(station, dict) else None
 
 
-def _process_status(process_name: str, command_marker: str) -> Dict[str, str]:
+def _process_status(process_name: str, command_marker: str) -> Dict[str, Any]:
     script = (
         "Get-CimInstance Win32_Process | "
         f"Where-Object {{$_.Name -eq '{process_name}' -and $_.CommandLine -like '*{command_marker}*'}} | "
         "Select-Object -First 1 -ExpandProperty ProcessId"
     )
     try:
-        output = subprocess.check_output(["powershell.exe", "-NoProfile", "-Command", script], text=True, timeout=4)
+        output = subprocess.check_output(
+            ["powershell.exe", "-NoProfile", "-Command", script],
+            text=True,
+            timeout=4,
+        )
     except (OSError, subprocess.SubprocessError):
-        return {"status": "unknown"}
+        return {
+            "status": "unknown",
+            "detail": "Windows process query failed",
+            "source": "process",
+        }
     pid = output.strip()
-    return {"status": "online", "pid": pid} if pid else {"status": "offline"}
+    if pid:
+        return {"status": "online", "pid": pid, "source": "process"}
+    return {
+        "status": "offline",
+        "detail": f"No {process_name} process matched {command_marker}",
+        "source": "process",
+    }
