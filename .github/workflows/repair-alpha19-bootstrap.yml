@@ -1,0 +1,95 @@
+name: Repair alpha.19 bootstrap updater
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - tools/build_update_bundle.py
+      - tests/test_build_update_bundle.py
+      - .github/workflows/repair-alpha19-bootstrap.yml
+      - .alpha19-bootstrap-trigger
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: alpha19-bootstrap-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out bootstrap tooling
+        uses: actions/checkout@v4
+
+      - name: Build and publish launcher-deferred alpha.19 updater
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "v0.3.0-alpha.19"
+          $version = "0.3.0-alpha.19"
+
+          Remove-Item repair, build -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force repair, repair/host, build | Out-Null
+
+          gh release download $tag -R $env:GITHUB_REPOSITORY `
+            --pattern "DjGoo-Host-win-x64.zip" `
+            --dir repair `
+            --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not download the published alpha.19 Host package."
+          }
+          if (!(Test-Path repair/DjGoo-Host-win-x64.zip) -or (Get-Item repair/DjGoo-Host-win-x64.zip).Length -le 0) {
+            throw "The published alpha.19 Host package is missing or empty."
+          }
+
+          Expand-Archive repair/DjGoo-Host-win-x64.zip repair/host -Force
+          $hostExe = Get-ChildItem repair/host -Recurse -File -Filter "DjGoo.exe" | Select-Object -First 1
+          if (-not $hostExe) {
+            throw "The published alpha.19 Host package does not contain DjGoo.exe."
+          }
+
+          python tools/build_update_bundle.py `
+            --package-root $hostExe.Directory.FullName `
+            --output-zip build/DjGoo-Host-update.zip `
+            --output-manifest build/DjGoo-Host-update.json `
+            --version $version `
+            --defer-launchers
+          if ($LASTEXITCODE -ne 0) {
+            throw "Launcher-deferred Host updater build failed."
+          }
+
+          python -c "import json,zipfile; from pathlib import Path; p=json.loads(Path('build/DjGoo-Host-update.json').read_text()); names=set(zipfile.ZipFile('build/DjGoo-Host-update.zip').namelist()); assert p['launcher_update_deferred'] is True; assert 'DjGoo.exe' not in names; assert 'DjGoo Mini Player.exe' not in names; assert 'tools/apply_update.py' in names; assert p['release_tag']=='v0.3.0-alpha.19'; print('alpha.19 bootstrap updater verified')"
+          if ($LASTEXITCODE -ne 0) {
+            throw "The alpha.19 bootstrap bundle contract is invalid."
+          }
+
+          gh release upload $tag `
+            build/DjGoo-Host-update.zip `
+            build/DjGoo-Host-update.json `
+            -R $env:GITHUB_REPOSITORY `
+            --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "GitHub rejected the alpha.19 bootstrap updater assets."
+          }
+
+          $published = gh release view $tag -R $env:GITHUB_REPOSITORY --json assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not inspect the repaired alpha.19 release."
+          }
+          $sizes = @{}
+          foreach ($asset in $published.assets) {
+            $sizes[[string]$asset.name] = [int64]$asset.size
+          }
+          foreach ($required in @("DjGoo-Host-update.zip", "DjGoo-Host-update.json")) {
+            if (!$sizes.ContainsKey($required) -or $sizes[$required] -le 0) {
+              throw "Repaired alpha.19 asset is missing or empty: $required"
+            }
+          }
+          Write-Host "Launcher-deferred alpha.19 updater published and verified."
