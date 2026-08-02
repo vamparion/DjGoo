@@ -2,6 +2,9 @@ name: DjGoo CI
 
 on:
   pull_request:
+  # Keep the main push event only to cancel any older queued main CI run through
+  # the concurrency group below. The test job itself is PR-only because the
+  # Portable Releases workflow runs the same full suite before publishing.
   push:
     branches:
       - main
@@ -15,6 +18,7 @@ permissions:
 
 jobs:
   test:
+    if: github.event_name == 'pull_request'
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 20
     steps:
