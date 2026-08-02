@@ -75,39 +75,79 @@ async def invite_with_discovered_lan_routes(
     return augmented, discovered_urls
 
 
+def _invite_for_transports(
+    invite: PairingInvite,
+    transports: set[str],
+) -> PairingInvite | None:
+    endpoints = tuple(
+        endpoint
+        for endpoint in invite.endpoints
+        if endpoint.transport.strip().lower() in transports
+    )
+    if not endpoints:
+        return None
+    selected = PairingInvite(
+        code=invite.code,
+        endpoints=endpoints,
+        expires_at=invite.expires_at,
+        host_name=invite.host_name,
+        guild_name=invite.guild_name,
+        protocol=invite.protocol,
+    )
+    selected.validate()
+    return selected
+
+
 async def pair_from_invite_with_discovery(
     invite: PairingInvite,
     *,
     device_name: str,
     credential_path: Path,
 ):
-    """Discover the reachable Host first, then use normal pinned-route failover."""
+    """Use outbound encrypted pairing first; LAN discovery is only a backup."""
+
+    internet = _invite_for_transports(invite, {"discord", "relay"})
+    internet_error: Exception | None = None
+    if internet is not None:
+        try:
+            return await _pair_from_invite(
+                internet,
+                device_name=device_name,
+                credential_path=credential_path,
+            )
+        except Exception as exc:
+            internet_error = exc
 
     augmented, discovered = await invite_with_discovered_lan_routes(invite)
-    try:
-        return await _pair_from_invite(
-            augmented,
-            device_name=device_name,
-            credential_path=credential_path,
-        )
-    except Exception as exc:
-        available = sorted(
-            {
-                endpoint.transport
-                for endpoint in invite.endpoints
-                if endpoint.transport in {"discord", "relay"}
-            }
-        )
-        discovery_text = (
-            f"LAN discovery found {len(discovered)} pinned Host route(s)"
-            if discovered
-            else "LAN discovery found no pinned Host response"
-        )
-        fallback_text = (
-            "internet fallback offered: " + ", ".join(available)
-            if available
-            else "the invite contained no internet fallback"
-        )
+    direct = _invite_for_transports(augmented, {"direct"})
+    if direct is not None:
+        try:
+            return await _pair_from_invite(
+                direct,
+                device_name=device_name,
+                credential_path=credential_path,
+            )
+        except Exception as direct_error:
+            internet_text = (
+                f"outbound route failed: {internet_error}"
+                if internet_error is not None
+                else "the invite contained no outbound encrypted route"
+            )
+            discovery_text = (
+                f"LAN discovery found {len(discovered)} pinned Host route(s)"
+                if discovered
+                else "LAN discovery found no pinned Host response"
+            )
+            raise RuntimeError(
+                f"DjGoo could not complete secure pairing ({internet_text}; "
+                f"direct backup failed: {direct_error}). {discovery_text}."
+            ) from direct_error
+
+    if internet_error is not None:
         raise RuntimeError(
-            f"{exc}. {discovery_text}; {fallback_text}."
-        ) from exc
+            "DjGoo could not complete secure pairing through its outbound "
+            f"encrypted route: {internet_error}."
+        ) from internet_error
+    raise RuntimeError(
+        "DjGoo pairing invite contained no usable outbound or direct route."
+    )

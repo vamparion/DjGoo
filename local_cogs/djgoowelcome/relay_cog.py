@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -24,8 +26,6 @@ from voice.pairing_bundle import PairingEndpoint, PairingInvite
 from voice.relay_crypto import load_or_create_host_identity
 from voice.relay_envelope import handle_host_envelope
 from voice.relay_host import RelayHostClient
-
-from .helpers import load_secrets
 
 
 class DjGooRelay(commands.Cog):
@@ -73,22 +73,24 @@ class DjGooRelay(commands.Cog):
             ),
         )
 
+    def _raw_secrets(self) -> dict[str, Any]:
+        path = self.djgoo_cog._secrets_path()
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
     def _settings(self) -> dict[str, Any]:
-        secrets = self.djgoo_cog._gateway_settings()
-        relay = (
-            secrets.get("relay", {})
-            if isinstance(secrets, dict)
-            else {}
-        )
+        secrets = self._raw_secrets()
+        gateway = secrets.get("voice_gateway", {})
+        gateway = gateway if isinstance(gateway, dict) else {}
+        relay = gateway.get("relay", {})
         return relay if isinstance(relay, dict) else {}
 
     def _discord_webhook_url(self) -> str:
-        secrets = load_secrets(self.djgoo_cog._secrets_path())
-        gateway = (
-            secrets.get("voice_gateway", {})
-            if isinstance(secrets, dict)
-            else {}
-        )
+        secrets = self._raw_secrets()
+        gateway = secrets.get("voice_gateway", {})
         gateway = gateway if isinstance(gateway, dict) else {}
         settings = gateway.get("discord_relay", {})
         settings = settings if isinstance(settings, dict) else {}
@@ -109,6 +111,84 @@ class DjGooRelay(commands.Cog):
                 error=str(exc),
             )
             return ""
+
+    def _save_discord_webhook_url(self, value: str) -> None:
+        normalized = normalize_discord_webhook_url(value)
+        path = self.djgoo_cog._secrets_path()
+        payload = self._raw_secrets()
+        gateway = payload.get("voice_gateway")
+        if not isinstance(gateway, dict):
+            gateway = {}
+            payload["voice_gateway"] = gateway
+        settings = gateway.get("discord_relay")
+        if not isinstance(settings, dict):
+            settings = {}
+            gateway["discord_relay"] = settings
+        settings["enabled"] = True
+        settings["webhook_url"] = normalized
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(
+            json.dumps(payload, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+
+    async def _ensure_discord_webhook(self, ctx: commands.Context) -> bool:
+        if self.discord_webhook_url:
+            return True
+        channel = getattr(ctx, "channel", None)
+        guild = getattr(ctx, "guild", None)
+        create_webhook = getattr(channel, "create_webhook", None)
+        if guild is None or not callable(create_webhook):
+            await ctx.send(
+                "DjGoo could not create its outbound encrypted bridge in this channel. "
+                "Run the command in a normal server text channel."
+            )
+            return False
+        bot_member = getattr(guild, "me", None)
+        try:
+            permissions = channel.permissions_for(bot_member)
+            can_manage = bool(getattr(permissions, "manage_webhooks", False))
+        except Exception:
+            can_manage = False
+        if not can_manage:
+            await ctx.send(
+                "DjGoo Link needs the **Manage Webhooks** permission in this channel "
+                "to create its outbound encrypted bridge. No router port or inbound "
+                "firewall rule is required after that permission is granted."
+            )
+            return False
+        try:
+            webhook = await create_webhook(
+                name="DjGoo Link",
+                reason="Outbound encrypted DjGoo Voice bridge",
+            )
+            normalized = normalize_discord_webhook_url(str(webhook.url))
+            await asyncio.to_thread(
+                self._save_discord_webhook_url,
+                normalized,
+            )
+        except Exception as exc:
+            log_event(
+                "voice.discord_relay.provision_failed",
+                error=type(exc).__name__,
+                detail=str(exc),
+            )
+            await ctx.send(
+                "DjGoo could not create its outbound encrypted bridge. Verify that "
+                "the bot has **Manage Webhooks** in this channel and try again."
+            )
+            return False
+        self.discord_webhook_url = normalized
+        self.discord_webhook_id = discord_webhook_id(normalized)
+        log_event(
+            "voice.discord_relay.provisioned",
+            webhook_id=str(self.discord_webhook_id),
+            guild_id=getattr(guild, "id", 0),
+            channel_id=getattr(channel, "id", 0),
+        )
+        return True
 
     async def _start(self) -> None:
         await self.bot.wait_until_red_ready()
@@ -204,7 +284,7 @@ class DjGooRelay(commands.Cog):
         ctx: commands.Context,
     ) -> list[PairingEndpoint]:
         gateway = self.djgoo_cog._gateway
-        if gateway is None:
+        if gateway is None or getattr(gateway, "_site", None) is None:
             return []
         settings = self.djgoo_cog._gateway_settings()
         urls = gateway_urls(
@@ -230,7 +310,8 @@ class DjGooRelay(commands.Cog):
         ctx: commands.Context,
     ) -> PairingEndpoint | None:
         if not self.discord_webhook_url:
-            return None
+            if not await self._ensure_discord_webhook(ctx):
+                return None
         return PairingEndpoint(
             transport="discord",
             endpoint=self.discord_webhook_url,
@@ -246,6 +327,9 @@ class DjGooRelay(commands.Cog):
     ) -> PairingEndpoint | None:
         if self.client is None:
             return None
+        task = self.client._task
+        if task is None or task.done():
+            return None
         return PairingEndpoint(
             transport="relay",
             endpoint=self.client.relay_url.rstrip("/"),
@@ -260,17 +344,22 @@ class DjGooRelay(commands.Cog):
     async def link_pair(self, ctx: commands.Context) -> None:
         """Send one secure invite containing every available connection path."""
 
-        direct_endpoints = await self._direct_endpoints(ctx)
         discord_endpoint = await self._discord_endpoint(ctx)
         relay_endpoint = await self._relay_endpoint(ctx)
-        endpoints = [*direct_endpoints]
+        if discord_endpoint is None and relay_endpoint is None:
+            await ctx.send(
+                "DjGoo Link will not issue another unreliable LAN-only invite. "
+                "Grant the bot **Manage Webhooks** in this channel, or configure a "
+                "hosted encrypted relay, then run `djgoolink pair` again."
+            )
+            return
+        direct_endpoints = await self._direct_endpoints(ctx)
+        endpoints: list[PairingEndpoint] = []
         if discord_endpoint is not None:
             endpoints.append(discord_endpoint)
         if relay_endpoint is not None:
             endpoints.append(relay_endpoint)
-        if not endpoints:
-            await ctx.send("DjGoo Link is disabled on this Host.")
-            return
+        endpoints.extend(direct_endpoints)
 
         invite = PairingInvite(
             code="",
@@ -282,14 +371,14 @@ class DjGooRelay(commands.Cog):
         invite.validate(allow_expired=True)
 
         routes: list[str] = []
+        if discord_endpoint is not None:
+            routes.append("Discord-backed encrypted outbound route")
+        if relay_endpoint is not None:
+            routes.append("hosted encrypted outbound route")
         if direct_endpoints:
             routes.append(
-                f"{len(direct_endpoints)} same-network secure route(s)"
+                f"{len(direct_endpoints)} optional same-network route(s)"
             )
-        if discord_endpoint is not None:
-            routes.append("Discord-backed encrypted internet fallback")
-        if relay_endpoint is not None:
-            routes.append("hosted encrypted internet fallback")
         route_text = ", ".join(routes)
 
         message = (
@@ -300,9 +389,9 @@ class DjGooRelay(commands.Cog):
             f"```\n{invite.to_uri()}\n```\n"
             f"Safety number: `{invite.safety_number()}`\n"
             f"Connection: {route_text}.\n\n"
-            "The invite expires in five minutes. DjGoo Voice probes every pinned "
-            "route and uses the first reachable one. After pairing, the same device "
-            "identity automatically fails over between saved local and internet routes."
+            "The invite expires in five minutes. DjGoo Voice uses the encrypted "
+            "outbound route first, so no router port forwarding or inbound recipient "
+            "firewall access is required. Local discovery remains an optional backup."
         )
         try:
             await ctx.author.send(message)
@@ -324,6 +413,7 @@ class DjGooRelay(commands.Cog):
             discord_relay_available=discord_endpoint is not None,
             relay_available=relay_endpoint is not None,
             route_specific_codes=True,
+            internet_route_required=True,
         )
 
     @link_group.command(name="status")
@@ -343,7 +433,7 @@ class DjGooRelay(commands.Cog):
                     or ""
                 ),
             )
-            if gateway is not None
+            if gateway is not None and getattr(gateway, "_site", None) is not None
             else []
         )
         relay_task = (
@@ -357,9 +447,10 @@ class DjGooRelay(commands.Cog):
         )
         await ctx.send(
             "DjGoo Link\n"
-            f"Same-network/public secure routes: `{len(direct_urls)}`\n"
-            f"Discord internet fallback: `{bool(self.discord_webhook_url)}`\n"
-            f"Hosted internet fallback: `{relay_ready}`\n"
-            "Paired devices automatically try every saved route and are "
-            "individually revocable with `djgoo revoke <device-id>`."
+            f"Discord encrypted outbound route: `{bool(self.discord_webhook_url)}`\n"
+            f"Hosted encrypted outbound route: `{relay_ready}`\n"
+            f"Optional same-network routes: `{len(direct_urls)}`\n"
+            "Pairing requires at least one outbound route. Paired devices "
+            "automatically retain every route in the invite and are individually "
+            "revocable with `djgoo revoke <device-id>`."
         )

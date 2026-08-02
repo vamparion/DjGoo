@@ -12,8 +12,9 @@ Use GitHub private vulnerability reporting when it is enabled for this repositor
 
 ## Secret handling
 
-- Discord bot tokens remain on the Host.
-- DjGoo Voice recipients never receive bot tokens or webhook credentials.
+- Discord bot tokens remain on the Host and are never included in a pairing invite.
+- A Discord-backed DjGoo Link route uses a webhook capability created for the Host. The private invite may carry that capability to a recipient, but every request and response body is end-to-end encrypted to the pinned Host identity before Discord receives it.
+- Recipient connection credentials, including a Discord webhook capability when used, are encrypted for the current Windows account with DPAPI.
 - `config/secrets.json`, update credentials, pairing secrets, device credentials, certificates, relay identities, Red data, and logs are excluded from Git.
 - Pairing codes and device tokens are stored by the Host as keyed hashes.
 - GitHub update tokens are encrypted for the current Windows account with DPAPI.
@@ -31,17 +32,19 @@ Every remote command is authenticated to a paired device and Discord user. The H
 
 Pairing codes are single-use and short-lived. Device credentials are individually revocable. Commands are attributed to the paired Discord member when Red Audio creates its command context.
 
-The direct Voice Gateway uses a self-signed Host certificate and explicit SHA-256 certificate-fingerprint pinning. Alpha.21 LAN discovery requests include the expected fingerprint and a fresh nonce; only the matching Host responds. The recipient derives the candidate gateway address from the UDP reply source, then performs normal certificate-pinned TLS validation before sending a pairing code or device credential.
+Alpha.22 requires an outbound encrypted route before creating a new invite. When the bot has **Manage Webhooks** in the command channel, DjGoo provisions a Discord-backed route automatically. Both computers then use ordinary outbound HTTPS; Discord transports only encrypted envelopes and is not trusted to authorize or interpret commands. A separately hosted WebSocket relay can be configured instead.
+
+The direct Voice Gateway remains an optional LAN optimization. It uses a self-signed Host certificate and explicit SHA-256 certificate-fingerprint pinning. LAN discovery requests include the expected fingerprint and a fresh nonce; only the matching Host responds. The recipient derives a candidate gateway address from the UDP reply source, then performs normal certificate-pinned TLS validation before sending a pairing code or device credential.
 
 Windows Firewall rules are intentionally narrow:
 
-- Host: inbound UDP `47631` for local discovery and inbound TCP `47632` for the pinned gateway, on all profiles.
+- Host: inbound UDP `47631` for optional local discovery and inbound TCP `47632` for the pinned gateway, on all profiles.
 - Recipient: program-scoped outbound UDP `47631` and outbound TCP `47632`, on all profiles.
-- The recipient does not open a general inbound port. Windows Firewall permits replies to its stateful outbound discovery flow.
+- The recipient does not open a general inbound port. The outbound encrypted route does not require either LAN rule.
 
 The direct gateway is intended for a trusted LAN or authenticated private overlay. Do not forward either port directly from a residential router to the public internet.
 
-Internet fallback transports must be outbound-only from the Host, end-to-end encrypted between Host and recipient, and pinned to the Host identity included in the private invite. A Discord or hosted relay must never receive a Discord bot token, become playback authority, or be trusted to authorize commands.
+Internet transports must be outbound-only from the Host, end-to-end encrypted between Host and recipient, and pinned to the Host identity included in the private invite. A Discord or hosted relay must never receive a Discord bot token, become playback authority, or be trusted to authorize commands.
 
 ## Public repository checklist
 
@@ -53,6 +56,7 @@ Before changing repository visibility:
 4. Rotate anything that may have appeared in a commit, Actions log, issue, pull request, artifact, or screenshot.
 5. Confirm releases contain only the declared seven assets and that updater ZIP membership exactly matches each signed manifest.
 6. Keep branch protection on `main` and require the CI/public-release checks before merge.
+7. Confirm the public bot installation grants **Manage Webhooks** only where DjGoo Link will be used, or configure a separately hosted encrypted relay.
 
 ## Release integrity
 

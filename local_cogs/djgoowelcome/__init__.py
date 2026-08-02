@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 
 from redbot.core import commands
@@ -24,6 +25,25 @@ cog_module.JOINING_REMOTE_INTENTS.update(TIMED_REQUEST_INTENTS)
 DjGooWelcome = cog_module.DjGooWelcome
 
 
+def _install_complete_gateway_settings() -> None:
+    if bool(getattr(DjGooWelcome, "_djgoo_complete_gateway_settings", False)):
+        return
+
+    def _gateway_settings(self) -> dict[str, object]:
+        path = self._secrets_path()
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        configured = payload.get("voice_gateway", {})
+        return configured if isinstance(configured, dict) else {}
+
+    DjGooWelcome._gateway_settings = _gateway_settings
+    DjGooWelcome._djgoo_complete_gateway_settings = True
+
+
 def _install_gateway_firewall_repair() -> None:
     if bool(getattr(DjGooWelcome, "_djgoo_gateway_firewall_repair", False)):
         return
@@ -31,6 +51,7 @@ def _install_gateway_firewall_repair() -> None:
     original_cog_unload = DjGooWelcome.cog_unload
 
     async def _start_gateway(self) -> None:
+        self._djgoo_gateway_ready = False
         gateway = self._gateway
         if gateway is not None:
             try:
@@ -51,12 +72,27 @@ def _install_gateway_firewall_repair() -> None:
             )
 
         # Do not advertise a Host until the certificate-pinned TCP gateway has
-        # completed its own startup. A discovery response must mean that the
-        # returned address and port are ready for the recipient's TLS probe.
+        # completed its own startup. The original method logs and returns when
+        # binding fails, so inspect the live aiohttp server rather than merely
+        # checking whether a TCPSite object was allocated.
         await original_start_gateway(self)
 
         gateway = self._gateway
-        if gateway is None:
+        site = getattr(gateway, "_site", None) if gateway is not None else None
+        server = getattr(site, "_server", None)
+        sockets = getattr(server, "sockets", None)
+        self._djgoo_gateway_ready = bool(sockets)
+        log_event(
+            "voice.gateway.bound_state",
+            ready=self._djgoo_gateway_ready,
+            socket_count=len(sockets or ()),
+        )
+        if gateway is not None and not self._djgoo_gateway_ready:
+            # The legacy gateway object assigns _site before awaiting the bind.
+            # Clear that stale marker so invite generation cannot mistake an
+            # allocated-but-unbound TCPSite for a usable direct route.
+            gateway._site = None
+        if gateway is None or not self._djgoo_gateway_ready:
             return
         discovery = getattr(self, "_djgoo_lan_discovery", None)
         if discovery is not None:
@@ -84,6 +120,7 @@ def _install_gateway_firewall_repair() -> None:
             )
 
     def cog_unload(self):
+        self._djgoo_gateway_ready = False
         discovery = getattr(self, "_djgoo_lan_discovery", None)
         if discovery is not None:
             self.bot.loop.create_task(discovery.stop())
@@ -132,6 +169,7 @@ def _install_timed_chat_routing() -> None:
     DjGooWelcome._djgoo_timed_chat_routing = True
 
 
+_install_complete_gateway_settings()
 _install_gateway_firewall_repair()
 _install_timed_chat_routing()
 
