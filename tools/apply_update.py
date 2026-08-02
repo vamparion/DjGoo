@@ -18,6 +18,10 @@ from typing import Callable, Iterable, Mapping
 REPLACE_TIMEOUT_SECONDS = 30.0
 PARENT_EXIT_TIMEOUT_SECONDS = 30.0
 PROCESS_SYNCHRONIZE = 0x00100000
+PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000
+PROCESS_TERMINATE = 0x00000001
+TH32CS_SNAPPROCESS = 0x00000002
+BOOTLOADER_EXIT_TIMEOUT_SECONDS = 3.0
 WAIT_OBJECT_0 = 0x00000000
 WAIT_TIMEOUT = 0x00000102
 WAIT_FAILED = 0xFFFFFFFF
@@ -179,6 +183,203 @@ def _wait_for_windows_process(pid: int, timeout: float) -> None:
             f"Could not wait for DjGoo launcher process {pid} (Windows error {ctypes.get_last_error()})"
         )
     raise UpdateApplyError(f"Unexpected wait result {result} for DjGoo launcher process {pid}")
+
+
+class _ProcessEntry32W(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD),
+        ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", wintypes.DWORD),
+        ("cntThreads", wintypes.DWORD),
+        ("th32ParentProcessID", wintypes.DWORD),
+        ("pcPriClassBase", wintypes.LONG),
+        ("dwFlags", wintypes.DWORD),
+        ("szExeFile", wintypes.WCHAR * 260),
+    ]
+
+
+def _windows_parent_pid(pid: int) -> int:
+    if os.name != "nt" or pid <= 0:
+        return 0
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Process32FirstW.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(_ProcessEntry32W),
+    ]
+    kernel32.Process32FirstW.restype = wintypes.BOOL
+    kernel32.Process32NextW.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(_ProcessEntry32W),
+    ]
+    kernel32.Process32NextW.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    invalid_handle = ctypes.c_void_p(-1).value
+    if snapshot in {None, invalid_handle}:
+        return 0
+    try:
+        entry = _ProcessEntry32W()
+        entry.dwSize = ctypes.sizeof(entry)
+        if not kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+            return 0
+        while True:
+            if int(entry.th32ProcessID) == int(pid):
+                return int(entry.th32ParentProcessID)
+            if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                return 0
+    finally:
+        kernel32.CloseHandle(snapshot)
+
+
+def _windows_process_image(pid: int) -> str:
+    if os.name != "nt" or pid <= 0:
+        return ""
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.QueryFullProcessImageNameW.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    handle = kernel32.OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION,
+        False,
+        pid,
+    )
+    if not handle:
+        return ""
+    try:
+        buffer = ctypes.create_unicode_buffer(32768)
+        size = wintypes.DWORD(len(buffer))
+        if not kernel32.QueryFullProcessImageNameW(
+            handle,
+            0,
+            buffer,
+            ctypes.byref(size),
+        ):
+            return ""
+        return buffer.value
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _same_windows_path(left: str | Path, right: str | Path) -> bool:
+    return os.path.normcase(os.path.abspath(str(left))) == os.path.normcase(
+        os.path.abspath(str(right))
+    )
+
+
+def pyinstaller_bootloader_pid(
+    root: Path,
+    launcher_pid: int,
+    launcher_name: str = "DjGoo.exe",
+) -> int:
+    """Return the one-file bootloader parent only for the expected launcher."""
+
+    if os.name != "nt" or launcher_pid <= 0:
+        return 0
+    candidate = _windows_parent_pid(launcher_pid)
+    if candidate <= 0 or candidate == os.getpid():
+        return 0
+    image = _windows_process_image(candidate)
+    expected = root.resolve() / launcher_name
+    return candidate if image and _same_windows_path(image, expected) else 0
+
+
+def _terminate_verified_windows_process(pid: int, expected_image: Path) -> None:
+    if os.name != "nt" or pid <= 0:
+        return
+    current_image = _windows_process_image(pid)
+    if not current_image:
+        return
+    if not _same_windows_path(current_image, expected_image):
+        raise UpdateApplyError(
+            f"Refused to terminate unexpected process {pid}: {current_image}"
+        )
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.TerminateProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    handle = kernel32.OpenProcess(
+        PROCESS_TERMINATE | PROCESS_SYNCHRONIZE,
+        False,
+        pid,
+    )
+    if not handle:
+        error = ctypes.get_last_error()
+        if error in {87, 1168}:
+            return
+        raise UpdateApplyError(
+            f"Could not open stale DjGoo bootloader process {pid} "
+            f"(Windows error {error})"
+        )
+    try:
+        if not kernel32.TerminateProcess(handle, 0):
+            raise UpdateApplyError(
+                f"Could not stop stale DjGoo bootloader process {pid} "
+                f"(Windows error {ctypes.get_last_error()})"
+            )
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def wait_for_launcher_release(
+    root: Path,
+    launcher_pid: int,
+    log: Callable[[str], None],
+    *,
+    launcher_name: str = "DjGoo.exe",
+) -> None:
+    """Wait for both PyInstaller processes before replacing DjGoo.exe."""
+
+    bootloader_pid = pyinstaller_bootloader_pid(
+        root,
+        launcher_pid,
+        launcher_name,
+    )
+    if bootloader_pid:
+        log(
+            f"Detected one-file bootloader PID {bootloader_pid} "
+            f"for launcher PID {launcher_pid}."
+        )
+
+    wait_for_process_exit(launcher_pid)
+    if not bootloader_pid:
+        return
+
+    try:
+        wait_for_process_exit(
+            bootloader_pid,
+            timeout=BOOTLOADER_EXIT_TIMEOUT_SECONDS,
+        )
+        log(f"One-file bootloader PID {bootloader_pid} exited cleanly.")
+    except UpdateApplyError:
+        _terminate_verified_windows_process(
+            bootloader_pid,
+            root.resolve() / launcher_name,
+        )
+        wait_for_process_exit(bootloader_pid, timeout=5.0)
+        log(
+            f"Stopped stale one-file bootloader PID {bootloader_pid} "
+            "after its launcher exited."
+        )
 
 
 def _process_exists_posix(pid: int) -> bool:
@@ -392,7 +593,7 @@ def run_update(root: Path, bundle: Path, manifest_path: Path, parent_pid: int) -
         staging = root / "data" / "updates" / f"staging-{os.getpid()}"
         backup = root / "data" / "update-backups" / f"{time.strftime('%Y%m%d-%H%M%S')}-{version}"
         extract_verified_bundle(bundle, staging, expected)
-        wait_for_process_exit(parent_pid)
+        wait_for_launcher_release(root, parent_pid, log)
         apply_staged_update(root, staging, manifest, backup)
         _write_json(
             root / "data" / "installed-version.json",
