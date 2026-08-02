@@ -1,4 +1,4 @@
-# Release publication receipt contract: 1
+# Release publication receipt contract: 2
 name: Verify Published Release
 
 on:
@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 35
     steps:
       - name: Check out main
@@ -38,105 +38,94 @@ jobs:
       - name: Wait for complete updater-visible release
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
-          set -euo pipefail
-          version="$(tr -d '\r\n ' < VERSION)"
-          tag="v${version}"
-          required=(
-            DjGoo-Host-update.json
-            DjGoo-Host-update.zip
-            DjGoo-Voice-update.json
-            DjGoo-Voice-update.zip
-            DjGoo-Host-win-x64.zip
-            DjGoo-Voice-win-x64.zip
-            SHA256SUMS.txt
+          $ErrorActionPreference = "Stop"
+          $version = (Get-Content VERSION -Raw).Trim()
+          $tag = "v$version"
+          $required = @(
+            "DjGoo-Host-update.json",
+            "DjGoo-Host-update.zip",
+            "DjGoo-Voice-update.json",
+            "DjGoo-Voice-update.zip",
+            "DjGoo-Host-win-x64.zip",
+            "DjGoo-Voice-win-x64.zip",
+            "SHA256SUMS.txt"
           )
-
-          ready=false
-          for attempt in $(seq 1 180); do
-            if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" > release.json 2>/dev/null; then
-              if python - "${required[@]}" <<'PY'
-          import json
-          import sys
-
-          release = json.load(open("release.json", encoding="utf-8"))
-          required = set(sys.argv[1:])
-          assets = {
-              str(item.get("name") or "")
-              for item in release.get("assets", [])
-              if isinstance(item, dict)
-              and int(item.get("size") or 0) > 0
-              and str(item.get("state") or "uploaded") == "uploaded"
+          $headers = @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            Accept = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+            "User-Agent" = "DjGoo-Release-Verifier"
           }
-          missing = sorted(required - assets)
-          if missing:
-              print("Waiting for release assets: " + ", ".join(missing))
-              raise SystemExit(1)
-          print("All required release assets are uploaded.")
-          PY
-              then
-                ready=true
+          $release = $null
+          for ($attempt = 1; $attempt -le 180; $attempt++) {
+            try {
+              $uri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/tags/$tag"
+              $candidate = Invoke-RestMethod -UseBasicParsing -Uri $uri -Headers $headers -Method Get
+              $uploaded = @{}
+              foreach ($asset in @($candidate.assets)) {
+                if ([string]::IsNullOrWhiteSpace([string]$asset.name)) { continue }
+                if ([int64]$asset.size -le 0) { continue }
+                if ($asset.state -and [string]$asset.state -ne "uploaded") { continue }
+                $uploaded[[string]$asset.name] = $true
+              }
+              $missing = @($required | Where-Object { -not $uploaded.ContainsKey($_) })
+              if ($missing.Count -eq 0) {
+                $release = $candidate
+                Write-Host "All required release assets are uploaded."
                 break
-              fi
-            else
-              echo "Waiting for ${tag} to be created."
-            fi
-            sleep 10
-          done
-
-          if [[ "${ready}" != true ]]; then
-            echo "${tag} did not become complete within 30 minutes." >&2
-            exit 1
-          fi
-
-          mkdir -p .github/release-receipts
-          python - "${tag}" <<'PY'
-          import datetime
-          import json
-          import pathlib
-          import sys
-
-          tag = sys.argv[1]
-          release = json.load(open("release.json", encoding="utf-8"))
-          assets = []
-          for item in release.get("assets", []):
-              if not isinstance(item, dict):
-                  continue
-              assets.append(
-                  {
-                      "name": str(item.get("name") or ""),
-                      "size": int(item.get("size") or 0),
-                      "digest": item.get("digest"),
-                      "state": str(item.get("state") or ""),
-                  }
-              )
-          payload = {
-              "schema": 1,
-              "tag": tag,
-              "release_id": release.get("id"),
-              "target_commitish": release.get("target_commitish"),
-              "prerelease": bool(release.get("prerelease")),
-              "published_at": release.get("published_at"),
-              "verified_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-              "assets": sorted(assets, key=lambda item: item["name"]),
+              }
+              Write-Host "Waiting for release assets: $($missing -join ', ')"
+            } catch {
+              Write-Host "Waiting for $tag to become available: $($_.Exception.Message)"
+            }
+            Start-Sleep -Seconds 10
           }
-          path = pathlib.Path(".github/release-receipts") / f"{tag}.json"
-          path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-          print(path)
-          PY
+          if ($null -eq $release) {
+            throw "$tag did not become complete within 30 minutes."
+          }
+
+          $receiptDirectory = Join-Path ".github" "release-receipts"
+          New-Item -ItemType Directory -Force $receiptDirectory | Out-Null
+          $assets = @(
+            foreach ($asset in @($release.assets)) {
+              [ordered]@{
+                name = [string]$asset.name
+                size = [int64]$asset.size
+                digest = $asset.digest
+                state = [string]$asset.state
+              }
+            }
+          ) | Sort-Object { $_.name }
+          $payload = [ordered]@{
+            schema = 1
+            tag = $tag
+            release_id = $release.id
+            target_commitish = $release.target_commitish
+            prerelease = [bool]$release.prerelease
+            published_at = $release.published_at
+            verified_at = [DateTimeOffset]::UtcNow.ToString("o")
+            assets = @($assets)
+          }
+          $receiptPath = Join-Path $receiptDirectory "$tag.json"
+          $payload | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $receiptPath
+          Write-Host "Wrote $receiptPath"
 
       - name: Commit publication receipt
-        shell: bash
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
-          set -euo pipefail
-          tag="v$(tr -d '\r\n ' < VERSION)"
+          $ErrorActionPreference = "Stop"
+          $tag = "v$((Get-Content VERSION -Raw).Trim())"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add ".github/release-receipts/${tag}.json"
-          if git diff --cached --quiet; then
-            echo "Publication receipt already matches."
+          git add ".github/release-receipts/$tag.json"
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Publication receipt already matches."
             exit 0
-          fi
-          git commit -m "Record verified ${tag} release assets"
+          }
+          git commit -m "Record verified $tag release assets"
+          if ($LASTEXITCODE -ne 0) { throw "Receipt commit failed with exit $LASTEXITCODE" }
           git push origin HEAD:main
+          if ($LASTEXITCODE -ne 0) { throw "Receipt push failed with exit $LASTEXITCODE" }
