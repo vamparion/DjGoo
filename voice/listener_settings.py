@@ -19,11 +19,11 @@ def voice_settings(voice_config: Dict[str, Any], project_root: Path) -> Dict[str
     min_record_seconds = float(voice_config.get("min_record_seconds", 0.25))
     hotkey_beam_size = max(
         1,
-        int(voice_config.get("hotkey_beam_size", min(3, beam_size))),
+        int(voice_config.get("hotkey_beam_size", 1)),
     )
     return {
-        # distil-large-v3 remains the accuracy model. Push-to-talk uses a smaller
-        # first-pass beam and only spends more work when a result is uncertain.
+        # distil-large-v3 remains the accuracy model. Push-to-talk uses a greedy
+        # first pass and only spends more work when a result is uncertain.
         "model_name": str(voice_config.get("model", "distil-large-v3")),
         "device": str(voice_config.get("device", "cpu")),
         "compute_type": str(voice_config.get("compute_type", "int8")),

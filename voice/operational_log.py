@@ -11,6 +11,12 @@ from voice.health import write_heartbeat
 
 MAX_VALUE_LENGTH = 1000
 _COMPONENT_READY = {"voice": False, "redbot": False}
+_REDBOT_HEARTBEAT_EVENTS = {
+    "redbot.ready",
+    "redbot.heartbeat",
+    "redbot.stopped",
+    "redbot.crashed",
+}
 
 
 def _default_log_path() -> Path:
@@ -61,6 +67,20 @@ def _event_component(event: str) -> str:
     return ""
 
 
+def _event_publishes_heartbeat(component: str, event: str) -> bool:
+    """Keep diagnostic events from replacing authoritative readiness state.
+
+    The supervisor requires ``audio_loaded`` and ``discord_ready`` in Redbot's
+    heartbeat. Events such as ``redbot.command.invoke`` do not carry those fields.
+    Publishing them as heartbeats erases the readiness contract and causes the
+    supervisor to kill Music Core while a command is still executing.
+    """
+
+    if component == "redbot":
+        return event in _REDBOT_HEARTBEAT_EVENTS
+    return bool(component)
+
+
 def _update_ready_state(component: str, event: str) -> bool:
     if event in {"voice.listener.starting"}:
         _COMPONENT_READY[component] = False
@@ -73,7 +93,7 @@ def _update_ready_state(component: str, event: str) -> bool:
 
 def _event_heartbeat(event: str, fields: dict[str, Any]) -> None:
     component = _event_component(event)
-    if not component:
+    if not component or not _event_publishes_heartbeat(component, event):
         return
     ready = _update_ready_state(component, event)
     allowed_fields = {"guild_count", "audio_loaded", "discord_ready"}
