@@ -1,0 +1,141 @@
+name: Verify Published Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "VERSION"
+      - "launcher/**"
+      - "voice/**"
+      - "local_cogs/djgoowelcome/**"
+      - "relay/**"
+      - "tools/**"
+      - "requirements-*.txt"
+      - "pyproject.toml"
+      - ".github/workflows/portable-release.yml"
+      - ".github/workflows/verify-published-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: verify-published-release
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Wait for complete updater-visible release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '\r\n ' < VERSION)"
+          tag="v${version}"
+          required=(
+            DjGoo-Host-update.json
+            DjGoo-Host-update.zip
+            DjGoo-Voice-update.json
+            DjGoo-Voice-update.zip
+            DjGoo-Host-win-x64.zip
+            DjGoo-Voice-win-x64.zip
+            SHA256SUMS.txt
+          )
+
+          ready=false
+          for attempt in $(seq 1 180); do
+            if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" > release.json 2>/dev/null; then
+              if python - "${required[@]}" <<'PY'
+          import json
+          import sys
+
+          release = json.load(open("release.json", encoding="utf-8"))
+          required = set(sys.argv[1:])
+          assets = {
+              str(item.get("name") or "")
+              for item in release.get("assets", [])
+              if isinstance(item, dict)
+              and int(item.get("size") or 0) > 0
+              and str(item.get("state") or "uploaded") == "uploaded"
+          }
+          missing = sorted(required - assets)
+          if missing:
+              print("Waiting for release assets: " + ", ".join(missing))
+              raise SystemExit(1)
+          print("All required release assets are uploaded.")
+          PY
+              then
+                ready=true
+                break
+              fi
+            else
+              echo "Waiting for ${tag} to be created."
+            fi
+            sleep 10
+          done
+
+          if [[ "${ready}" != true ]]; then
+            echo "${tag} did not become complete within 30 minutes." >&2
+            exit 1
+          fi
+
+          mkdir -p .github/release-receipts
+          python - "${tag}" <<'PY'
+          import datetime
+          import json
+          import pathlib
+          import sys
+
+          tag = sys.argv[1]
+          release = json.load(open("release.json", encoding="utf-8"))
+          assets = []
+          for item in release.get("assets", []):
+              if not isinstance(item, dict):
+                  continue
+              assets.append(
+                  {
+                      "name": str(item.get("name") or ""),
+                      "size": int(item.get("size") or 0),
+                      "digest": item.get("digest"),
+                      "state": str(item.get("state") or ""),
+                  }
+              )
+          payload = {
+              "schema": 1,
+              "tag": tag,
+              "release_id": release.get("id"),
+              "target_commitish": release.get("target_commitish"),
+              "prerelease": bool(release.get("prerelease")),
+              "published_at": release.get("published_at"),
+              "verified_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "assets": sorted(assets, key=lambda item: item["name"]),
+          }
+          path = pathlib.Path(".github/release-receipts") / f"{tag}.json"
+          path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+          print(path)
+          PY
+
+      - name: Commit publication receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v$(tr -d '\r\n ' < VERSION)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ".github/release-receipts/${tag}.json"
+          if git diff --cached --quiet; then
+            echo "Publication receipt already matches."
+            exit 0
+          fi
+          git commit -m "Record verified ${tag} release assets"
+          git push origin HEAD:main
