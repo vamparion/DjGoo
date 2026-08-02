@@ -5,8 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from tools import apply_update
-from tools.apply_update import UpdateApplyError, apply_staged_update, safe_relative_path
+from tools import update_apply_engine as apply_update
+from tools.update_apply_engine import (
+    UpdateApplyError,
+    apply_staged_update,
+    safe_relative_path,
+    wait_for_executable_release,
+)
 
 
 def _entry(path: str, content: bytes) -> dict[str, object]:
@@ -71,7 +76,7 @@ def test_failed_update_rolls_back_already_replaced_files(tmp_path: Path, monkeyp
     original = apply_update._atomic_copy
     calls = {"count": 0}
 
-    def fail_second(source: Path, destination: Path, timeout: float = 30.0) -> None:
+    def fail_second(source: Path, destination: Path, timeout: float = 60.0) -> None:
         calls["count"] += 1
         if calls["count"] == 2:
             raise UpdateApplyError("simulated replacement failure")
@@ -84,3 +89,66 @@ def test_failed_update_rolls_back_already_replaced_files(tmp_path: Path, monkeyp
 
     assert (root / "tools" / "one.py").read_text(encoding="utf-8") == "old-one"
     assert (root / "tools" / "two.py").read_text(encoding="utf-8") == "old-two"
+
+
+def test_failed_first_replacement_is_not_rolled_back_as_if_modified(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "install"
+    staging = tmp_path / "staging"
+    backup = tmp_path / "backup"
+    root.mkdir()
+    staging.mkdir()
+    destination = root / "DjGoo.exe"
+    source = staging / "DjGoo.exe"
+    destination.write_bytes(b"old-launcher")
+    source.write_bytes(b"new-launcher")
+    manifest = {
+        "files": [_entry("DjGoo.exe", b"new-launcher")],
+        "deletes": [],
+    }
+    calls: list[tuple[Path, Path]] = []
+
+    def fail_copy(source_path: Path, destination_path: Path, timeout: float = 60.0) -> None:
+        calls.append((source_path, destination_path))
+        raise UpdateApplyError("launcher is locked")
+
+    monkeypatch.setattr(apply_update, "_atomic_copy", fail_copy)
+
+    with pytest.raises(UpdateApplyError, match="launcher is locked"):
+        apply_staged_update(root, staging, manifest, backup)
+
+    assert calls == [(source, destination)]
+    assert destination.read_bytes() == b"old-launcher"
+    assert (backup / "DjGoo.exe").read_bytes() == b"old-launcher"
+
+
+def test_wait_for_executable_release_terminates_only_reported_exact_path_pids(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    launcher = tmp_path / "DjGoo.exe"
+    launcher.write_bytes(b"launcher")
+    responses = iter(({4101, 4102}, set()))
+    terminated: list[set[int]] = []
+
+    monkeypatch.setattr(apply_update.os, "name", "nt")
+    monkeypatch.setattr(
+        apply_update,
+        "_windows_pids_for_executable",
+        lambda _path: set(next(responses)),
+    )
+    monkeypatch.setattr(
+        apply_update,
+        "_terminate_windows_pids",
+        lambda pids: terminated.append(set(pids)),
+    )
+
+    wait_for_executable_release(
+        launcher,
+        graceful_timeout=0,
+        terminate_timeout=0,
+    )
+
+    assert terminated == [{4101, 4102}]
