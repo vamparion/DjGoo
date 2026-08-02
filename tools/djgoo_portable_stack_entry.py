@@ -14,7 +14,7 @@ from tools.input_binding_adapter import install_input_binding
 from tools.recovery_policy import install_recovery_policy
 
 
-SUPERVISOR_CONTRACT = 2
+SUPERVISOR_CONTRACT = 3
 VOICE_LISTENER_MODULE = "voice.djgoo_voice_listener_bound"
 
 
@@ -33,6 +33,7 @@ def install_supervisor_contract(core: Any) -> None:
         payload = dict(original_snapshot())
         payload["supervisor_contract"] = SUPERVISOR_CONTRACT
         payload["voice_listener_module"] = VOICE_LISTENER_MODULE
+        payload["voice_binding_backend"] = "generalized-keyboard-mouse"
         return payload
 
     core.STATE.snapshot = snapshot

@@ -37,6 +37,8 @@ DjGoo follows Semantic Versioning. Dates use ISO 8601.
 - Kept newly bundled Audio Engine files when migrating older user configuration.
 - Replaced the obsolete `redbot.exe` diagnostics probe with the portable supervisor PID and heartbeat state.
 - Health failures now identify the exact Audio Engine, Music Core, or Voice Control component and expose its current error logs.
+- Made the original Voice Control entrypoint use the generalized keyboard and mouse binding backend, so F5 and mouse-button bindings work even when the supervisor launches the legacy module name.
+- Advanced the supervisor capability contract so alpha.16 replaces any alpha.15 process still holding the previous voice-launch code in memory.
 
 ### Changed
 

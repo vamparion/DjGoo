@@ -17,16 +17,17 @@ from voice.audio_capture import PushToTalkAudioCapture, audio_metrics, prepare_f
 from voice.command_queue import append_queue_item, command_to_queue_item
 from voice.command_parser import parse_command
 from voice.corrections import apply_corrections, correction_hotwords, load_corrections
+from voice.input_binding import ButtonWaiter, COMMON_BUTTONS, is_button_down
 from voice.listener_settings import voice_settings
 from voice.operational_log import log_event
 from voice.secrets import load_project_secrets
 
 
-HOTKEYS = {
-    "F10": 0x79,
-    "F11": 0x7A,
-    "F12": 0x7B,
-}
+# Keep the original listener entrypoint compatible with every button accepted by
+# the Host and recipient UIs. This makes generalized binding intrinsic to the
+# listener rather than depending on a supervisor-side module substitution.
+HOTKEYS = dict(COMMON_BUTTONS)
+HotkeyWaiter = ButtonWaiter
 
 if sys.platform == "win32":
     ctypes.windll.user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
@@ -41,53 +42,8 @@ class SpeechResult:
     duration_seconds: float
 
 
-class HotkeyWaiter:
-    def __init__(self, hotkey: str, *, poll_seconds: float) -> None:
-        self.hotkey = hotkey.upper()
-        self.poll_seconds = max(0.005, float(poll_seconds))
-        if self.hotkey not in HOTKEYS:
-            raise ValueError(f"Unsupported push-to-talk key: {self.hotkey}")
-        log_event("voice.hotkey.registration", hotkey=self.hotkey, mode=self.mode)
-
-    @property
-    def mode(self) -> str:
-        return "GetAsyncKeyState continuous-stream hold-to-talk"
-
-    def wait_for_press(self, *, heartbeat_seconds: float = 30.0) -> None:
-        last_heartbeat = time.monotonic()
-        while not is_hotkey_down(self.hotkey):
-            now = time.monotonic()
-            if now - last_heartbeat >= heartbeat_seconds:
-                log_event("voice.hotkey.waiting", hotkey=self.hotkey, mode=self.mode)
-                last_heartbeat = now
-            time.sleep(self.poll_seconds)
-
-    def capture_while_held(
-        self,
-        capture: PushToTalkAudioCapture,
-        *,
-        min_seconds: float,
-        max_seconds: float,
-    ) -> np.ndarray:
-        capture.begin()
-        started = time.monotonic()
-        while is_hotkey_down(self.hotkey) and time.monotonic() - started < max_seconds:
-            time.sleep(self.poll_seconds)
-        while time.monotonic() - started < min_seconds:
-            time.sleep(self.poll_seconds)
-        audio = capture.finish()
-        while is_hotkey_down(self.hotkey):
-            time.sleep(self.poll_seconds)
-        return audio
-
-
 def is_hotkey_down(hotkey: str) -> bool:
-    if sys.platform != "win32":
-        return False
-    vk_code = HOTKEYS.get(hotkey.upper())
-    if vk_code is None:
-        return False
-    return bool(ctypes.windll.user32.GetAsyncKeyState(vk_code) & 0x8000)
+    return is_button_down(hotkey)
 
 
 def resolve_input_device(configured: object) -> int | str | None:

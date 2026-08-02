@@ -23,15 +23,15 @@ def test_matching_supervisor_version_and_contract_is_left_running(
     disable_live_probe(monkeypatch)
     write_json(
         tmp_path / "data" / "pids" / "supervisor.json",
-        {"pid": 101, "version": "0.3.0-alpha.14"},
+        {"pid": 101, "version": "0.3.0-alpha.16"},
     )
     write_json(
         tmp_path / "data" / "djgoo-supervisor-state.json",
         {
             "supervisor_pid": 101,
             "desired_running": True,
-            "supervisor_version": "0.3.0-alpha.14",
-            "supervisor_contract": 2,
+            "supervisor_version": "0.3.0-alpha.16",
+            "supervisor_contract": supervisor_lifecycle.EXPECTED_SUPERVISOR_CONTRACT,
         },
     )
     monkeypatch.setattr(supervisor_lifecycle, "process_exists", lambda pid: pid == 101)
@@ -45,7 +45,7 @@ def test_matching_supervisor_version_and_contract_is_left_running(
 
     changed = supervisor_lifecycle.restart_stale_supervisor(
         tmp_path,
-        installed_version="0.3.0-alpha.14",
+        installed_version="0.3.0-alpha.16",
         runtime_python=tmp_path / "python.exe",
         runtime_pythonw=tmp_path / "pythonw.exe",
         stack_script=tmp_path / "djgoo_stack.py",
