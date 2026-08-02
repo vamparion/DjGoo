@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -11,6 +12,9 @@ from typing import Callable, Mapping
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 PROCESS_TERMINATE = 0x0001
+CONTROL_HOST = "127.0.0.1"
+CONTROL_PORT = int(os.environ.get("DJGOO_CONTROL_PORT", "47631"))
+EXPECTED_SUPERVISOR_CONTRACT = 2
 
 
 def read_json(path: Path) -> dict[str, object] | None:
@@ -68,20 +72,91 @@ def wait_for_exit(pid: int, timeout: float = 15.0) -> bool:
     return True
 
 
-def supervisor_identity(root: Path) -> tuple[int, bool, str]:
+def live_supervisor_state(timeout: float = 0.75) -> dict[str, object] | None:
+    """Read the live supervisor state even when its PID files are stale or absent."""
+
+    try:
+        with socket.create_connection((CONTROL_HOST, CONTROL_PORT), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            sock.sendall(b'{"action":"status"}\n')
+            with sock.makefile("rb") as stream:
+                line = stream.readline(256_000)
+        response = json.loads(line.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(response, dict) or response.get("ok") is not True:
+        return None
+    state = response.get("state")
+    return dict(state) if isinstance(state, dict) else None
+
+
+def _supervisor_sources(
+    root: Path,
+) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
     state = read_json(root / "data" / "djgoo-supervisor-state.json") or {}
     record = read_json(root / "data" / "pids" / "supervisor.json") or {}
-    try:
-        pid = int(record.get("pid") or state.get("supervisor_pid") or 0)
-    except (TypeError, ValueError):
-        pid = 0
-    desired_running = bool(state.get("desired_running"))
+    live = live_supervisor_state() or {}
+    return state, record, live
+
+
+def _first_int(*values: object) -> int:
+    for value in values:
+        try:
+            parsed = int(value or 0)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            return parsed
+    return 0
+
+
+def _first_float(*values: object) -> float:
+    for value in values:
+        try:
+            parsed = float(value or 0)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            return parsed
+    return 0.0
+
+
+def supervisor_identity(root: Path) -> tuple[int, bool, str]:
+    state, record, live = _supervisor_sources(root)
+    pid = _first_int(
+        live.get("supervisor_pid"),
+        record.get("pid"),
+        state.get("supervisor_pid"),
+    )
+    if "desired_running" in live:
+        desired_running = bool(live.get("desired_running"))
+    else:
+        desired_running = bool(state.get("desired_running"))
     version = str(
-        record.get("version")
+        live.get("supervisor_version")
+        or record.get("version")
         or state.get("supervisor_version")
         or ""
     ).strip()
     return pid, desired_running, version
+
+
+def _supervisor_contract(root: Path) -> int:
+    state, _, live = _supervisor_sources(root)
+    return _first_int(
+        live.get("supervisor_contract"),
+        state.get("supervisor_contract"),
+    )
+
+
+def _supervisor_started_at(root: Path) -> float:
+    state, _, live = _supervisor_sources(root)
+    return _first_float(live.get("started_at"), state.get("started_at"))
+
+
+def _installed_at(root: Path) -> float:
+    payload = read_json(root / "data" / "installed-version.json") or {}
+    return _first_float(payload.get("installed_at"))
 
 
 def restart_stale_supervisor(
@@ -94,26 +169,48 @@ def restart_stale_supervisor(
     environment: Mapping[str, str],
     log: Callable[[str], None],
 ) -> bool:
-    """Replace a supervisor that was loaded before the installed update.
+    """Replace a supervisor loaded before the installed update.
 
-    Incremental updates replace files on disk, but an already-running Python
-    supervisor keeps executing its old imported code. Older DjGoo releases only
-    sent ``stop`` during updates, leaving that process alive. A missing or
-    different supervisor version therefore means the process must be shut down
-    before the newly installed stack code can be used.
+    Older incremental updaters could leave the background supervisor alive while
+    replacing its source files. The live process then kept the old listener in
+    memory and rejected newly bindable buttons such as F5 or mouse buttons. This
+    check uses the control socket as the authority when PID files are missing,
+    and requires the current portable supervisor capability contract.
     """
 
     pid, desired_running, running_version = supervisor_identity(root)
     installed = str(installed_version or "").strip()
     if pid <= 0 or not process_exists(pid):
         return False
-    if running_version and running_version == installed:
+
+    contract = _supervisor_contract(root)
+    started_at = _supervisor_started_at(root)
+    installed_at = _installed_at(root)
+    started_before_install = bool(
+        started_at > 0
+        and installed_at > 0
+        and started_at + 0.5 < installed_at
+    )
+    version_is_current = bool(running_version and running_version == installed)
+    contract_is_current = contract >= EXPECTED_SUPERVISOR_CONTRACT
+
+    if version_is_current and contract_is_current and not started_before_install:
         return False
 
-    label = running_version or "pre-versioned"
+    reasons: list[str] = []
+    if not running_version:
+        reasons.append("pre-versioned")
+    elif not version_is_current:
+        reasons.append(f"version {running_version}")
+    if not contract_is_current:
+        reasons.append(f"contract {contract or 'missing'}")
+    if started_before_install:
+        reasons.append("started before the installed update")
+    reason = ", ".join(reasons) or "stale code"
+
     log(
-        f"Replacing stale DjGoo supervisor PID {pid} "
-        f"({label}) with installed version {installed or 'unknown'}."
+        f"Replacing stale DjGoo supervisor PID {pid} ({reason}) "
+        f"with installed version {installed or 'unknown'}."
     )
 
     try:
