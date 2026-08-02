@@ -22,6 +22,7 @@ from tools.red_lavalink_contract import (
 
 COPY_DIRECTORIES = (
     "config",
+    "control_panel",
     "control_panel_dist",
     "launcher",
     "local_cogs",
