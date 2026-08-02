@@ -1,4 +1,4 @@
-# Release publication receipt contract: 3
+# Release publication verification contract: 4
 name: Verify Published Release
 
 on:
@@ -19,7 +19,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+  issues: write
 
 concurrency:
   group: verify-published-release
@@ -35,7 +36,7 @@ jobs:
         with:
           ref: main
 
-      - name: Verify and record release assets
+      - name: Verify release assets and report status
         env:
           GH_TOKEN: ${{ github.token }}
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
@@ -43,6 +44,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           $version = (Get-Content VERSION -Raw).Trim()
           $tag = "v$version"
+          $title = "Release verification: $tag"
           $required = @(
             "DjGoo-Host-update.json",
             "DjGoo-Host-update.zip",
@@ -58,95 +60,113 @@ jobs:
             "X-GitHub-Api-Version" = "2022-11-28"
             "User-Agent" = "DjGoo-Release-Verifier"
           }
-          $statusDirectory = Join-Path ".github" "release-status"
-          $receiptDirectory = Join-Path ".github" "release-receipts"
-          New-Item -ItemType Directory -Force $statusDirectory | Out-Null
-          New-Item -ItemType Directory -Force $receiptDirectory | Out-Null
-          $statusPath = Join-Path $statusDirectory "$tag.json"
-          $receiptPath = Join-Path $receiptDirectory "$tag.json"
+          $apiRoot = "https://api.github.com/repos/$env:GITHUB_REPOSITORY"
 
-          function Save-ReleaseState($release, [string[]]$missing, [bool]$complete) {
-            $assets = @()
-            if ($null -ne $release) {
-              $assets = @(
-                foreach ($asset in @($release.assets)) {
-                  [ordered]@{
-                    name = [string]$asset.name
-                    size = [int64]$asset.size
-                    digest = $asset.digest
-                    state = [string]$asset.state
-                  }
-                }
-              ) | Sort-Object { $_.name }
+          function Invoke-GitHubJson(
+            [string]$Method,
+            [string]$Uri,
+            $Payload = $null
+          ) {
+            if ($null -eq $Payload) {
+              return Invoke-RestMethod -UseBasicParsing -Method $Method -Uri $Uri -Headers $headers
             }
-            $payload = [ordered]@{
-              schema = 1
-              tag = $tag
-              complete = $complete
-              release_id = if ($null -ne $release) { $release.id } else { $null }
-              target_commitish = if ($null -ne $release) { $release.target_commitish } else { $null }
-              prerelease = if ($null -ne $release) { [bool]$release.prerelease } else { $null }
-              published_at = if ($null -ne $release) { $release.published_at } else { $null }
-              checked_at = [DateTimeOffset]::UtcNow.ToString("o")
-              missing = @($missing)
-              assets = @($assets)
-            }
-            $payload | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $statusPath
-            if ($complete) {
-              $payload.verified_at = [DateTimeOffset]::UtcNow.ToString("o")
-              $payload | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $receiptPath
-            }
+            $json = $Payload | ConvertTo-Json -Depth 10
+            return Invoke-RestMethod -UseBasicParsing -Method $Method -Uri $Uri -Headers $headers -ContentType "application/json" -Body $json
           }
 
-          function Push-ReleaseState([string]$message) {
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add $statusPath
-            if (Test-Path $receiptPath) { git add $receiptPath }
-            git diff --cached --quiet
-            if ($LASTEXITCODE -eq 0) { return }
-            git commit -m $message
-            if ($LASTEXITCODE -ne 0) { throw "Release state commit failed with exit $LASTEXITCODE" }
-            git push origin HEAD:main
-            if ($LASTEXITCODE -ne 0) { throw "Release state push failed with exit $LASTEXITCODE" }
+          $issues = @(Invoke-GitHubJson "GET" "$apiRoot/issues?state=all&per_page=100")
+          $issue = $issues | Where-Object {
+            [string]$_.title -eq $title -and $null -eq $_.pull_request
+          } | Select-Object -First 1
+          if ($null -eq $issue) {
+            $issue = Invoke-GitHubJson "POST" "$apiRoot/issues" @{
+              title = $title
+              body = "Automated release verification has started."
+            }
+          }
+          $issueNumber = [int]$issue.number
+
+          function Update-VerificationIssue(
+            [string]$Body,
+            [bool]$Complete
+          ) {
+            $payload = @{
+              body = $Body
+              state = if ($Complete) { "closed" } else { "open" }
+            }
+            if ($Complete) { $payload.state_reason = "completed" }
+            Invoke-GitHubJson "PATCH" "$apiRoot/issues/$issueNumber" $payload | Out-Null
           }
 
-          $release = $null
-          $missing = @($required)
+          $started = [DateTimeOffset]::UtcNow.ToString("o")
+          Update-VerificationIssue @"
+          Automated verifier started for **$tag**.
+
+          Started: `$started`
+
+          Checking the GitHub release and all required updater/full-package assets now.
+          "@ $false
+
           for ($attempt = 1; $attempt -le 180; $attempt++) {
+            $release = $null
+            $missing = @($required)
+            $assetLines = @()
             try {
-              $uri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/tags/$tag"
-              $candidate = Invoke-RestMethod -UseBasicParsing -Uri $uri -Headers $headers -Method Get
+              $release = Invoke-GitHubJson "GET" "$apiRoot/releases/tags/$tag"
               $uploaded = @{}
-              foreach ($asset in @($candidate.assets)) {
-                if ([string]::IsNullOrWhiteSpace([string]$asset.name)) { continue }
-                if ([int64]$asset.size -le 0) { continue }
-                if ($asset.state -and [string]$asset.state -ne "uploaded") { continue }
-                $uploaded[[string]$asset.name] = $true
+              foreach ($asset in @($release.assets)) {
+                $name = [string]$asset.name
+                $size = [int64]$asset.size
+                $state = [string]$asset.state
+                if (-not [string]::IsNullOrWhiteSpace($name) -and $size -gt 0 -and (!$state -or $state -eq "uploaded")) {
+                  $uploaded[$name] = $true
+                }
+                $assetLines += "- ``$name`` — $size bytes — $state"
               }
               $missing = @($required | Where-Object { -not $uploaded.ContainsKey($_) })
-              $release = $candidate
             } catch {
-              $release = $null
-              $missing = @($required)
               Write-Host "Waiting for $tag: $($_.Exception.Message)"
             }
 
             $complete = $null -ne $release -and $missing.Count -eq 0
-            Save-ReleaseState $release $missing $complete
-            if ($attempt -eq 1 -or $complete -or $attempt % 6 -eq 0) {
-              $message = if ($complete) {
-                "Record verified $tag release assets"
-              } else {
-                "Record pending $tag release assets"
-              }
-              Push-ReleaseState $message
-            }
             if ($complete) {
-              Write-Host "All required release assets are uploaded and recorded."
+              $verified = [DateTimeOffset]::UtcNow.ToString("o")
+              $body = @"
+          **Verified complete: $tag**
+
+          Published: `$($release.published_at)`
+          Verified: `$verified`
+          Release ID: `$($release.id)`
+          Target: `$($release.target_commitish)`
+
+          All required assets are present, uploaded, and non-empty:
+
+          $($assetLines -join "`n")
+          "@
+              Update-VerificationIssue $body $true
+              Write-Host "All required release assets are uploaded and verified."
               exit 0
             }
-            Write-Host "Waiting for release assets: $($missing -join ', ')"
+
+            if ($attempt -eq 1 -or $attempt % 6 -eq 0) {
+              $checked = [DateTimeOffset]::UtcNow.ToString("o")
+              $body = @"
+          Automated verification is still running for **$tag**.
+
+          Last checked: `$checked`
+
+          Missing or incomplete required assets:
+
+          $(@($missing | ForEach-Object { "- ``$_``" }) -join "`n")
+
+          Assets currently reported by GitHub:
+
+          $($assetLines -join "`n")
+          "@
+              Update-VerificationIssue $body $false
+            }
             Start-Sleep -Seconds 10
           }
+
+          Update-VerificationIssue "Verification timed out after 30 minutes for **$tag**." $false
           throw "$tag did not become complete within 30 minutes."
