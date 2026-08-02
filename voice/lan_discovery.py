@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ipaddress
 import json
 import secrets
@@ -12,6 +13,7 @@ from voice.network_routes import local_ipv4_addresses
 
 
 DISCOVERY_PORT = 47631
+DISCOVERY_MULTICAST_GROUP = "239.255.71.71"
 REQUEST_TYPE = "DJGOO-DISCOVER-1"
 RESPONSE_TYPE = "DJGOO-OFFER-1"
 MAX_PACKET_BYTES = 2048
@@ -118,20 +120,44 @@ class LanDiscoveryResponder:
         self._transport: asyncio.DatagramTransport | None = None
         self._protocol: LanDiscoveryProtocol | None = None
 
+    def _socket(self) -> socket.socket:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.bind(("0.0.0.0", self.listen_port))
+        interfaces = ["0.0.0.0", *local_ipv4_addresses()]
+        for interface in dict.fromkeys(interfaces):
+            membership = (
+                socket.inet_aton(DISCOVERY_MULTICAST_GROUP)
+                + socket.inet_aton(interface)
+            )
+            with contextlib.suppress(OSError):
+                sock.setsockopt(
+                    socket.IPPROTO_IP,
+                    socket.IP_ADD_MEMBERSHIP,
+                    membership,
+                )
+        sock.setblocking(False)
+        return sock
+
     async def start(self) -> None:
         if self._transport is not None:
             return
         loop = asyncio.get_running_loop()
-        transport, protocol = await loop.create_datagram_endpoint(
-            lambda: LanDiscoveryProtocol(
-                gateway_port=self.gateway_port,
-                fingerprint=self.fingerprint,
-                host_name=self.host_name,
-                log=self.log,
-            ),
-            local_addr=("0.0.0.0", self.listen_port),
-            allow_broadcast=True,
-        )
+        sock = self._socket()
+        try:
+            transport, protocol = await loop.create_datagram_endpoint(
+                lambda: LanDiscoveryProtocol(
+                    gateway_port=self.gateway_port,
+                    fingerprint=self.fingerprint,
+                    host_name=self.host_name,
+                    log=self.log,
+                ),
+                sock=sock,
+            )
+        except BaseException:
+            sock.close()
+            raise
         self._transport = transport
         self._protocol = protocol
 
@@ -145,7 +171,10 @@ class LanDiscoveryResponder:
 
 
 def _broadcast_targets(port: int) -> list[tuple[str, int]]:
-    targets: list[tuple[str, int]] = [("255.255.255.255", int(port))]
+    targets: list[tuple[str, int]] = [
+        (DISCOVERY_MULTICAST_GROUP, int(port)),
+        ("255.255.255.255", int(port)),
+    ]
     for address in local_ipv4_addresses():
         try:
             network = ipaddress.ip_network(f"{address}/24", strict=False)
@@ -180,6 +209,7 @@ def _discover_gateway_urls(
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
         sock.bind(("", 0))
         for _attempt in range(2):
             for target in _broadcast_targets(discovery_port):
