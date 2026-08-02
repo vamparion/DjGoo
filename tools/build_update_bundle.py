@@ -14,6 +14,7 @@ DIRECTORY_PREFIXES = (
     "tools",
     "voice",
     "local_cogs",
+    "control_panel",
     "control_panel_dist",
     "launcher",
 )
@@ -133,10 +134,13 @@ def collect_update_files(package_root: Path) -> list[Path]:
     required = {
         "DjGoo.exe",
         "DjGoo Mini Player.exe",
+        "control_panel/state.py",
         "data/installed-version.json",
         "data/lavalink-contract.json",
         "data/discordbot/cogs/Audio/Lavalink.jar",
         "data/discordbot/cogs/Audio/application.yml",
+        "tools/djgoo_stack.py",
+        "tools/djgoo_stack_core.py",
     }
     missing = sorted(required.difference(collected))
     if missing:
