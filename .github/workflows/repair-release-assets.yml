@@ -176,4 +176,4 @@ jobs:
             exit 0
           fi
           git commit -m "Record verified release $tag"
-          git push origin HEAD:main
+          git push origin HEAD:release-verification
