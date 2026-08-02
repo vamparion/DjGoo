@@ -106,10 +106,6 @@ PLACEHOLDER_WORDS = {
     "your-",
 }
 
-SELF_HOSTED_FORK_GUARD = (
-    "github.event.pull_request.head.repo.full_name == github.repository"
-)
-
 
 class PublicReleaseAuditError(RuntimeError):
     pass
@@ -170,13 +166,11 @@ def _audit_workflow(normalized: str, text: str) -> list[str]:
         failures.append(
             f"public workflow uses pull_request_target and requires manual security review: {normalized}"
         )
-    has_pull_request = bool(
-        re.search(r"(?m)^\s*pull_request\s*:", text)
-    )
+    has_pull_request = bool(re.search(r"(?m)^\s*pull_request\s*:", text))
     has_self_hosted = "self-hosted" in lowered
-    if has_pull_request and has_self_hosted and SELF_HOSTED_FORK_GUARD not in text:
+    if has_pull_request and has_self_hosted:
         failures.append(
-            "self-hosted pull-request workflow lacks the same-repository fork guard: "
+            "public pull-request workflow may not use a self-hosted runner: "
             + normalized
         )
     if (
@@ -265,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(
         "Public release audit passed: no detected secrets, private runtime state, "
-        "or unsafe public self-hosted PR workflow."
+        "or self-hosted public pull-request workflow."
     )
     return 0
 
