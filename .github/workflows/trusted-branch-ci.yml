@@ -1,22 +1,25 @@
-name: Public pull request CI
+name: Trusted branch CI
 
 on:
-  pull_request:
+  push:
+    branches:
+      - "agent/**"
+      - "release/**"
+  workflow_dispatch:
 
 concurrency:
-  group: public-pr-ci-${{ github.event.pull_request.number }}
+  group: trusted-branch-ci-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
+  statuses: write
 
 jobs:
   test:
-    # Public repositories receive GitHub-hosted Actions capacity. While this
-    # repository remains private, trusted branch CI performs the same checks on
-    # AEGIS without exposing that machine to forked pull-request code.
-    if: github.event.repository.private == false
-    runs-on: windows-latest
+    # Only branches pushed inside vamparion/DjGoo can trigger this workflow.
+    # Forked pull requests cannot execute code on the AEGIS release machine.
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 25
     steps:
       - name: Check out repository
@@ -62,3 +65,24 @@ jobs:
           python -m pytest -q 2>&1 | Tee-Object -FilePath pytest.log
           $exitCode = $LASTEXITCODE
           if ($exitCode -ne 0) { throw "Test suite failed with exit $exitCode" }
+
+      - name: Publish trusted CI commit status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $state = if ($env:JOB_STATUS -eq "success") { "success" } else { "failure" }
+          $description = if ($state -eq "success") {
+            "Public audit, compilation, and tests passed on AEGIS"
+          } else {
+            "Trusted branch validation failed on AEGIS"
+          }
+          $target = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          gh api --method POST "repos/$env:GITHUB_REPOSITORY/statuses/$env:GITHUB_SHA" `
+            -f state=$state `
+            -f context="DjGoo/trusted-branch-ci" `
+            -f description=$description `
+            -f target_url=$target
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish trusted CI commit status" }

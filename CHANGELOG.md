@@ -28,6 +28,9 @@ DjGoo follows Semantic Versioning. Dates use ISO 8601.
 - Automatic Windows Firewall repair for the certificate-pinned local Voice Gateway.
 - Multiple independently pinned LAN endpoints in every DjGoo Link invitation.
 - A post-release repair and verification workflow that regenerates both updater bundles from the published portable packages.
+- Certificate-pinned recipient-led UDP LAN discovery that derives the usable Host address from the reply source instead of trusting adapter enumeration.
+- Program-scoped DjGoo Voice outbound firewall rules for UDP discovery and TCP gateway connections on all Windows profiles.
+- A public-release audit that rejects detected credentials, private runtime paths, missing public project documents, and incomplete ignore rules.
 
 ### Fixed
 
@@ -50,6 +53,9 @@ DjGoo follows Semantic Versioning. Dates use ISO 8601.
 - Incomplete GitHub releases now report their missing Host updater assets instead of claiming DjGoo is already up to date.
 - Recipient pairing probes all direct endpoints concurrently and moves to the encrypted relay before waiting on unreachable LAN addresses.
 - Host and recipient windows now size themselves to their DPI-scaled content on first open without adding scrollbars.
+- Recipient pairing no longer treats a valid-looking ASTER, VPN, virtual-adapter, stale, or multi-NIC address as authoritative.
+- Firewall verification uses structured Windows Firewall metadata when available instead of depending only on localized `netsh` field labels.
+- Disabled Windows Firewall profiles no longer cause an unnecessary UAC repair failure.
 
 ### Changed
 
@@ -64,6 +70,7 @@ DjGoo follows Semantic Versioning. Dates use ISO 8601.
 - Recipient incremental updates preserve the active embedded Python runtime, pairing credential, local settings, and logs.
 - Push-to-talk recognition uses a beam-one first pass, timestamp-free decoding, and elapsed-time logging while retaining the existing accuracy model and confidence-gated retry.
 - DjGoo Link saves every route from an invitation and automatically prefers the route that most recently succeeded.
+- Public GitHub releases update without a repository token; private forks retain the encrypted read-only token path.
 
 ## [0.1.0] - 2026-07-31
 

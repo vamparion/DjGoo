@@ -5,7 +5,10 @@ import json
 import zipfile
 from pathlib import Path
 
-from tools.build_update_bundle import build_update_bundle
+from tools.build_update_bundle import (
+    _requires_self_bootstrap,
+    build_update_bundle,
+)
 
 
 def _portable_package(tmp_path: Path) -> Path:
@@ -26,6 +29,10 @@ def _portable_package(tmp_path: Path) -> Path:
     (package / "DjGoo Mini Player.exe").write_bytes(b"mini-player")
     (package / "tools" / "worker.py").write_text("print('updated')", encoding="utf-8")
     (package / "tools" / "apply_update.py").write_text("# updater engine\n", encoding="utf-8")
+    (package / "tools" / "complete_launcher_update.py").write_text(
+        "# detached launcher completion\n",
+        encoding="utf-8",
+    )
     (package / "tools" / "djgoo_stack.py").write_text("# portable adapter\n", encoding="utf-8")
     (package / "tools" / "djgoo_stack_core.py").write_text("# supervisor core\n", encoding="utf-8")
     (package / "control_panel" / "state.py").write_text("# health backend\n", encoding="utf-8")
@@ -83,6 +90,7 @@ def test_update_bundle_excludes_large_runtimes_and_user_state(tmp_path: Path) ->
     assert manifest["release_tag"] == "v0.3.0-alpha.15"
     assert manifest["runtime_generation"] == 3
     assert manifest["launcher_update_deferred"] is False
+    assert manifest["launcher_completion_mode"] == ""
     assert manifest["bundle_size"] == output_zip.stat().st_size
     assert manifest["bundle_sha256"] == hashlib.sha256(output_zip.read_bytes()).hexdigest()
     listed = {entry["path"]: entry for entry in manifest["files"]}
@@ -112,8 +120,51 @@ def test_bootstrap_bundle_defers_locked_launchers_but_updates_engine(tmp_path: P
 
     assert "DjGoo.exe" not in names
     assert "DjGoo Mini Player.exe" not in names
+    assert not any(name.startswith("tools/pending_launchers/") for name in names)
     assert "tools/apply_update.py" in names
     assert "tools/djgoo_stack.py" in names
     assert "data/installed-version.json" in names
     assert manifest["launcher_update_deferred"] is True
+    assert manifest["launcher_completion_mode"] == ""
     assert {entry["path"] for entry in manifest["files"]} == names
+
+
+def test_alpha21_update_contains_detached_launcher_completion(tmp_path: Path) -> None:
+    package = _portable_package(tmp_path)
+    output_zip = tmp_path / "DjGoo-Host-update.zip"
+    output_manifest = tmp_path / "DjGoo-Host-update.json"
+
+    manifest = build_update_bundle(
+        package,
+        output_zip,
+        output_manifest,
+        "0.3.0-alpha.21",
+    )
+
+    with zipfile.ZipFile(output_zip) as archive:
+        names = set(archive.namelist())
+        assert archive.read("tools/pending_launchers/DjGoo.exe") == b"launcher"
+        assert (
+            archive.read("tools/pending_launchers/DjGoo Mini Player.exe")
+            == b"mini-player"
+        )
+
+    assert "DjGoo.exe" not in names
+    assert "DjGoo Mini Player.exe" not in names
+    assert "tools/pending_launchers/DjGoo.exe" in names
+    assert "tools/pending_launchers/DjGoo Mini Player.exe" in names
+    assert "tools/complete_launcher_update.py" in names
+    assert "tools/djgoo_stack.py" in names
+    assert "tools/apply_update.py" in names
+    assert manifest["launcher_update_deferred"] is True
+    assert manifest["launcher_completion_mode"] == "portable-stack"
+    assert not (package / "tools" / "pending_launchers").exists()
+
+
+def test_self_bootstrap_policy_is_future_proof() -> None:
+    assert _requires_self_bootstrap("0.3.0-alpha.19") is False
+    assert _requires_self_bootstrap("0.3.0-alpha.20") is True
+    assert _requires_self_bootstrap("0.3.0-alpha.21") is True
+    assert _requires_self_bootstrap("0.3.0-beta.1") is True
+    assert _requires_self_bootstrap("0.3.0") is True
+    assert _requires_self_bootstrap("0.4.0-alpha.1") is True

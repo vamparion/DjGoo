@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import zipfile
 from pathlib import Path
 from typing import Iterable
@@ -24,6 +25,14 @@ LAUNCHER_FILES = (
 )
 LAUNCHER_DEFERRED_VERSIONS = {
     "0.3.0-alpha.19",
+}
+SELF_BOOTSTRAP_MINIMUM = (0, 3, 0, 0, 20)
+SELF_BOOTSTRAP_FILES = {
+    "tools/pending_launchers/DjGoo.exe",
+    "tools/pending_launchers/DjGoo Mini Player.exe",
+    "tools/complete_launcher_update.py",
+    "tools/djgoo_stack.py",
+    "tools/apply_update.py",
 }
 ROOT_FILES = (
     "LICENSE",
@@ -92,6 +101,61 @@ def _directory_files(
         if path.is_file()
         and _eligible(path.relative_to(package_root))
     )
+
+
+def _version_key(value: str) -> tuple[int, int, int, int, int]:
+    normalized = value.strip().lstrip("v").split("+", 1)[0]
+    base, separator, prerelease = normalized.partition("-")
+    try:
+        major, minor, patch = (int(item) for item in base.split("."))
+    except (TypeError, ValueError) as exc:
+        raise UpdateBundleError(f"Invalid update version: {value}") from exc
+    if not separator:
+        return major, minor, patch, 3, 0
+    if prerelease.lower() == "dev":
+        return major, minor, patch, -1, 0
+    try:
+        channel, number_text = prerelease.lower().split(".", 1)
+        number = int(number_text)
+    except (TypeError, ValueError) as exc:
+        raise UpdateBundleError(f"Invalid update version: {value}") from exc
+    rank = {"alpha": 0, "beta": 1, "rc": 2}.get(channel)
+    if rank is None:
+        raise UpdateBundleError(f"Invalid update version: {value}")
+    return major, minor, patch, rank, number
+
+
+def _requires_self_bootstrap(version: str) -> bool:
+    """Keep future releases directly installable by pre-alpha.19 Hosts.
+
+    Old update workers cannot replace the PyInstaller launcher that started them.
+    Every release from alpha.20 onward therefore installs application code first
+    and lets the portable stack complete launcher replacement out of process.
+    """
+
+    return _version_key(version) >= SELF_BOOTSTRAP_MINIMUM
+
+
+def _stage_self_bootstrap_launchers(package_root: Path) -> None:
+    root = package_root.resolve()
+    required = (
+        *LAUNCHER_FILES,
+        "tools/complete_launcher_update.py",
+        "tools/djgoo_stack.py",
+        "tools/apply_update.py",
+    )
+    missing = [relative for relative in required if not (root / relative).is_file()]
+    if missing:
+        raise UpdateBundleError(
+            "The package cannot create a self-bootstrapping launcher update; "
+            f"missing: {missing}"
+        )
+
+    pending = root / "tools" / "pending_launchers"
+    shutil.rmtree(pending, ignore_errors=True)
+    pending.mkdir(parents=True, exist_ok=True)
+    for filename in LAUNCHER_FILES:
+        shutil.copy2(root / filename, pending / filename)
 
 
 def collect_update_files(
@@ -182,61 +246,88 @@ def build_update_bundle(
     normalized_version = str(version).strip().lstrip("v")
     if not VERSION_PATTERN.fullmatch(normalized_version):
         raise UpdateBundleError(f"Invalid update version: {version}")
-    if normalized_version in LAUNCHER_DEFERRED_VERSIONS:
+
+    self_bootstrap = _requires_self_bootstrap(normalized_version)
+    if normalized_version in LAUNCHER_DEFERRED_VERSIONS or self_bootstrap:
         include_launchers = False
+    pending = root / "tools" / "pending_launchers"
 
-    files = collect_update_files(
-        root,
-        include_launchers=include_launchers,
-    )
-    output_zip.parent.mkdir(parents=True, exist_ok=True)
-    output_manifest.parent.mkdir(parents=True, exist_ok=True)
     try:
-        output_zip.unlink()
-    except FileNotFoundError:
-        pass
+        if self_bootstrap:
+            _stage_self_bootstrap_launchers(root)
 
-    entries: list[dict[str, object]] = []
-    with zipfile.ZipFile(
-        output_zip,
-        "w",
-        compression=zipfile.ZIP_DEFLATED,
-        compresslevel=9,
-    ) as archive:
-        for path in files:
-            relative = path.relative_to(root).as_posix()
-            archive.write(path, relative)
-            entries.append(
-                {
-                    "path": relative,
-                    "size": path.stat().st_size,
-                    "sha256": sha256_file(path),
-                }
+        files = collect_update_files(
+            root,
+            include_launchers=include_launchers,
+        )
+        relative_files = {
+            path.relative_to(root).as_posix()
+            for path in files
+        }
+        if self_bootstrap:
+            missing_bootstrap = sorted(
+                SELF_BOOTSTRAP_FILES.difference(relative_files)
             )
+            if missing_bootstrap:
+                raise UpdateBundleError(
+                    "The self-bootstrapping update is incomplete: "
+                    f"{missing_bootstrap}"
+                )
 
-    manifest: dict[str, object] = {
-        "schema": 1,
-        "product": "DjGoo Host",
-        "version": normalized_version,
-        "release_tag": f"v{normalized_version}",
-        "bundle_asset": BUNDLE_NAME,
-        "bundle_sha256": sha256_file(output_zip),
-        "bundle_size": output_zip.stat().st_size,
-        "runtime_generation": 3,
-        "requires_full_install": False,
-        "launcher_update_deferred": not include_launchers,
-        "files": entries,
-        "deletes": [],
-    }
-    temporary = output_manifest.with_suffix(
-        output_manifest.suffix + ".tmp"
-    )
-    temporary.write_text(
-        json.dumps(manifest, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temporary, output_manifest)
-    return manifest
+        output_zip.parent.mkdir(parents=True, exist_ok=True)
+        output_manifest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            output_zip.unlink()
+        except FileNotFoundError:
+            pass
+
+        entries: list[dict[str, object]] = []
+        with zipfile.ZipFile(
+            output_zip,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=9,
+        ) as archive:
+            for path in files:
+                relative = path.relative_to(root).as_posix()
+                archive.write(path, relative)
+                entries.append(
+                    {
+                        "path": relative,
+                        "size": path.stat().st_size,
+                        "sha256": sha256_file(path),
+                    }
+                )
+
+        manifest: dict[str, object] = {
+            "schema": 1,
+            "product": "DjGoo Host",
+            "version": normalized_version,
+            "release_tag": f"v{normalized_version}",
+            "bundle_asset": BUNDLE_NAME,
+            "bundle_sha256": sha256_file(output_zip),
+            "bundle_size": output_zip.stat().st_size,
+            "runtime_generation": 3,
+            "requires_full_install": False,
+            "launcher_update_deferred": not include_launchers,
+            "launcher_completion_mode": (
+                "portable-stack" if self_bootstrap else ""
+            ),
+            "files": entries,
+            "deletes": [],
+        }
+        temporary = output_manifest.with_suffix(
+            output_manifest.suffix + ".tmp"
+        )
+        temporary.write_text(
+            json.dumps(manifest, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, output_manifest)
+        return manifest
+    finally:
+        if self_bootstrap:
+            shutil.rmtree(pending, ignore_errors=True)
 
 
 def main() -> int:

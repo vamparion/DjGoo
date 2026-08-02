@@ -2,92 +2,82 @@
 
 DjGoo is a game-first Discord music controller built on Red-DiscordBot Audio and Lavalink. It provides local push-to-talk control, paired multi-user voice clients, safer track selection, radio profiles, and resilient process supervision without requiring players to leave a full-screen game.
 
-> **Status:** alpha. Automated source and package validation is active. Real Windows, microphone, and Discord acceptance testing is still required before a stable public release.
+> **Status:** alpha. Automated source and package validation is active. Real Windows, microphone, Discord, and mixed-network acceptance testing is still required before a stable release.
 
 ## Download
 
 Use the repository's **Releases** section rather than downloading the source ZIP.
 
-Releases can provide these Windows x64 packages:
+A complete Windows x64 release contains seven updater-visible assets:
 
-- `DjGoo-Host-win-x64.zip` — the complete first-install Host package, including the Discord bot, Red Audio, Lavalink, portable Python and Java runtimes, `DjGoo.exe`, and optional local voice recognition.
-- `DjGoo-Host-update.zip` — the substantially smaller Host update/bootstrap package. It contains application files and explicitly required runtime patches, but not Java, models, user data, logs, or normal runtime dependencies.
-- `DjGoo-Host-update.json` — the file-level manifest used to verify the incremental update ZIP.
-- `DjGoo-Voice-win-x64.zip` — `DjGoo Voice.exe` and the local speech-recognition runtime for additional users.
+- `DjGoo-Host-win-x64.zip` — complete first-install Host package, including the Discord bot, Red Audio, Lavalink, portable Python and Java runtimes, `DjGoo.exe`, and optional local voice recognition.
+- `DjGoo-Voice-win-x64.zip` — complete recipient package containing `DjGoo Voice.exe` and its local speech-recognition runtime.
+- `DjGoo-Host-update.zip` and `DjGoo-Host-update.json` — verified incremental Host update and manifest.
+- `DjGoo-Voice-update.zip` and `DjGoo-Voice-update.json` — verified incremental recipient update and manifest.
+- `SHA256SUMS.txt` — checksums for all published packages and updater assets.
 
-The packages require no separate Python, Java, Node, PowerShell, installer, or administrator setup. Each complete package includes a file manifest and CycloneDX SBOM; downloadable ZIPs have matching SHA-256 checksum files.
+The packages require no separate Python, Java, Node, PowerShell, or installer. Each complete package includes a file manifest and CycloneDX SBOM.
 
-### Host quick start
+## Host quick start
 
-1. Download `DjGoo-Host-win-x64.zip` from Releases.
-2. Verify it with `SHA256SUMS-Host.txt`.
-3. Extract the ZIP into any writable folder.
-4. Run `DjGoo.exe`.
-5. Select **First-run setup** and create a Discord bot application.
-6. Use **Test bot console** once to enter the token and command prefix.
-7. Close the console and select **Start**.
+1. Download `DjGoo-Host-win-x64.zip` from Releases and verify its entry in `SHA256SUMS.txt`.
+2. Extract the ZIP into any writable folder.
+3. Run `DjGoo.exe`.
+4. Approve the first Windows UAC request. DjGoo creates narrowly scoped inbound rules for TCP gateway port `47632` and UDP discovery port `47631` on all Windows network profiles.
+5. Select **Connect Discord** and configure a Discord bot application.
+6. Select **Start**.
 
 Configuration, Red data, downloaded models, paired-device credentials, and logs remain inside the extracted folder. The folder can be moved, backed up, or deleted without an installer.
 
-### Updating the Host
+## Updating
 
-After installing a release that contains the updater, select **Check for updates** in `DjGoo.exe`. DjGoo downloads only the incremental Host assets, verifies the release version, bundle size, SHA-256 digest, archive paths, and every file hash, then:
+Use **Check for updates** in either `DjGoo.exe` or `DjGoo Voice.exe`. DjGoo downloads the product-specific incremental ZIP and manifest, verifies the release version, bundle size, SHA-256 digest, archive paths, and every file hash, then performs a backup, atomic replacement, rollback on failure, and launcher restart.
 
-1. remembers whether the stack was running;
-2. stops DjGoo components;
-3. creates a backup of every file that will be replaced or removed;
-4. installs the update using atomic file replacements;
-5. rolls back if any replacement fails;
-6. resumes the stack when it was previously running;
-7. restarts the launcher and reports the result.
+Normal updates preserve runtimes that are intentionally outside the incremental scope, models, bot data, logs, settings, Discord credentials, pairing credentials, and user secrets.
 
-Normal updates preserve the Java runtime, models, bot and radio data, logs, settings, Discord token, pairing credentials, and user secrets.
-
-For the one-time updater bootstrap on an older Host package:
-
-1. Close DjGoo and its test console.
-2. Download `DjGoo-Host-update.zip` from the release.
-3. Extract it directly over the existing Host folder.
-4. Allow Windows to replace matching files.
-5. Run the replaced `DjGoo.exe`.
-
-The repository is currently private. The first in-app update check therefore asks for a fine-grained GitHub token scoped only to this repository with read-only **Contents** permission. DjGoo encrypts that token with Windows DPAPI for the current Windows account and does not write it to update logs. This token is unrelated to the Discord bot token. Public releases can be checked without a GitHub token.
+Public GitHub releases are checked without a GitHub token. A private fork or private pre-release repository may request a fine-grained token with read-only **Contents** access; DjGoo encrypts it for the current Windows account with DPAPI and does not write it to logs. This token is unrelated to the Discord bot token.
 
 ## Multiple voice users
 
-A Discord server uses one DjGoo Host and one playback authority. Other players run DjGoo Voice Remote; they do not create another Discord bot and never receive the Host's Discord token.
+A Discord server uses one DjGoo Host and one playback authority. Other players run DjGoo Voice; they do not create another Discord bot and never receive the Host's Discord token or webhook credentials.
 
 ```text
 Player 1 microphone ─┐
-Player 2 microphone ─┼── paired commands ── DjGoo Host ── Red Audio ── Lavalink
+Player 2 microphone ─┼── authenticated commands ── DjGoo Host ── Red Audio ── Lavalink
 Player 3 microphone ─┘
 ```
 
-### Pair a Voice Remote on a trusted LAN
+### Pair a recipient
 
 1. Start the Host and join the intended Discord voice channel.
-2. The additional player runs `/djgoo pair` or `!djgoo pair` in Discord.
-3. DjGoo sends the gateway URL, one-time pairing code, and TLS fingerprint by DM.
-4. The player extracts `DjGoo-Voice-win-x64.zip` and runs `DjGoo Voice.exe`.
-5. They enter the pairing details, select a microphone, model, and hotkey, then select **Pair device**.
-6. They select **Start voice** and hold F12 while speaking.
+2. Run `/djgoolink pair` in Discord. DjGoo sends a private, five-minute invite containing a one-time code, the Host TLS identity, and every available fallback transport.
+3. Extract `DjGoo-Voice-win-x64.zip` and run `DjGoo Voice.exe`.
+4. Approve the first UAC request. DjGoo Voice creates only two program-scoped outbound rules: UDP `47631` for LAN discovery and TCP `47632` for the pinned gateway. It does not expose an inbound recipient port.
+5. Paste the complete invite and select **Paste and connect**.
 
-Speech recognition and parsing run locally. Raw microphone audio is rejected by the Host gateway. Only structured command metadata is transmitted over certificate-pinned HTTPS.
+Alpha.21 and later do not trust a guessed Host adapter address. The recipient broadcasts a short discovery request containing the expected TLS fingerprint. Only the matching Host responds, and the recipient derives the usable gateway URL from the reply's source address. This avoids stale, VPN, ASTER, virtual-adapter, and multi-NIC addresses.
 
-The Host validates the paired device, Discord user, guild, current voice channel, permissions, timestamp, rate limit, and command UUID for every request. Destructive controls require server ownership or **Manage Server**.
+Connection order is:
+
+1. certificate-pinned recipient-led LAN discovery;
+2. any still-valid direct invite hints;
+3. end-to-end encrypted Discord or hosted relay fallback when configured.
+
+Speech recognition and parsing run locally. Raw microphone audio is rejected by the Host gateway. Only structured command metadata is transmitted. The Host validates the paired device, Discord user, guild, current voice channel, permissions, timestamp, rate limit, and command UUID for every request.
 
 ```text
+/djgoolink status
 /djgoo devices
 /djgoo revoke <device-id>
 ```
 
-The direct gateway is intended for a trusted LAN or authenticated private overlay. Do not forward it directly to the public internet. See `docs/MULTI_USER_VOICE.md` for the protocol and threat boundaries.
+The direct gateway is for a trusted LAN or authenticated private overlay. Do not forward TCP `47632` or UDP `47631` from a residential router to the public internet. See `docs/MULTI_USER_VOICE.md` and `SECURITY.md` for protocol and threat boundaries.
 
 ## Core behavior
 
 - Supervises Lavalink, Redbot, and local voice recognition as independent components.
 - Verifies process identity and fresh health state instead of trusting stale PID files or log phrases.
-- Captures push-to-talk audio continuously with pre-roll and release-tail buffering.
+- Captures push-to-talk audio with pre-roll and release-tail buffering.
 - Uses Faster-Whisper, VAD, confidence rejection, and configurable phrase corrections.
 - Preserves canonical title, artist, duration, and ISRC metadata during resolution.
 - Rejects obvious albums, loops, repeats, mixes, tutorials, interviews, and overlong uploads.
@@ -137,9 +127,17 @@ stop radio
 
 A normal skip creates temporary negative feedback. Only an explicit ban creates a persistent block.
 
+## Public repository safety
+
+DjGoo keeps runtime state beside the extracted package, but those paths are excluded from Git. Never commit `config/secrets.json`, `data/`, `logs/`, `.localappdata/`, private keys, pairing credentials, update tokens, Discord bot tokens, or webhook URLs.
+
+CI runs `tools/public_release_audit.py` and rejects detected credentials, private runtime paths, missing license/security documents, or an incomplete `.gitignore`. This audit supplements GitHub secret scanning; it does not make a leaked credential safe. Rotate any credential that was ever committed before changing repository visibility.
+
+Security reports should use GitHub private vulnerability reporting after it is enabled. Do not place credentials or exploitable details in public issues.
+
 ## Develop from source
 
-Source development currently targets Windows 10/11 x64 and Python 3.11.
+Source development targets Windows 10/11 x64 and Python 3.11.
 
 ```powershell
 py -3.11 -m venv .venv
@@ -150,33 +148,31 @@ py -3.11 -m venv .voice-venv
 .\.voice-venv\Scripts\python.exe -m pip install -U pip
 .\.voice-venv\Scripts\python.exe -m pip install -r requirements-voice.txt -r requirements-dev.txt
 
+.\.voice-venv\Scripts\python.exe tools/public_release_audit.py
 .\.voice-venv\Scripts\python.exe -m pytest -q
 ```
 
 Run the Python applications directly:
 
 ```powershell
-.\.venv\Scripts\python.exe -m launcher.djgoo_launcher
-.\.voice-venv\Scripts\python.exe -m launcher.djgoo_voice_launcher
+.\.venv\Scripts\python.exe -m launcher.djgoo_host_experience
+.\.voice-venv\Scripts\python.exe -m launcher.djgoo_voice_experience
 ```
 
-The repository intentionally contains no `.ps1` or `.vbs` application entrypoints. Launch, setup, supervision, and maintenance behavior belongs in tested Python modules. CI enforces this boundary.
+The repository intentionally contains no committed `.ps1` or `.vbs` application entrypoints. Launch, setup, supervision, and maintenance behavior belongs in tested Python modules. CI enforces this boundary.
 
 ## Release engineering
 
-GitHub Actions builds Host and Voice Remote on clean Windows runners. The release pipeline:
+The self-hosted Windows release pipeline:
 
-- compiles source and runs the complete automated test suite;
+- runs the public-release audit, source compilation, and complete automated test suite;
 - assembles redistributable Python and Java runtimes where required;
-- installs binary Windows dependencies into isolated portable runtimes;
-- bundles the Red-compatible Lavalink jar only with Host;
-- creates `DjGoo.exe` and `DjGoo Voice.exe` with PyInstaller;
-- runs portable setup and import self-tests under the generated Windows runtime;
-- verifies that Red uses DjGoo's package-local configuration and that required runtime modules such as `pip` are present;
-- rejects PowerShell and VBScript files;
-- creates manifests, CycloneDX SBOMs, full ZIP checksums, and a bounded incremental Host update;
-- rejects incremental bundles that contain Java, logs, secrets, or user data other than installed-version metadata;
-- publishes tagged releases and alpha prereleases only after the Windows package jobs succeed.
+- installs binary dependencies into isolated portable runtimes;
+- creates the Host and recipient PyInstaller executables;
+- smoke-tests the generated packages under their bundled runtimes;
+- creates manifests, CycloneDX SBOMs, updater ZIPs, and SHA-256 checksums;
+- rejects updater bundles containing logs, secrets, credentials, user data, or files outside the declared manifest;
+- publishes only after all seven release assets are non-empty and downloadable.
 
 See `docs/ARCHITECTURE.md`, `docs/MULTI_USER_VOICE.md`, `CONTRIBUTING.md`, `SECURITY.md`, and `CHANGELOG.md`.
 

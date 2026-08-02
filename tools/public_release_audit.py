@@ -1,0 +1,302 @@
+from __future__ import annotations
+
+import argparse
+import re
+import subprocess
+from pathlib import Path
+from typing import Iterable
+
+
+REQUIRED_PUBLIC_FILES = {
+    "LICENSE",
+    "README.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "THIRD_PARTY_NOTICES.md",
+    "config/secrets.example.json",
+}
+
+FORBIDDEN_TRACKED_PATHS = {
+    "config/secrets.json",
+    "config/update-auth.json",
+    "data/voice-remote-credential.json",
+    "data/relay-identity/relay-signing-ed25519.key",
+    "data/relay-identity/relay-encryption-x25519.key",
+}
+
+FORBIDDEN_TRACKED_PREFIXES = (
+    ".localappdata/",
+    ".venv/",
+    ".voice-venv/",
+    "data/update-backups/",
+    "logs/",
+)
+
+FORBIDDEN_SUFFIXES = (
+    ".p12",
+    ".pfx",
+    ".key",
+)
+
+TEXT_SUFFIXES = {
+    "",
+    ".cfg",
+    ".cmd",
+    ".css",
+    ".html",
+    ".ini",
+    ".js",
+    ".json",
+    ".md",
+    ".py",
+    ".toml",
+    ".txt",
+    ".xml",
+    ".yaml",
+    ".yml",
+}
+
+SCAN_EXCLUSIONS = {
+    "tools/public_release_audit.py",
+    "tests/test_public_release_audit.py",
+}
+
+SECRET_PATTERNS = (
+    (
+        "GitHub legacy token",
+        re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,255}\b"),
+    ),
+    (
+        "GitHub fine-grained token",
+        re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,255}\b"),
+    ),
+    (
+        "Discord webhook URL",
+        re.compile(
+            r"https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/"
+            r"\d{10,}/[A-Za-z0-9._-]{20,}"
+        ),
+    ),
+    (
+        "Discord MFA token",
+        re.compile(r"\bmfa\.[A-Za-z0-9_-]{60,}\b"),
+    ),
+    (
+        "AWS access key",
+        re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
+    ),
+    (
+        "private key",
+        re.compile("-----BEGIN " + r"(?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    ),
+)
+
+ASSIGNED_SECRET = re.compile(
+    r"(?i)[\"'](?:bot_token|client_secret|device_token|webhook_url|private_key)"
+    r"[\"']\s*[:=]\s*[\"']([^\"']{20,})[\"']"
+)
+
+PLACEHOLDER_WORDS = {
+    "example",
+    "paste",
+    "placeholder",
+    "replace",
+    "sample",
+    "your_",
+    "your-",
+}
+
+
+class PublicReleaseAuditError(RuntimeError):
+    pass
+
+
+def _git_tracked_files(root: Path) -> list[str] | None:
+    try:
+        result = subprocess.run(
+            ["git", "-c", "safe.directory=*", "ls-files", "-z"],
+            cwd=root,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return [
+        value.decode("utf-8", errors="strict").replace("\\", "/")
+        for value in result.stdout.split(b"\0")
+        if value
+    ]
+
+
+def _ignored_fallback_paths(root: Path) -> tuple[set[str], tuple[str, ...]]:
+    gitignore = _read_text(root / ".gitignore") or ""
+    exact: set[str] = set()
+    prefixes: list[str] = []
+    for raw in gitignore.splitlines():
+        value = raw.strip().replace("\\", "/")
+        if not value or value.startswith(("#", "!")):
+            continue
+        value = value.lstrip("/")
+        if value.endswith("/"):
+            prefixes.append(value)
+        else:
+            exact.add(value)
+    return exact, tuple(prefixes)
+
+
+def tracked_files(root: Path) -> list[str]:
+    tracked = _git_tracked_files(root)
+    if tracked is not None:
+        return sorted(dict.fromkeys(tracked))
+
+    # A source archive has no Git index. In that case inspect source-like files,
+    # but respect ignored runtime directories so locally generated logs, models,
+    # credentials, and caches are not misclassified as tracked repository data.
+    ignored_exact, ignored_prefixes = _ignored_fallback_paths(root)
+    result: list[str] = []
+    for path in root.rglob("*"):
+        if not path.is_file() or ".git" in path.parts:
+            continue
+        relative = path.relative_to(root).as_posix()
+        if relative in ignored_exact:
+            continue
+        if any(relative.startswith(prefix) for prefix in ignored_prefixes):
+            continue
+        result.append(relative)
+    return sorted(dict.fromkeys(result))
+
+
+def _looks_like_placeholder(value: str) -> bool:
+    lowered = value.strip().lower()
+    return (
+        not lowered
+        or any(word in lowered for word in PLACEHOLDER_WORDS)
+        or lowered.startswith(("wss://your", "https://your"))
+    )
+
+
+def _read_text(path: Path) -> str | None:
+    try:
+        if path.stat().st_size > 2 * 1024 * 1024:
+            return None
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _normalize_relative_path(relative: str) -> str:
+    normalized = relative.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized.lstrip("/")
+
+
+def _audit_workflow(normalized: str, text: str) -> list[str]:
+    failures: list[str] = []
+    lowered = text.lower()
+    if "pull_request_target:" in lowered:
+        failures.append(
+            f"public workflow uses pull_request_target and requires manual security review: {normalized}"
+        )
+    has_pull_request = bool(re.search(r"(?m)^\s*pull_request\s*:", text))
+    has_self_hosted = "self-hosted" in lowered
+    if has_pull_request and has_self_hosted:
+        failures.append(
+            "public pull-request workflow may not use a self-hosted runner: "
+            + normalized
+        )
+    if (
+        has_pull_request
+        and re.search(r"(?ms)^permissions:\s*.*?contents:\s*write", text)
+    ):
+        failures.append(
+            "pull-request workflow requests write access to repository contents: "
+            + normalized
+        )
+    return failures
+
+
+def audit_public_release(
+    root: Path,
+    *,
+    paths: Iterable[str] | None = None,
+) -> list[str]:
+    root = root.resolve()
+    tracked = sorted(dict.fromkeys(paths or tracked_files(root)))
+    tracked_set = set(tracked)
+    failures: list[str] = []
+
+    missing = sorted(REQUIRED_PUBLIC_FILES.difference(tracked_set))
+    if missing:
+        failures.append("missing public project files: " + ", ".join(missing))
+
+    for relative in tracked:
+        normalized = _normalize_relative_path(relative)
+        lowered = normalized.lower()
+        if normalized in FORBIDDEN_TRACKED_PATHS:
+            failures.append(f"private runtime file is tracked: {normalized}")
+        if any(lowered.startswith(prefix.lower()) for prefix in FORBIDDEN_TRACKED_PREFIXES):
+            failures.append(f"private runtime path is tracked: {normalized}")
+        if lowered.endswith(FORBIDDEN_SUFFIXES):
+            failures.append(f"private key/container file is tracked: {normalized}")
+        if normalized in SCAN_EXCLUSIONS:
+            continue
+        path = root / normalized
+        if path.suffix.lower() not in TEXT_SUFFIXES:
+            continue
+        text = _read_text(path)
+        if text is None:
+            continue
+        if lowered.startswith(".github/workflows/") and path.suffix.lower() in {".yml", ".yaml"}:
+            failures.extend(_audit_workflow(normalized, text))
+        for label, pattern in SECRET_PATTERNS:
+            if pattern.search(text):
+                failures.append(f"possible {label} in tracked file: {normalized}")
+        for match in ASSIGNED_SECRET.finditer(text):
+            value = match.group(1)
+            if not _looks_like_placeholder(value):
+                failures.append(
+                    f"possible assigned secret in tracked file: {normalized}"
+                )
+                break
+
+    gitignore = _read_text(root / ".gitignore") or ""
+    ignored = {
+        line.strip().replace("\\", "/")
+        for line in gitignore.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    for required_ignore in (
+        "config/secrets.json",
+        "data/",
+        "logs/",
+        ".localappdata/",
+    ):
+        if required_ignore not in ignored:
+            failures.append(f".gitignore does not exclude {required_ignore}")
+
+    return sorted(dict.fromkeys(failures))
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Reject secrets and unsafe CI/runtime state before DjGoo becomes public."
+    )
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    args = parser.parse_args(argv)
+    failures = audit_public_release(args.root)
+    if failures:
+        for failure in failures:
+            print(f"PUBLIC RELEASE AUDIT FAILED: {failure}")
+        return 1
+    print(
+        "Public release audit passed: no detected secrets, private runtime state, "
+        "or self-hosted public pull-request workflow."
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
