@@ -23,6 +23,31 @@ def _normalized_code(value: str) -> str:
     )
 
 
+def _valid_discord_webhook(value: str) -> bool:
+    parsed = urlparse(value.strip())
+    host = (parsed.hostname or "").lower()
+    allowed = {
+        "discord.com",
+        "www.discord.com",
+        "ptb.discord.com",
+        "canary.discord.com",
+        "discordapp.com",
+        "www.discordapp.com",
+    }
+    if parsed.scheme.lower() != "https" or host not in allowed:
+        return False
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) not in {4, 5} or not parts or parts[0] != "api":
+        return False
+    offset = 2 if len(parts) > 1 and parts[1].startswith("v") and parts[1][1:].isdigit() else 1
+    return bool(
+        len(parts) == offset + 3
+        and parts[offset] == "webhooks"
+        and parts[offset + 1].isdigit()
+        and parts[offset + 2]
+    )
+
+
 @dataclass(frozen=True)
 class PairingEndpoint:
     transport: str
@@ -51,6 +76,20 @@ class PairingEndpoint:
             if len(security) != 64:
                 raise ValueError(
                     "Direct pairing requires a SHA-256 TLS fingerprint"
+                )
+            return
+        if mode == "discord":
+            if not _valid_discord_webhook(endpoint):
+                raise ValueError(
+                    "Discord pairing requires a valid HTTPS Discord webhook"
+                )
+            if len(security) != 64:
+                raise ValueError(
+                    "Discord pairing requires a SHA-256 Host key fingerprint"
+                )
+            if not self.room_id.strip() or not self.host_public_key.strip():
+                raise ValueError(
+                    "Discord pairing requires a room ID and Host public key"
                 )
             return
         if mode == "relay":
@@ -108,10 +147,11 @@ class PairingInvite:
             raise ValueError("This DjGoo pairing invite has expired")
 
     def ordered_endpoints(self) -> tuple[PairingEndpoint, ...]:
+        priority = {"direct": 0, "discord": 1, "relay": 2}
         return tuple(
             sorted(
                 self.endpoints,
-                key=lambda item: 0 if item.transport == "direct" else 1,
+                key=lambda item: priority.get(item.transport, 99),
             )
         )
 
