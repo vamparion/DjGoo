@@ -39,6 +39,9 @@ DjGoo follows Semantic Versioning. Dates use ISO 8601.
 - Health failures now identify the exact Audio Engine, Music Core, or Voice Control component and expose its current error logs.
 - Made the original Voice Control entrypoint use the generalized keyboard and mouse binding backend, so F5 and mouse-button bindings work even when the supervisor launches the legacy module name.
 - Advanced the supervisor capability contract so alpha.16 replaces any alpha.15 process still holding the previous voice-launch code in memory.
+- Prevented brief push-to-talk commands from being discarded by extending their effective capture window, padding short clips, and bypassing redundant VAD on the hotkey path.
+- Added a higher-accuracy retry only when the fast speech-recognition pass is empty or below the configured confidence thresholds.
+- Added a local Nuclear MCP availability probe and circuit breaker so an inactive Nuclear service no longer adds repeated multi-second delays to play commands.
 
 ### Changed
 
@@ -51,6 +54,7 @@ DjGoo follows Semantic Versioning. Dates use ISO 8601.
 - Windows package smoke tests now verify portable Red configuration, bundled `pip`, DPAPI credential storage, and incremental-update scope.
 - Host and recipient updater assets are published together from one validated Windows build.
 - Recipient incremental updates preserve the active embedded Python runtime, pairing credential, local settings, and logs.
+- Push-to-talk recognition uses a three-beam first pass, timestamp-free decoding, and elapsed-time logging while retaining the existing accuracy model.
 
 ## [0.1.0] - 2026-07-31
 
