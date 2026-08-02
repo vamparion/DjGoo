@@ -53,5 +53,29 @@ LocalPort: 47632
     assert windows_firewall.firewall_rule_ready(47632) is True
 
 
-def test_new_firewall_rule_targets_every_profile() -> None:
+def test_discovery_rule_requires_udp(monkeypatch) -> None:
+    monkeypatch.setattr(windows_firewall.os, "name", "nt")
+    udp_rule = """
+Rule Name: DjGoo Voice Discovery
+Enabled: Yes
+Direction: In
+Profiles: Domain,Private,Public
+Action: Allow
+Protocol: UDP
+LocalPort: 47631
+"""
+    monkeypatch.setattr(
+        windows_firewall.subprocess,
+        "run",
+        lambda *args, **kwargs: _result(udp_rule),
+    )
+
+    assert windows_firewall.discovery_firewall_rule_ready(47631) is True
+
+
+def test_new_firewall_rules_target_every_profile() -> None:
     assert "profile=any" in windows_firewall._netsh_arguments(47632)
+    discovery = windows_firewall._discovery_netsh_arguments(47631)
+    assert "profile=any" in discovery
+    assert "protocol=UDP" in discovery
+    assert "localport=47631" in discovery
