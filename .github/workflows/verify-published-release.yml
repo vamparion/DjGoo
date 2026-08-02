@@ -1,4 +1,4 @@
-# Release publication verification contract: 7
+# Release publication verification contract: 8
 name: Verify Published Release
 
 on:
@@ -29,7 +29,7 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 35
     steps:
       - name: Check out main
@@ -37,133 +37,146 @@ jobs:
         with:
           ref: main
 
-      - name: Clear obsolete queued runs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -u
-          gh run list -R "$GITHUB_REPOSITORY" --status queued --limit 100 \
-            --json databaseId,name,event,headBranch \
-            --jq '.[] | .databaseId' |
-          while read -r run_id; do
-            [[ -z "$run_id" || "$run_id" == "$GITHUB_RUN_ID" ]] && continue
-            echo "Cancelling obsolete queued run $run_id"
-            gh run cancel "$run_id" -R "$GITHUB_REPOSITORY" || true
-          done
-
       - name: Verify release assets and report status
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
-          set -euo pipefail
-          version="$(tr -d '\r\n ' < VERSION)"
-          tag="v${version}"
-          title="Release verification: ${tag}"
-          required=(
-            DjGoo-Host-update.json
-            DjGoo-Host-update.zip
-            DjGoo-Voice-update.json
-            DjGoo-Voice-update.zip
-            DjGoo-Host-win-x64.zip
-            DjGoo-Voice-win-x64.zip
-            SHA256SUMS.txt
+          $ErrorActionPreference = "Stop"
+          $version = (Get-Content VERSION -Raw).Trim()
+          $tag = "v$version"
+          $title = "Release verification: $tag"
+          $required = @(
+            "DjGoo-Host-update.json",
+            "DjGoo-Host-update.zip",
+            "DjGoo-Voice-update.json",
+            "DjGoo-Voice-update.zip",
+            "DjGoo-Host-win-x64.zip",
+            "DjGoo-Voice-win-x64.zip",
+            "SHA256SUMS.txt"
           )
+          $headers = @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            Accept = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+            "User-Agent" = "DjGoo-Release-Verifier"
+          }
+          $apiRoot = "https://api.github.com/repos/$env:GITHUB_REPOSITORY"
 
-          issue_number="$(
-            gh api "repos/${GITHUB_REPOSITORY}/issues?state=all&per_page=100" \
-              --jq ".[] | select(.pull_request == null and .title == \"${title}\") | .number" |
-            head -n 1
-          )"
-          if [[ -z "$issue_number" ]]; then
-            issue_number="$(
-              gh api -X POST "repos/${GITHUB_REPOSITORY}/issues" \
-                -f title="$title" \
-                -f body="Automated release verification has started." \
-                --jq '.number'
-            )"
-          fi
-          gh issue reopen "$issue_number" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || true
+          function Invoke-GitHubJson([string]$Method, [string]$Uri, $Payload = $null) {
+            if ($null -eq $Payload) {
+              return Invoke-RestMethod -UseBasicParsing -Method $Method -Uri $Uri -Headers $headers
+            }
+            $json = $Payload | ConvertTo-Json -Depth 10
+            return Invoke-RestMethod -UseBasicParsing -Method $Method -Uri $Uri -Headers $headers -ContentType "application/json" -Body $json
+          }
 
-          cat > verification.md <<EOF
-          Automated verifier started for **${tag}**.
+          try {
+            $queued = Invoke-GitHubJson "GET" "$apiRoot/actions/runs?status=queued&per_page=100"
+            foreach ($run in @($queued.workflow_runs)) {
+              if ([string]$run.id -eq [string]$env:GITHUB_RUN_ID) { continue }
+              try {
+                Invoke-GitHubJson "POST" "$apiRoot/actions/runs/$($run.id)/cancel" | Out-Null
+                Write-Host "Cancelled obsolete queued run $($run.id)"
+              } catch {
+                Write-Host "Could not cancel run $($run.id): $($_.Exception.Message)"
+              }
+            }
+          } catch {
+            Write-Host "Could not enumerate queued runs: $($_.Exception.Message)"
+          }
 
-          Started: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          $issues = @(Invoke-GitHubJson "GET" "$apiRoot/issues?state=all&per_page=100")
+          $issue = $issues | Where-Object {
+            [string]$_.title -eq $title -and $null -eq $_.pull_request
+          } | Select-Object -First 1
+          if ($null -eq $issue) {
+            $issue = Invoke-GitHubJson "POST" "$apiRoot/issues" @{
+              title = $title
+              body = "Automated release verification has started."
+            }
+          }
+          $issueNumber = [int]$issue.number
+
+          function Update-VerificationIssue([string]$Body, [bool]$Complete) {
+            $payload = @{
+              body = $Body
+              state = if ($Complete) { "closed" } else { "open" }
+            }
+            if ($Complete) { $payload.state_reason = "completed" }
+            Invoke-GitHubJson "PATCH" "$apiRoot/issues/$issueNumber" $payload | Out-Null
+          }
+
+          $started = [DateTimeOffset]::UtcNow.ToString("o")
+          Update-VerificationIssue @"
+          Automated verifier started for **$tag**.
+
+          Started: $started
 
           Checking the GitHub release and all required updater/full-package assets now.
-          EOF
-          gh issue edit "$issue_number" -R "$GITHUB_REPOSITORY" --body-file verification.md
+          "@ $false
 
-          for attempt in $(seq 1 180); do
-            missing=("${required[@]}")
-            asset_lines=""
-            release_available=false
-            if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" > release.json 2>/dev/null; then
-              release_available=true
-              mapfile -t uploaded < <(
-                jq -r '.assets[] | select((.size // 0) > 0 and ((.state // "uploaded") == "uploaded")) | .name' release.json
-              )
-              missing=()
-              for required_name in "${required[@]}"; do
-                found=false
-                for uploaded_name in "${uploaded[@]}"; do
-                  if [[ "$required_name" == "$uploaded_name" ]]; then
-                    found=true
-                    break
-                  fi
-                done
-                [[ "$found" == true ]] || missing+=("$required_name")
-              done
-              asset_lines="$(
-                jq -r '.assets[] | "- `\(.name)` — \(.size // 0) bytes — \(.state // "uploaded")"' release.json
-              )"
-            fi
+          for ($attempt = 1; $attempt -le 180; $attempt++) {
+            $release = $null
+            $missing = @($required)
+            $assetLines = @()
+            try {
+              $release = Invoke-GitHubJson "GET" "$apiRoot/releases/tags/$tag"
+              $uploaded = @{}
+              foreach ($asset in @($release.assets)) {
+                $name = [string]$asset.name
+                $size = [int64]$asset.size
+                $state = [string]$asset.state
+                if (-not [string]::IsNullOrWhiteSpace($name) -and $size -gt 0 -and (!$state -or $state -eq "uploaded")) {
+                  $uploaded[$name] = $true
+                }
+                $assetLines += "- ``$name`` - $size bytes - $state"
+              }
+              $missing = @($required | Where-Object { -not $uploaded.ContainsKey($_) })
+            } catch {
+              Write-Host "Waiting for $tag: $($_.Exception.Message)"
+            }
 
-            if [[ "$release_available" == true && ${#missing[@]} -eq 0 ]]; then
-              published_at="$(jq -r '.published_at // "unknown"' release.json)"
-              release_id="$(jq -r '.id // "unknown"' release.json)"
-              target="$(jq -r '.target_commitish // "unknown"' release.json)"
-              cat > verification.md <<EOF
-          **Verified complete: ${tag}**
+            $complete = $null -ne $release -and $missing.Count -eq 0
+            if ($complete) {
+              $verified = [DateTimeOffset]::UtcNow.ToString("o")
+              $body = @"
+          **Verified complete: $tag**
 
-          Published: ${published_at}
-          Verified: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-          Release ID: ${release_id}
-          Target: ${target}
+          Published: $($release.published_at)
+          Verified: $verified
+          Release ID: $($release.id)
+          Target: $($release.target_commitish)
 
           All required assets are present, uploaded, and non-empty:
 
-          ${asset_lines}
-          EOF
-              gh issue edit "$issue_number" -R "$GITHUB_REPOSITORY" --body-file verification.md
-              gh issue close "$issue_number" -R "$GITHUB_REPOSITORY" --reason completed
-              echo "All required release assets are uploaded and verified."
+          $($assetLines -join "`n")
+          "@
+              Update-VerificationIssue $body $true
+              Write-Host "All required release assets are uploaded and verified."
               exit 0
-            fi
+            }
 
-            if [[ "$attempt" -eq 1 || $((attempt % 6)) -eq 0 ]]; then
-              missing_lines=""
-              for item in "${missing[@]}"; do
-                missing_lines+="- \`${item}\`"$'\n'
-              done
-              cat > verification.md <<EOF
-          Automated verification is still running for **${tag}**.
+            if ($attempt -eq 1 -or $attempt % 6 -eq 0) {
+              $checked = [DateTimeOffset]::UtcNow.ToString("o")
+              $missingLines = @($missing | ForEach-Object { "- ``$_``" })
+              $body = @"
+          Automated verification is still running for **$tag**.
 
-          Last checked: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          Last checked: $checked
 
           Missing or incomplete required assets:
 
-          ${missing_lines}
+          $($missingLines -join "`n")
+
           Assets currently reported by GitHub:
 
-          ${asset_lines}
-          EOF
-              gh issue edit "$issue_number" -R "$GITHUB_REPOSITORY" --body-file verification.md
-            fi
-            sleep 10
-          done
+          $($assetLines -join "`n")
+          "@
+              Update-VerificationIssue $body $false
+            }
+            Start-Sleep -Seconds 10
+          }
 
-          gh issue edit "$issue_number" -R "$GITHUB_REPOSITORY" \
-            --body "Verification timed out after 30 minutes for **${tag}**."
-          exit 1
+          Update-VerificationIssue "Verification timed out after 30 minutes for **$tag**." $false
+          throw "$tag did not become complete within 30 minutes."
