@@ -10,6 +10,9 @@ from tools.build_update_bundle import UpdateBundleError, collect_update_files
 REQUIRED_FILES = (
     "DjGoo.exe",
     "DjGoo Mini Player.exe",
+    "control_panel/state.py",
+    "tools/djgoo_stack.py",
+    "tools/djgoo_stack_core.py",
     "data/installed-version.json",
     "data/lavalink-contract.json",
     "data/discordbot/cogs/Audio/Lavalink.jar",
@@ -35,6 +38,9 @@ def test_incremental_update_contains_mini_player(tmp_path: Path) -> None:
 
     assert "DjGoo.exe" in relative
     assert "DjGoo Mini Player.exe" in relative
+    assert "control_panel/state.py" in relative
+    assert "tools/djgoo_stack.py" in relative
+    assert "tools/djgoo_stack_core.py" in relative
 
 
 def test_incremental_update_rejects_missing_mini_player(tmp_path: Path) -> None:
