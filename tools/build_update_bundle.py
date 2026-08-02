@@ -18,9 +18,11 @@ DIRECTORY_PREFIXES = (
     "control_panel_dist",
     "launcher",
 )
-ROOT_FILES = (
+LAUNCHER_FILES = (
     "DjGoo.exe",
     "DjGoo Mini Player.exe",
+)
+ROOT_FILES = (
     "LICENSE",
     "README.md",
     "THIRD_PARTY_NOTICES.md",
@@ -89,7 +91,11 @@ def _directory_files(
     )
 
 
-def collect_update_files(package_root: Path) -> list[Path]:
+def collect_update_files(
+    package_root: Path,
+    *,
+    include_launchers: bool = True,
+) -> list[Path]:
     root = package_root.resolve()
     collected: dict[str, Path] = {}
 
@@ -107,6 +113,9 @@ def collect_update_files(package_root: Path) -> list[Path]:
             return
         collected[relative] = path
 
+    if include_launchers:
+        for filename in LAUNCHER_FILES:
+            add(root / filename)
     for filename in ROOT_FILES:
         add(root / filename)
     for filename in CONFIG_FILES:
@@ -132,16 +141,17 @@ def collect_update_files(package_root: Path) -> list[Path]:
                     add(path)
 
     required = {
-        "DjGoo.exe",
-        "DjGoo Mini Player.exe",
         "control_panel/state.py",
         "data/installed-version.json",
         "data/lavalink-contract.json",
         "data/discordbot/cogs/Audio/Lavalink.jar",
         "data/discordbot/cogs/Audio/application.yml",
+        "tools/apply_update.py",
         "tools/djgoo_stack.py",
         "tools/djgoo_stack_core.py",
     }
+    if include_launchers:
+        required.update(LAUNCHER_FILES)
     missing = sorted(required.difference(collected))
     if missing:
         raise UpdateBundleError(
@@ -162,13 +172,18 @@ def build_update_bundle(
     output_zip: Path,
     output_manifest: Path,
     version: str,
+    *,
+    include_launchers: bool = True,
 ) -> dict[str, object]:
     root = package_root.resolve()
     normalized_version = str(version).strip().lstrip("v")
     if not VERSION_PATTERN.fullmatch(normalized_version):
         raise UpdateBundleError(f"Invalid update version: {version}")
 
-    files = collect_update_files(root)
+    files = collect_update_files(
+        root,
+        include_launchers=include_launchers,
+    )
     output_zip.parent.mkdir(parents=True, exist_ok=True)
     output_manifest.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -204,6 +219,7 @@ def build_update_bundle(
         "bundle_size": output_zip.stat().st_size,
         "runtime_generation": 3,
         "requires_full_install": False,
+        "launcher_update_deferred": not include_launchers,
         "files": entries,
         "deletes": [],
     }
@@ -238,12 +254,21 @@ def main() -> int:
         required=True,
     )
     parser.add_argument("--version", required=True)
+    parser.add_argument(
+        "--defer-launchers",
+        action="store_true",
+        help=(
+            "Build a bootstrap update that installs the updater engine and "
+            "supporting files without replacing the running one-file launchers."
+        ),
+    )
     args = parser.parse_args()
     build_update_bundle(
         args.package_root.resolve(),
         args.output_zip.resolve(),
         args.output_manifest.resolve(),
         args.version,
+        include_launchers=not args.defer_launchers,
     )
     return 0
 
