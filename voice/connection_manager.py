@@ -6,25 +6,51 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from voice.discord_relay import (
+    DiscordRelayCredential,
+    DiscordRelayTransport,
+)
 from voice.pairing_bundle import PairingEndpoint, PairingInvite
 from voice.relay_transport import RelayCredential, RelayTransport
 from voice.remote_transport import RemoteCredential, RemoteGatewayTransport
 from voice.secure_store import load_protected_json, save_protected_json
 
 
-RecipientCredential = RemoteCredential | RelayCredential
-RecipientTransport = RemoteGatewayTransport | RelayTransport
-CONNECTION_SCHEMA = 2
+RecipientCredential = (
+    RemoteCredential | DiscordRelayCredential | RelayCredential
+)
+RecipientTransport = (
+    RemoteGatewayTransport | DiscordRelayTransport | RelayTransport
+)
+CONNECTION_SCHEMA = 3
 
 
 def _credential_from_data(data: dict[str, Any]) -> RecipientCredential:
     transport = str(data.get("transport") or "direct").strip().lower()
+    if transport == "discord":
+        return DiscordRelayCredential(
+            transport="discord",
+            webhook_url=str(data["webhook_url"]),
+            room_id=str(data["room_id"]),
+            host_encryption_public_key=str(
+                data["host_encryption_public_key"]
+            ),
+            host_encryption_fingerprint_sha256=str(
+                data["host_encryption_fingerprint_sha256"]
+            ),
+            device_id=str(data["device_id"]),
+            device_token=str(data["device_token"]),
+            discord_user_id=str(data["discord_user_id"]),
+            guild_id=str(data["guild_id"]),
+        )
     if transport == "relay":
         return RelayCredential(
             transport="relay",
             relay_url=str(data["relay_url"]),
             room_id=str(data["room_id"]),
-            host_encryption_public_key=str(data["host_encryption_public_key"]),
+            host_encryption_public_key=str(
+                data["host_encryption_public_key"]
+            ),
             host_encryption_fingerprint_sha256=str(
                 data["host_encryption_fingerprint_sha256"]
             ),
@@ -58,6 +84,18 @@ def _credential_for_endpoint(
             guild_id=authenticated.guild_id,
             transport="direct",
         )
+    if endpoint.transport == "discord":
+        return DiscordRelayCredential(
+            transport="discord",
+            webhook_url=endpoint.endpoint.rstrip("/"),
+            room_id=endpoint.room_id,
+            host_encryption_public_key=endpoint.host_public_key,
+            host_encryption_fingerprint_sha256=endpoint.security,
+            device_id=authenticated.device_id,
+            device_token=authenticated.device_token,
+            discord_user_id=authenticated.discord_user_id,
+            guild_id=authenticated.guild_id,
+        )
     if endpoint.transport == "relay":
         return RelayCredential(
             transport="relay",
@@ -70,7 +108,9 @@ def _credential_for_endpoint(
             discord_user_id=authenticated.discord_user_id,
             guild_id=authenticated.guild_id,
         )
-    raise ValueError(f"Unsupported DjGoo recipient transport: {endpoint.transport}")
+    raise ValueError(
+        f"Unsupported DjGoo recipient transport: {endpoint.transport}"
+    )
 
 
 def _save_connection(
@@ -84,7 +124,10 @@ def _save_connection(
         {
             "schema": CONNECTION_SCHEMA,
             "preferred_transport": preferred_transport,
-            "credentials": [asdict(credential) for credential in credentials],
+            "credentials": [
+                asdict(credential)
+                for credential in credentials
+            ],
         },
     )
 
@@ -92,13 +135,23 @@ def _save_connection(
 async def _probed_pairing_endpoints(
     invite: PairingInvite,
 ) -> tuple[PairingEndpoint, ...]:
-    """Place reachable direct routes first without delaying relay fallback."""
+    """Place reachable direct routes first without delaying internet fallback."""
 
     endpoints = list(invite.ordered_endpoints())
-    direct = [item for item in endpoints if item.transport == "direct"]
-    relay = [item for item in endpoints if item.transport == "relay"]
+    direct = [
+        item for item in endpoints
+        if item.transport == "direct"
+    ]
+    discord = [
+        item for item in endpoints
+        if item.transport == "discord"
+    ]
+    relay = [
+        item for item in endpoints
+        if item.transport == "relay"
+    ]
     if not direct:
-        return tuple(relay)
+        return tuple([*discord, *relay])
 
     results = await asyncio.gather(
         *(
@@ -110,12 +163,19 @@ async def _probed_pairing_endpoints(
     reachable: list[PairingEndpoint] = []
     unreachable: list[PairingEndpoint] = []
     for endpoint, result in zip(direct, results):
-        (reachable if result is True else unreachable).append(endpoint)
+        (
+            reachable if result is True else unreachable
+        ).append(endpoint)
 
-    # A relay is more useful than spending several seconds on every route that
-    # already failed a pinned health probe. Keep one unresponsive direct route as
-    # a final safety attempt for unusual proxies, but do it after relay.
-    return tuple([*reachable, *relay, *unreachable[:1]])
+    # Discord is already configured for DjGoo notifications and provides an
+    # outbound-only global route. Prefer it before a separately hosted relay,
+    # then keep one unresponsive direct route as a final proxy/NAT edge case.
+    return tuple([
+        *reachable,
+        *discord,
+        *relay,
+        *unreachable[:1],
+    ])
 
 
 async def pair_from_invite(
@@ -140,6 +200,15 @@ async def pair_from_invite(
                     endpoint.security,
                     device_name=device_name,
                 )
+            elif endpoint.transport == "discord":
+                authenticated = await DiscordRelayTransport.pair(
+                    endpoint.endpoint,
+                    endpoint.room_id,
+                    pairing_code,
+                    endpoint.host_public_key,
+                    endpoint.security,
+                    device_name=device_name,
+                )
             elif endpoint.transport == "relay":
                 authenticated = await RelayTransport.pair(
                     endpoint.endpoint,
@@ -152,14 +221,22 @@ async def pair_from_invite(
             else:
                 continue
         except Exception as exc:
-            errors.append(f"{endpoint.transport}: {type(exc).__name__}: {exc}")
+            errors.append(
+                f"{endpoint.transport}: {type(exc).__name__}: {exc}"
+            )
             continue
         selected_transport = endpoint.transport
         break
 
     if authenticated is None:
-        detail = "; ".join(errors[-4:]) if errors else "no supported connection method"
-        raise RuntimeError(f"DjGoo could not complete secure pairing ({detail})")
+        detail = (
+            "; ".join(errors[-4:])
+            if errors
+            else "no supported connection method"
+        )
+        raise RuntimeError(
+            f"DjGoo could not complete secure pairing ({detail})"
+        )
 
     credentials = [
         _credential_for_endpoint(endpoint, authenticated)
@@ -193,9 +270,12 @@ def load_recipient_credentials(
             if isinstance(item, dict)
         ]
         if not credentials:
-            raise ValueError("DjGoo recipient connection contains no usable route")
+            raise ValueError(
+                "DjGoo recipient connection contains no usable route"
+            )
         preferred = str(
-            data.get("preferred_transport") or credentials[0].transport
+            data.get("preferred_transport")
+            or credentials[0].transport
         ).strip().lower()
         return credentials, preferred
 
@@ -207,11 +287,14 @@ def _ordered_credentials(
     credentials: list[RecipientCredential],
     preferred_transport: str,
 ) -> list[RecipientCredential]:
+    priority = {"direct": 0, "discord": 1, "relay": 2}
     return sorted(
         credentials,
         key=lambda credential: (
-            0 if credential.transport == preferred_transport else 1,
-            0 if credential.transport == "direct" else 1,
+            0
+            if credential.transport == preferred_transport
+            else 1,
+            priority.get(credential.transport, 99),
         ),
     )
 
@@ -224,6 +307,8 @@ def load_recipient_credential(path: Path) -> RecipientCredential:
 def transport_for_credential(
     credential: RecipientCredential,
 ) -> RecipientTransport:
+    if isinstance(credential, DiscordRelayCredential):
+        return DiscordRelayTransport(credential)
     if isinstance(credential, RelayCredential):
         return RelayTransport(credential)
     return RemoteGatewayTransport(credential)
@@ -270,7 +355,10 @@ class RecipientFailoverTransport:
             preferred_transport=self.preferred_transport,
         )
 
-    async def send_async(self, item: dict[str, Any]) -> dict[str, Any]:
+    async def send_async(
+        self,
+        item: dict[str, Any],
+    ) -> dict[str, Any]:
         payload = dict(item)
         payload.setdefault("command_id", str(uuid.uuid4()))
         errors: list[str] = []
@@ -279,7 +367,9 @@ class RecipientFailoverTransport:
             try:
                 result = await transport.send_async(payload)
             except Exception as exc:
-                errors.append(f"{name}: {type(exc).__name__}: {exc}")
+                errors.append(
+                    f"{name}: {type(exc).__name__}: {exc}"
+                )
                 continue
             self._record_preferred(name)
             return {**result, "transport": name}
@@ -291,13 +381,18 @@ class RecipientFailoverTransport:
 
     async def status_async(self) -> dict[str, Any]:
         errors: list[str] = []
-        configured = [credential.transport for credential in self.credentials]
+        configured = [
+            credential.transport
+            for credential in self.credentials
+        ]
         for transport in self._ordered_transports():
             name = transport.credential.transport
             try:
                 result = await transport.status_async()
             except Exception as exc:
-                errors.append(f"{name}: {type(exc).__name__}: {exc}")
+                errors.append(
+                    f"{name}: {type(exc).__name__}: {exc}"
+                )
                 continue
             self._record_preferred(name)
             return {
@@ -320,19 +415,33 @@ class RecipientFailoverTransport:
 
 def load_recipient_transport(path: Path) -> RecipientFailoverTransport:
     credentials, preferred = load_recipient_credentials(path)
-    return RecipientFailoverTransport(path, credentials, preferred)
+    return RecipientFailoverTransport(
+        path,
+        credentials,
+        preferred,
+    )
 
 
 def recipient_status(path: Path) -> dict[str, Any]:
     credentials, preferred = load_recipient_credentials(path)
-    transport = RecipientFailoverTransport(path, credentials, preferred)
+    transport = RecipientFailoverTransport(
+        path,
+        credentials,
+        preferred,
+    )
     result = transport.status()
     credential = transport.credential
     return {
-        "transport": str(result.get("transport") or credential.transport),
+        "transport": str(
+            result.get("transport")
+            or credential.transport
+        ),
         "configured_transports": result.get(
             "configured_transports",
-            [item.transport for item in credentials],
+            [
+                item.transport
+                for item in credentials
+            ],
         ),
         "device_id": credential.device_id,
         "discord_user_id": credential.discord_user_id,

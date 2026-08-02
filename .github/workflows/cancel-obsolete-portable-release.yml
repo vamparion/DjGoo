@@ -1,0 +1,26 @@
+name: Cancel obsolete portable release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .cancel-obsolete-portable-release
+
+permissions:
+  contents: read
+
+# A trigger for this workflow allocates no runner. Entering the same repository-
+# wide concurrency group cancels an obsolete main release that is blocking the
+# user's single Windows runner. A later VERSION change starts the authoritative
+# replacement release after PR validation has completed.
+concurrency:
+  group: portable-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cancellation-receipt:
+    if: false
+    runs-on: [self-hosted, Windows, X64]
+    steps:
+      - run: echo "Obsolete portable release cancelled by concurrency."

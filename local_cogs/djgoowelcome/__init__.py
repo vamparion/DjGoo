@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 from redbot.core import commands
@@ -7,6 +8,8 @@ from . import djgoowelcome as cog_module
 from .guide_cog import DjGooGuide
 from .relay_cog import DjGooRelay
 from .remote_aware_bridge import RemoteAwareDjGooAudioBridge
+from tools.windows_firewall import ensure_gateway_firewall
+from voice.operational_log import log_event
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -18,6 +21,34 @@ TIMED_REQUEST_INTENTS = {"play_now", "queue_request"}
 cog_module.EnhancedDjGooAudioBridge = RemoteAwareDjGooAudioBridge
 cog_module.JOINING_REMOTE_INTENTS.update(TIMED_REQUEST_INTENTS)
 DjGooWelcome = cog_module.DjGooWelcome
+
+
+def _install_gateway_firewall_repair() -> None:
+    if bool(getattr(DjGooWelcome, "_djgoo_gateway_firewall_repair", False)):
+        return
+    original_start_gateway = DjGooWelcome._start_gateway
+
+    async def _start_gateway(self) -> None:
+        gateway = self._gateway
+        if gateway is not None:
+            try:
+                success, detail = await asyncio.to_thread(
+                    ensure_gateway_firewall,
+                    PROJECT_ROOT,
+                    port=int(gateway.port),
+                )
+            except Exception as exc:
+                success, detail = False, f"{type(exc).__name__}: {exc}"
+            log_event(
+                "voice.gateway.firewall_checked",
+                ready=success,
+                detail=detail,
+                port=int(gateway.port),
+            )
+        await original_start_gateway(self)
+
+    DjGooWelcome._start_gateway = _start_gateway
+    DjGooWelcome._djgoo_gateway_firewall_repair = True
 
 
 def _install_timed_chat_routing() -> None:
@@ -57,6 +88,7 @@ def _install_timed_chat_routing() -> None:
     DjGooWelcome._djgoo_timed_chat_routing = True
 
 
+_install_gateway_firewall_repair()
 _install_timed_chat_routing()
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -23,6 +24,7 @@ from launcher.djgoo_theme import (
     PANEL_ALT,
     TEXT,
 )
+from launcher.frozen_shutdown import install_frozen_shutdown
 from launcher.window_layout import fit_window_to_content
 from tools.update_client_guard import check_for_update as guarded_check_for_update
 
@@ -55,6 +57,7 @@ class DjGooHostControlCenter(DjGooControlCenter):
         self._binding_button = False
         self._firewall_busy = False
         super().__init__(root, layout)
+        install_frozen_shutdown(self.root)
         if self._legacy_music_core_migrated:
             self.log(
                 "Existing Discord configuration restored from the previous DjGoo installation."
@@ -211,6 +214,22 @@ class DjGooHostControlCenter(DjGooControlCenter):
             detail,
             parent=self.root,
         )
+
+    def open_mini_player(self) -> None:
+        executable = self.layout.root / "DjGoo Mini Player.exe"
+        if not executable.exists():
+            super().open_mini_player()
+            return
+        subprocess.Popen(
+            [str(executable)],
+            cwd=self.layout.root,
+            env=self._environment(),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        self.log("Opened Mini Player.")
 
     def bind_button(self) -> None:
         if self._binding_button:
