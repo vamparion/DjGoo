@@ -25,6 +25,23 @@ def _is_admin() -> bool:
         return False
 
 
+def _netsh_field(output: str, name: str) -> str:
+    expected = name.strip().lower()
+    for line in output.splitlines():
+        key, separator, value = line.partition(":")
+        if separator and key.strip().lower() == expected:
+            return value.strip().lower()
+    return ""
+
+
+def _field_tokens(value: str) -> set[str]:
+    return {
+        item.strip().lower()
+        for item in value.replace(";", ",").replace(" ", ",").split(",")
+        if item.strip()
+    }
+
+
 def firewall_rule_ready(port: int = 47632) -> bool:
     if os.name != "nt":
         return True
@@ -43,32 +60,23 @@ def firewall_rule_ready(port: int = 47632) -> bool:
         creationflags=_creation_flags(),
     )
     output = (result.stdout or "") + (result.stderr or "")
-    normalized = output.lower()
+    profiles = _field_tokens(_netsh_field(output, "profiles"))
     # The previous alpha.19 rule covered only Domain/Private profiles. Windows
     # commonly classifies cellular, hotspot, and ASTER networks as Public, which
     # made the rule look valid while recipients still timed out.
-    all_profiles = (
-        "profiles:" in normalized
-        and (
-            "all" in normalized
-            or (
-                "domain" in normalized
-                and "private" in normalized
-                and "public" in normalized
-            )
-        )
-    )
+    all_profiles = "all" in profiles or {
+        "domain",
+        "private",
+        "public",
+    }.issubset(profiles)
+    local_ports = _field_tokens(_netsh_field(output, "localport"))
     return bool(
         result.returncode == 0
-        and "enabled:" in normalized
-        and "yes" in normalized
-        and "direction:" in normalized
-        and "in" in normalized
-        and "action:" in normalized
-        and "allow" in normalized
-        and "protocol:" in normalized
-        and "tcp" in normalized
-        and str(int(port)) in normalized
+        and _netsh_field(output, "enabled") == "yes"
+        and _netsh_field(output, "direction") == "in"
+        and _netsh_field(output, "action") == "allow"
+        and _netsh_field(output, "protocol") == "tcp"
+        and str(int(port)) in local_ports
         and all_profiles
     )
 
