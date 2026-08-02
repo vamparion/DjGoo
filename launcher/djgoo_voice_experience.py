@@ -3,6 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from tkinter import LEFT, X, Frame, Label, Tk
 
+import launcher.djgoo_voice_launcher as voice_launcher_base
+from voice.discovery_connection import pair_from_invite_with_discovery
+
+
+# Replace guessed-address pairing with recipient-led LAN discovery before the
+# normal certificate-pinned direct/Discord/relay failover runs.
+voice_launcher_base.pair_from_invite = pair_from_invite_with_discovery
+
 from launcher.djgoo_voice_launcher import (
     ACCENT_2,
     MUTED,
