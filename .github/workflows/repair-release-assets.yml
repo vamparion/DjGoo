@@ -48,108 +48,118 @@ jobs:
         with:
           ref: main
 
-      - name: Resolve release tag
-        id: version
+      - name: Repair and verify updater-visible release
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
+
           $requested = "${{ inputs.version }}".Trim()
-          if ($requested) {
-            $version = $requested.TrimStart("v")
+          $version = if ($requested) {
+            $requested.TrimStart("v")
           } else {
-            $version = (Get-Content VERSION -Raw).Trim().TrimStart("v")
+            (Get-Content VERSION -Raw).Trim().TrimStart("v")
           }
           if ($version -notmatch '^\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?$') {
             throw "Invalid DjGoo version: $version"
           }
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "tag=v$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          $tag = "v$version"
 
-      - name: Download complete portable packages
-        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: |
-          $ErrorActionPreference = "Stop"
-          $tag = "${{ steps.version.outputs.tag }}"
-          $ready = $false
+          $releaseReady = $false
           for ($attempt = 1; $attempt -le 60; $attempt++) {
             $releaseJson = gh release view $tag -R $env:GITHUB_REPOSITORY --json assets 2>$null
             if ($LASTEXITCODE -eq 0) {
               $release = $releaseJson | ConvertFrom-Json
-              $names = @($release.assets | ForEach-Object { $_.name })
-              if ($names -contains "DjGoo-Host-win-x64.zip" -and $names -contains "DjGoo-Voice-win-x64.zip") {
-                $ready = $true
+              $names = @($release.assets | ForEach-Object { [string]$_.name })
+              if (
+                $names -contains "DjGoo-Host-win-x64.zip" -and
+                $names -contains "DjGoo-Voice-win-x64.zip"
+              ) {
+                $releaseReady = $true
                 break
               }
             }
             Start-Sleep -Seconds 10
           }
-          if (-not $ready) { throw "The full alpha release packages never became available." }
+          if (-not $releaseReady) {
+            throw "The full portable packages for $tag never became available."
+          }
+
           Remove-Item repair, build -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force repair, repair/host, repair/voice, build | Out-Null
+
           gh release download $tag -R $env:GITHUB_REPOSITORY `
             --pattern "DjGoo-Host-win-x64.zip" `
             --pattern "DjGoo-Voice-win-x64.zip" `
             --dir repair `
             --clobber
-          if ($LASTEXITCODE -ne 0) { throw "Could not download the published portable packages." }
-          if ((Get-Item repair/DjGoo-Host-win-x64.zip).Length -le 0) { throw "Host package download is empty." }
-          if ((Get-Item repair/DjGoo-Voice-win-x64.zip).Length -le 0) { throw "Voice package download is empty." }
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not download the published portable packages."
+          }
+          foreach ($path in @(
+            "repair/DjGoo-Host-win-x64.zip",
+            "repair/DjGoo-Voice-win-x64.zip"
+          )) {
+            if (!(Test-Path $path) -or (Get-Item $path).Length -le 0) {
+              throw "Published package is missing or empty: $path"
+            }
+          }
+
           Expand-Archive repair/DjGoo-Host-win-x64.zip repair/host -Force
           Expand-Archive repair/DjGoo-Voice-win-x64.zip repair/voice -Force
-
-      - name: Rebuild updater assets from published packages
-        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: |
-          $ErrorActionPreference = "Stop"
           $hostExe = Get-ChildItem repair/host -Recurse -File -Filter "DjGoo.exe" | Select-Object -First 1
           $voiceExe = Get-ChildItem repair/voice -Recurse -File -Filter "DjGoo Voice.exe" | Select-Object -First 1
           if (-not $hostExe) { throw "Published Host package does not contain DjGoo.exe." }
           if (-not $voiceExe) { throw "Published Voice package does not contain DjGoo Voice.exe." }
+
           python tools/build_update_bundle.py `
             --package-root $hostExe.Directory.FullName `
             --output-zip build/DjGoo-Host-update.zip `
             --output-manifest build/DjGoo-Host-update.json `
-            --version "${{ steps.version.outputs.version }}"
+            --version $version
           if ($LASTEXITCODE -ne 0) { throw "Host updater rebuild failed." }
+
           python tools/build_voice_update_bundle.py `
             --package-root $voiceExe.Directory.FullName `
             --output-zip build/DjGoo-Voice-update.zip `
             --output-manifest build/DjGoo-Voice-update.json `
-            --version "${{ steps.version.outputs.version }}"
+            --version $version
           if ($LASTEXITCODE -ne 0) { throw "Voice updater rebuild failed." }
-          foreach ($path in @(
-            "build/DjGoo-Host-update.zip",
-            "build/DjGoo-Host-update.json",
-            "build/DjGoo-Voice-update.zip",
-            "build/DjGoo-Voice-update.json"
-          )) {
-            if (!(Test-Path $path) -or (Get-Item $path).Length -le 0) {
-              throw "Rebuilt updater asset is missing or empty: $path"
-            }
-          }
 
-      - name: Upload updater assets with overwrite
-        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: |
-          $ErrorActionPreference = "Stop"
-          gh release upload "${{ steps.version.outputs.tag }}" `
+          $releaseFiles = [ordered]@{
+            "DjGoo-Host-win-x64.zip" = "repair/DjGoo-Host-win-x64.zip"
+            "DjGoo-Voice-win-x64.zip" = "repair/DjGoo-Voice-win-x64.zip"
+            "DjGoo-Host-update.zip" = "build/DjGoo-Host-update.zip"
+            "DjGoo-Host-update.json" = "build/DjGoo-Host-update.json"
+            "DjGoo-Voice-update.zip" = "build/DjGoo-Voice-update.zip"
+            "DjGoo-Voice-update.json" = "build/DjGoo-Voice-update.json"
+          }
+          $checksumLines = foreach ($entry in $releaseFiles.GetEnumerator()) {
+            if (!(Test-Path $entry.Value) -or (Get-Item $entry.Value).Length -le 0) {
+              throw "Release asset is missing or empty: $($entry.Key)"
+            }
+            $hash = (Get-FileHash $entry.Value -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($entry.Key)"
+          }
+          $checksumLines | Set-Content -Encoding ASCII build/SHA256SUMS.txt
+
+          gh release upload $tag `
             build/DjGoo-Host-update.zip `
             build/DjGoo-Host-update.json `
             build/DjGoo-Voice-update.zip `
             build/DjGoo-Voice-update.json `
+            build/SHA256SUMS.txt `
             -R $env:GITHUB_REPOSITORY `
             --clobber
-          if ($LASTEXITCODE -ne 0) { throw "GitHub rejected the repaired updater assets." }
+          if ($LASTEXITCODE -ne 0) {
+            throw "GitHub rejected the repaired updater assets."
+          }
 
-      - name: Verify updater-visible release is complete
-        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: |
-          $ErrorActionPreference = "Stop"
-          $tag = "${{ steps.version.outputs.tag }}"
-          $release = (gh release view $tag -R $env:GITHUB_REPOSITORY --json assets | ConvertFrom-Json)
-          if ($LASTEXITCODE -ne 0) { throw "Could not inspect the published release." }
+          $published = gh release view $tag -R $env:GITHUB_REPOSITORY --json assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not inspect the repaired release."
+          }
           $sizes = @{}
-          foreach ($asset in $release.assets) {
+          foreach ($asset in $published.assets) {
             $sizes[[string]$asset.name] = [int64]$asset.size
           }
           $required = @(
@@ -161,35 +171,17 @@ jobs:
             "DjGoo-Voice-update.json",
             "SHA256SUMS.txt"
           )
-          $missing = @($required | Where-Object { !$sizes.ContainsKey($_) -or $sizes[$_] -le 0 })
+          $missing = @($required | Where-Object {
+            !$sizes.ContainsKey($_) -or $sizes[$_] -le 0
+          })
           if ($missing.Count -gt 0) {
             throw "Release is incomplete: $($missing -join ', ')"
           }
-          New-Item -ItemType Directory -Force release-receipts | Out-Null
-          $assetReceipt = [ordered]@{}
-          foreach ($name in ($required | Sort-Object)) {
-            $assetReceipt[$name] = $sizes[$name]
-            Write-Host "$name : $($sizes[$name]) bytes"
-          }
-          $receipt = [ordered]@{
-            schema = 1
-            tag = $tag
-            verified_at = [DateTimeOffset]::UtcNow.ToString("o")
-            assets = $assetReceipt
-          }
-          $receipt | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 "release-receipts/$tag.json"
 
-      - name: Commit release verification receipt
-        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: |
-          $ErrorActionPreference = "Stop"
-          $tag = "${{ steps.version.outputs.tag }}"
-          git config user.name "djgoo-release-verifier"
-          git config user.email "actions@users.noreply.github.com"
-          git add "release-receipts/$tag.json"
-          git diff --cached --quiet
-          if ($LASTEXITCODE -eq 0) { exit 0 }
-          git commit -m "Record verified release $tag"
-          if ($LASTEXITCODE -ne 0) { throw "Could not commit the release receipt." }
-          git push origin "HEAD:refs/heads/release-verification"
-          if ($LASTEXITCODE -ne 0) { throw "Could not publish the release receipt." }
+          "## Verified release $tag" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          foreach ($name in ($required | Sort-Object)) {
+            $line = "$name : $($sizes[$name]) bytes"
+            Write-Host $line
+            "- $line" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          }
+          Write-Host "Updater-visible release verified: $tag"
