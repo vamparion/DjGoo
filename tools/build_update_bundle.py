@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import zipfile
 from pathlib import Path
 from typing import Iterable
@@ -24,6 +25,17 @@ LAUNCHER_FILES = (
 )
 LAUNCHER_DEFERRED_VERSIONS = {
     "0.3.0-alpha.19",
+    "0.3.0-alpha.20",
+}
+SELF_BOOTSTRAP_VERSIONS = {
+    "0.3.0-alpha.20",
+}
+SELF_BOOTSTRAP_FILES = {
+    "tools/pending_launchers/DjGoo.exe",
+    "tools/pending_launchers/DjGoo Mini Player.exe",
+    "tools/complete_launcher_update.py",
+    "tools/djgoo_stack.py",
+    "tools/apply_update.py",
 }
 ROOT_FILES = (
     "LICENSE",
@@ -92,6 +104,31 @@ def _directory_files(
         if path.is_file()
         and _eligible(path.relative_to(package_root))
     )
+
+
+def _stage_self_bootstrap_launchers(package_root: Path) -> None:
+    root = package_root.resolve()
+    missing = [
+        relative
+        for relative in (
+            *LAUNCHER_FILES,
+            "tools/complete_launcher_update.py",
+            "tools/djgoo_stack.py",
+            "tools/apply_update.py",
+        )
+        if not (root / relative).is_file()
+    ]
+    if missing:
+        raise UpdateBundleError(
+            "The package cannot create a self-bootstrapping launcher update; "
+            f"missing: {missing}"
+        )
+
+    pending = root / "tools" / "pending_launchers"
+    shutil.rmtree(pending, ignore_errors=True)
+    pending.mkdir(parents=True, exist_ok=True)
+    for filename in LAUNCHER_FILES:
+        shutil.copy2(root / filename, pending / filename)
 
 
 def collect_update_files(
@@ -185,10 +222,31 @@ def build_update_bundle(
     if normalized_version in LAUNCHER_DEFERRED_VERSIONS:
         include_launchers = False
 
+    self_bootstrap = bool(
+        not include_launchers
+        and normalized_version in SELF_BOOTSTRAP_VERSIONS
+    )
+    if self_bootstrap:
+        _stage_self_bootstrap_launchers(root)
+
     files = collect_update_files(
         root,
         include_launchers=include_launchers,
     )
+    relative_files = {
+        path.relative_to(root).as_posix()
+        for path in files
+    }
+    if self_bootstrap:
+        missing_bootstrap = sorted(
+            SELF_BOOTSTRAP_FILES.difference(relative_files)
+        )
+        if missing_bootstrap:
+            raise UpdateBundleError(
+                "The self-bootstrapping update is incomplete: "
+                f"{missing_bootstrap}"
+            )
+
     output_zip.parent.mkdir(parents=True, exist_ok=True)
     output_manifest.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -225,6 +283,9 @@ def build_update_bundle(
         "runtime_generation": 3,
         "requires_full_install": False,
         "launcher_update_deferred": not include_launchers,
+        "launcher_completion_mode": (
+            "portable-stack" if self_bootstrap else ""
+        ),
         "files": entries,
         "deletes": [],
     }
