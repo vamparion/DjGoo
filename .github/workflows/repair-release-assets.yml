@@ -60,12 +60,15 @@ jobs:
         run: |
           set -euo pipefail
           tag='${{ steps.version.outputs.tag }}'
+          found=0
           for attempt in $(seq 1 30); do
             if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              found=1
               break
             fi
             sleep 10
           done
+          test "$found" -eq 1
           rm -rf repair build
           mkdir -p repair/host repair/voice build
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
@@ -82,10 +85,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          host_root="$(dirname "$(find repair/host -type f -name 'DjGoo.exe' -print -quit)")"
-          voice_root="$(dirname "$(find repair/voice -type f -name 'DjGoo Voice.exe' -print -quit)")"
-          test -n "$host_root"
-          test -n "$voice_root"
+          host_exe="$(find repair/host -type f -name 'DjGoo.exe' -print -quit)"
+          voice_exe="$(find repair/voice -type f -name 'DjGoo Voice.exe' -print -quit)"
+          test -n "$host_exe"
+          test -n "$voice_exe"
+          host_root="$(dirname "$host_exe")"
+          voice_root="$(dirname "$voice_exe")"
           python tools/build_update_bundle.py \
             --package-root "$host_root" \
             --output-zip build/DjGoo-Host-update.zip \
