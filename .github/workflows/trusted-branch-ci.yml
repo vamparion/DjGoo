@@ -1,0 +1,66 @@
+name: Trusted branch CI
+
+on:
+  push:
+    branches:
+      - "agent/**"
+      - "release/**"
+  workflow_dispatch:
+
+concurrency:
+  group: trusted-branch-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Only branches pushed inside vamparion/DjGoo can trigger this workflow.
+    # Forked pull requests cannot execute code on the AEGIS release machine.
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            requirements-voice.txt
+
+      - name: Install test dependencies
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed with exit $LASTEXITCODE" }
+          python -m pip install --requirement requirements-dev.txt
+          if ($LASTEXITCODE -ne 0) { throw "Test dependency installation failed with exit $LASTEXITCODE" }
+
+      - name: Audit public-release safety
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          python tools/public_release_audit.py
+          if ($LASTEXITCODE -ne 0) { throw "Public release audit failed with exit $LASTEXITCODE" }
+
+      - name: Compile Python sources
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Continue"
+          python -m compileall -q launcher voice tools local_cogs relay tests 2>&1 | Tee-Object -FilePath compile.log
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { throw "Source compilation failed with exit $exitCode" }
+
+      - name: Run complete test suite
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Continue"
+          python -m pytest -q 2>&1 | Tee-Object -FilePath pytest.log
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { throw "Test suite failed with exit $exitCode" }
