@@ -67,6 +67,40 @@ def test_public_release_audit_rejects_webhook_credentials(tmp_path: Path) -> Non
     assert any("Discord webhook URL" in item for item in failures)
 
 
+def test_public_release_audit_rejects_self_hosted_pull_requests(
+    tmp_path: Path,
+) -> None:
+    root, paths = _public_tree(tmp_path)
+    workflow = root / ".github" / "workflows" / "unsafe.yml"
+    workflow.parent.mkdir(parents=True, exist_ok=True)
+    workflow.write_text(
+        "name: Unsafe\non:\n  pull_request:\njobs:\n  test:\n"
+        "    runs-on: [self-hosted, Windows, X64]\n",
+        encoding="utf-8",
+    )
+    paths.append(".github/workflows/unsafe.yml")
+
+    failures = audit_public_release(root, paths=paths)
+
+    assert any("may not use a self-hosted runner" in item for item in failures)
+
+
+def test_public_release_audit_allows_trusted_push_self_hosted_ci(
+    tmp_path: Path,
+) -> None:
+    root, paths = _public_tree(tmp_path)
+    workflow = root / ".github" / "workflows" / "trusted.yml"
+    workflow.parent.mkdir(parents=True, exist_ok=True)
+    workflow.write_text(
+        "name: Trusted\non:\n  push:\n    branches: ['agent/**']\n"
+        "jobs:\n  test:\n    runs-on: [self-hosted, Windows, X64]\n",
+        encoding="utf-8",
+    )
+    paths.append(".github/workflows/trusted.yml")
+
+    assert audit_public_release(root, paths=paths) == []
+
+
 def test_current_repository_passes_public_release_audit() -> None:
     root = Path(__file__).resolve().parents[1]
 
