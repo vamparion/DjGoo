@@ -11,7 +11,18 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools.build_portable import copy_tree, write_manifest
+from tools.build_portable import copy_tree, write_installed_version, write_manifest
+
+
+UPDATE_TOOL_FILES = (
+    "__init__.py",
+    "update_auth.py",
+    "update_client.py",
+    "voice_update_client.py",
+    "apply_update.py",
+    "apply_voice_update.py",
+    "portable_environment.py",
+)
 
 
 def build_launcher(output: Path) -> Path:
@@ -37,7 +48,7 @@ def build_launcher(output: Path) -> Path:
             str(build),
             "--specpath",
             str(spec),
-            str(PROJECT_ROOT / "launcher" / "djgoo_voice_launcher.py"),
+            str(PROJECT_ROOT / "launcher" / "djgoo_voice_control_center.py"),
         ],
         cwd=PROJECT_ROOT,
         check=True,
@@ -56,6 +67,12 @@ def build(output: Path, runtime_python: Path, version: str) -> None:
 
     copy_tree(PROJECT_ROOT / "voice", output / "voice")
     copy_tree(PROJECT_ROOT / "launcher", output / "source" / "launcher")
+    tools_output = output / "tools"
+    tools_output.mkdir(parents=True, exist_ok=True)
+    for filename in UPDATE_TOOL_FILES:
+        source = PROJECT_ROOT / "tools" / filename
+        if source.exists():
+            shutil.copy2(source, tools_output / filename)
     for filename in ("LICENSE", "THIRD_PARTY_NOTICES.md", "README.md", "requirements-voice.txt"):
         source = PROJECT_ROOT / filename
         if source.exists():
@@ -81,9 +98,10 @@ def build(output: Path, runtime_python: Path, version: str) -> None:
     )
 
     copy_tree(runtime_python, output / "runtime" / "python")
-    for relative in ("data", "data/models", "logs"):
+    for relative in ("data", "data/models", "data/updates", "data/update-backups", "logs"):
         (output / relative).mkdir(parents=True, exist_ok=True)
     build_launcher(output)
+    write_installed_version(output, version)
     write_manifest(output, version)
 
     forbidden = [path for path in output.rglob("*") if path.suffix.lower() in {".ps1", ".vbs"}]

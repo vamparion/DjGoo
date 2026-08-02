@@ -1,0 +1,21 @@
+from __future__ import annotations
+
+
+BG = "#11151b"
+PANEL = "#191f29"
+PANEL_ALT = "#222a37"
+COACH = "#171c25"
+ENTRY = "#0f131a"
+LOG_BG = "#0d1016"
+TEXT = "#f2f5fa"
+MUTED = "#9ba7b8"
+ACCENT = "#718cff"
+ACCENT_2 = "#9b7cff"
+GOOD = "#69d39d"
+WARN = "#f2c66d"
+DANGER = "#e9707e"
+ACTIVE_ACCENT = "#8da2ff"
+ACTIVE_PANEL = "#303a4c"
+ACTIVE_DANGER = "#ff9aa5"
+BORDER = "#30394a"
+LOG_TEXT = "#aeb8c8"

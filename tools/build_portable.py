@@ -113,7 +113,7 @@ def build_gui_executable(
 def build_launcher(output: Path) -> Path:
     return build_gui_executable(
         output,
-        source=PROJECT_ROOT / "launcher" / "djgoo_host_experience.py",
+        source=PROJECT_ROOT / "launcher" / "djgoo_host_control_center.py",
         name="DjGoo",
     )
 
