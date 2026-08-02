@@ -6,7 +6,12 @@ on:
       - main
     paths:
       - tools/build_update_bundle.py
+      - tools/apply_update.py
+      - tools/windows_firewall.py
+      - local_cogs/djgoowelcome/__init__.py
       - tests/test_build_update_bundle.py
+      - tests/test_apply_update_process_guard.py
+      - tests/test_windows_firewall.py
       - .github/workflows/repair-alpha19-bootstrap.yml
       - .alpha19-bootstrap-trigger
   workflow_dispatch:
@@ -54,9 +59,19 @@ jobs:
           if (-not $hostExe) {
             throw "The published alpha.19 Host package does not contain DjGoo.exe."
           }
+          $packageRoot = $hostExe.Directory.FullName
+
+          # The published alpha.19 package contains the updater that failed in
+          # production. Overlay only the recovery engine and local-firewall
+          # bootstrap files from this PR. Protocol/UI changes remain alpha.20 so
+          # an alpha.19 recipient never receives an invite it cannot parse.
+          Copy-Item tools/apply_update.py "$packageRoot/tools/apply_update.py" -Force
+          Copy-Item tools/windows_firewall.py "$packageRoot/tools/windows_firewall.py" -Force
+          Copy-Item local_cogs/djgoowelcome/__init__.py `
+            "$packageRoot/local_cogs/djgoowelcome/__init__.py" -Force
 
           python tools/build_update_bundle.py `
-            --package-root $hostExe.Directory.FullName `
+            --package-root $packageRoot `
             --output-zip build/DjGoo-Host-update.zip `
             --output-manifest build/DjGoo-Host-update.json `
             --version $version `
@@ -65,7 +80,7 @@ jobs:
             throw "Launcher-deferred Host updater build failed."
           }
 
-          python -c "import json,zipfile; from pathlib import Path; p=json.loads(Path('build/DjGoo-Host-update.json').read_text()); names=set(zipfile.ZipFile('build/DjGoo-Host-update.zip').namelist()); assert p['launcher_update_deferred'] is True; assert 'DjGoo.exe' not in names; assert 'DjGoo Mini Player.exe' not in names; assert 'tools/apply_update.py' in names; assert p['release_tag']=='v0.3.0-alpha.19'; print('alpha.19 bootstrap updater verified')"
+          python -c "import json,zipfile; from pathlib import Path; p=json.loads(Path('build/DjGoo-Host-update.json').read_text()); z=zipfile.ZipFile('build/DjGoo-Host-update.zip'); names=set(z.namelist()); assert p['launcher_update_deferred'] is True; assert 'DjGoo.exe' not in names; assert 'DjGoo Mini Player.exe' not in names; assert 'tools/apply_update.py' in names; assert b'wait_for_launcher_release' in z.read('tools/apply_update.py'); assert b'profile=any' in z.read('tools/windows_firewall.py'); assert p['release_tag']=='v0.3.0-alpha.19'; print('alpha.19 bootstrap updater verified')"
           if ($LASTEXITCODE -ne 0) {
             throw "The alpha.19 bootstrap bundle contract is invalid."
           }
@@ -92,4 +107,27 @@ jobs:
               throw "Repaired alpha.19 asset is missing or empty: $required"
             }
           }
-          Write-Host "Launcher-deferred alpha.19 updater published and verified."
+
+          Remove-Item published-check -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force published-check | Out-Null
+          gh release download $tag -R $env:GITHUB_REPOSITORY `
+            --pattern "DjGoo-Host-update.zip" `
+            --pattern "DjGoo-Host-update.json" `
+            --dir published-check `
+            --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "The repaired alpha.19 updater could not be downloaded."
+          }
+          if (
+            (Get-FileHash published-check/DjGoo-Host-update.zip -Algorithm SHA256).Hash -ne
+            (Get-FileHash build/DjGoo-Host-update.zip -Algorithm SHA256).Hash
+          ) {
+            throw "The published alpha.19 updater ZIP does not match the verified build."
+          }
+          if (
+            (Get-FileHash published-check/DjGoo-Host-update.json -Algorithm SHA256).Hash -ne
+            (Get-FileHash build/DjGoo-Host-update.json -Algorithm SHA256).Hash
+          ) {
+            throw "The published alpha.19 updater manifest does not match the verified build."
+          }
+          Write-Host "Launcher-deferred alpha.19 updater published, downloaded, and verified."
