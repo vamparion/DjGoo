@@ -42,6 +42,8 @@ DjGoo follows Semantic Versioning. Dates use ISO 8601.
 - Prevented brief push-to-talk commands from being discarded by extending their effective capture window, padding short clips, and bypassing redundant VAD on the hotkey path.
 - Added a higher-accuracy retry only when the fast speech-recognition pass is empty or below the configured confidence thresholds.
 - Added a local Nuclear MCP availability probe and circuit breaker so an inactive Nuclear service no longer adds repeated multi-second delays to play commands.
+- Prevented ordinary `redbot.command.invoke` diagnostics from erasing Music Core's required readiness fields and triggering a supervisor restart during playback commands.
+- Kept the authoritative Redbot heartbeat lease intact while Audio searches and playback commands are still executing.
 
 ### Changed
 
@@ -54,7 +56,7 @@ DjGoo follows Semantic Versioning. Dates use ISO 8601.
 - Windows package smoke tests now verify portable Red configuration, bundled `pip`, DPAPI credential storage, and incremental-update scope.
 - Host and recipient updater assets are published together from one validated Windows build.
 - Recipient incremental updates preserve the active embedded Python runtime, pairing credential, local settings, and logs.
-- Push-to-talk recognition uses a three-beam first pass, timestamp-free decoding, and elapsed-time logging while retaining the existing accuracy model.
+- Push-to-talk recognition uses a beam-one first pass, timestamp-free decoding, and elapsed-time logging while retaining the existing accuracy model and confidence-gated retry.
 
 ## [0.1.0] - 2026-07-31
 
