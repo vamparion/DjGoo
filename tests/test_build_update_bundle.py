@@ -8,7 +8,7 @@ from pathlib import Path
 from tools.build_update_bundle import build_update_bundle
 
 
-def test_update_bundle_excludes_large_runtimes_and_user_state(tmp_path: Path) -> None:
+def _portable_package(tmp_path: Path) -> Path:
     package = tmp_path / "package"
     (package / "tools").mkdir(parents=True)
     (package / "control_panel").mkdir(parents=True)
@@ -25,6 +25,7 @@ def test_update_bundle_excludes_large_runtimes_and_user_state(tmp_path: Path) ->
     (package / "DjGoo.exe").write_bytes(b"launcher")
     (package / "DjGoo Mini Player.exe").write_bytes(b"mini-player")
     (package / "tools" / "worker.py").write_text("print('updated')", encoding="utf-8")
+    (package / "tools" / "apply_update.py").write_text("# updater engine\n", encoding="utf-8")
     (package / "tools" / "djgoo_stack.py").write_text("# portable adapter\n", encoding="utf-8")
     (package / "tools" / "djgoo_stack_core.py").write_text("# supervisor core\n", encoding="utf-8")
     (package / "control_panel" / "state.py").write_text("# health backend\n", encoding="utf-8")
@@ -48,7 +49,11 @@ def test_update_bundle_excludes_large_runtimes_and_user_state(tmp_path: Path) ->
     (package / "runtime" / "java" / "bin" / "java.exe").write_bytes(b"large-java")
     (pip_dir / "__init__.py").write_text("__version__='26.0'", encoding="utf-8")
     (pip_info / "METADATA").write_text("Name: pip", encoding="utf-8")
+    return package
 
+
+def test_update_bundle_excludes_large_runtimes_and_user_state(tmp_path: Path) -> None:
+    package = _portable_package(tmp_path)
     output_zip = tmp_path / "DjGoo-Host-update.zip"
     output_manifest = tmp_path / "DjGoo-Host-update.json"
     manifest = build_update_bundle(package, output_zip, output_manifest, "0.3.0-alpha.15")
@@ -58,6 +63,7 @@ def test_update_bundle_excludes_large_runtimes_and_user_state(tmp_path: Path) ->
         assert "DjGoo.exe" in names
         assert "DjGoo Mini Player.exe" in names
         assert "tools/worker.py" in names
+        assert "tools/apply_update.py" in names
         assert "tools/djgoo_stack.py" in names
         assert "tools/djgoo_stack_core.py" in names
         assert "control_panel/state.py" in names
@@ -76,6 +82,7 @@ def test_update_bundle_excludes_large_runtimes_and_user_state(tmp_path: Path) ->
     assert disk_manifest == manifest
     assert manifest["release_tag"] == "v0.3.0-alpha.15"
     assert manifest["runtime_generation"] == 3
+    assert manifest["launcher_update_deferred"] is False
     assert manifest["bundle_size"] == output_zip.stat().st_size
     assert manifest["bundle_sha256"] == hashlib.sha256(output_zip.read_bytes()).hexdigest()
     listed = {entry["path"]: entry for entry in manifest["files"]}
@@ -85,3 +92,28 @@ def test_update_bundle_excludes_large_runtimes_and_user_state(tmp_path: Path) ->
             data = archive.read(name)
             assert listed[name]["size"] == len(data)
             assert listed[name]["sha256"] == hashlib.sha256(data).hexdigest()
+
+
+def test_bootstrap_bundle_defers_locked_launchers_but_updates_engine(tmp_path: Path) -> None:
+    package = _portable_package(tmp_path)
+    output_zip = tmp_path / "DjGoo-Host-update.zip"
+    output_manifest = tmp_path / "DjGoo-Host-update.json"
+
+    manifest = build_update_bundle(
+        package,
+        output_zip,
+        output_manifest,
+        "0.3.0-alpha.19",
+        include_launchers=False,
+    )
+
+    with zipfile.ZipFile(output_zip) as archive:
+        names = set(archive.namelist())
+
+    assert "DjGoo.exe" not in names
+    assert "DjGoo Mini Player.exe" not in names
+    assert "tools/apply_update.py" in names
+    assert "tools/djgoo_stack.py" in names
+    assert "data/installed-version.json" in names
+    assert manifest["launcher_update_deferred"] is True
+    assert {entry["path"] for entry in manifest["files"]} == names
