@@ -124,10 +124,12 @@ def test_window_uses_taskbar_excluding_work_area(monkeypatch) -> None:
         minimum_height=690,
     )
 
-    dimensions, x, y = root.geometry_value.replace("+", "x", 2).split("x")[:2], None, None
-    parts = root.geometry_value.replace("+", "x").split("x")
-    width, height, x, y = map(int, parts)
+    width, height, x, y = map(
+        int,
+        root.geometry_value.replace("+", "x").split("x"),
+    )
     assert width <= 1884
     assert height <= 944
+    assert x >= 0
     assert y >= 0
     assert y + height + 40 <= 1000
