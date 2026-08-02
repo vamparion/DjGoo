@@ -44,13 +44,32 @@ def firewall_rule_ready(port: int = 47632) -> bool:
     )
     output = (result.stdout or "") + (result.stderr or "")
     normalized = output.lower()
+    # The previous alpha.19 rule covered only Domain/Private profiles. Windows
+    # commonly classifies cellular, hotspot, and ASTER networks as Public, which
+    # made the rule look valid while recipients still timed out.
+    all_profiles = (
+        "profiles:" in normalized
+        and (
+            "all" in normalized
+            or (
+                "domain" in normalized
+                and "private" in normalized
+                and "public" in normalized
+            )
+        )
+    )
     return bool(
         result.returncode == 0
         and "enabled:" in normalized
         and "yes" in normalized
+        and "direction:" in normalized
+        and "in" in normalized
+        and "action:" in normalized
+        and "allow" in normalized
         and "protocol:" in normalized
         and "tcp" in normalized
         and str(int(port)) in normalized
+        and all_profiles
     )
 
 
@@ -65,7 +84,7 @@ def _netsh_arguments(port: int) -> list[str]:
         "action=allow",
         "protocol=TCP",
         f"localport={int(port)}",
-        "profile=private,domain",
+        "profile=any",
         "enable=yes",
     ]
 
@@ -132,13 +151,7 @@ def ensure_gateway_firewall(
     *,
     port: int = 47632,
 ) -> tuple[bool, str]:
-    """Ensure the Host accepts same-network recipient connections.
-
-    Windows requires elevation to change inbound firewall policy. The first Host
-    launch can therefore show one normal UAC prompt. Success is recorded so the
-    check remains quiet on later launches, while the actual firewall rule is
-    still verified before trusting the marker.
-    """
+    """Ensure the Host accepts recipient connections on every network profile."""
 
     if os.name != "nt":
         return True, "not-windows"
@@ -146,7 +159,15 @@ def ensure_gateway_firewall(
     if firewall_rule_ready(port):
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(
-            json.dumps({"rule": RULE_NAME, "port": int(port), "ready": True}) + "\n",
+            json.dumps(
+                {
+                    "rule": RULE_NAME,
+                    "port": int(port),
+                    "profiles": "any",
+                    "ready": True,
+                }
+            )
+            + "\n",
             encoding="utf-8",
         )
         return True, "already-ready"
@@ -154,12 +175,21 @@ def ensure_gateway_firewall(
     success = _add_rule_direct(port) if _is_admin() else _add_rule_elevated(port)
     if not success:
         return False, (
-            "Windows did not allow the DjGoo Voice Gateway firewall rule. "
-            "Local recipients cannot connect until the UAC request is approved."
+            "Windows did not allow the DjGoo Voice Gateway firewall rule on all "
+            "network profiles. Local recipients cannot connect until the UAC "
+            "request is approved."
         )
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(
-        json.dumps({"rule": RULE_NAME, "port": int(port), "ready": True}) + "\n",
+        json.dumps(
+            {
+                "rule": RULE_NAME,
+                "port": int(port),
+                "profiles": "any",
+                "ready": True,
+            }
+        )
+        + "\n",
         encoding="utf-8",
     )
     return True, "created"
