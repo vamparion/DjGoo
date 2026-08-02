@@ -17,7 +17,7 @@ def test_legacy_push_to_talk_values_receive_balanced_effective_tuning(tmp_path) 
     )
 
     assert settings["beam_size"] == 8
-    assert settings["hotkey_beam_size"] == 3
+    assert settings["hotkey_beam_size"] == 1
     assert settings["recognition_retry_beam_size"] == 5
     assert settings["hotkey_vad_filter"] is False
     assert settings["hotkey_min_record_seconds"] == 0.90
