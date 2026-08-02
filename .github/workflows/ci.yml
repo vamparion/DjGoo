@@ -12,10 +12,10 @@ permissions:
 
 jobs:
   test:
-    # Public pull requests must never execute contributor-controlled code on the
-    # owner's self-hosted release machine. Public repositories receive hosted
-    # Actions minutes, while AEGIS remains reserved for trusted main releases.
-    runs-on: windows-latest
+    # Never execute a public fork's contributor-controlled code on AEGIS. A
+    # maintainer must first move reviewed changes onto a branch in this repo.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 25
     steps:
       - name: Check out repository
