@@ -1,4 +1,4 @@
-# Cancellation trigger contract: 1
+# Cancellation trigger contract: 2
 name: Cancel Obsolete PR46 Build
 
 on:
