@@ -1,10 +1,10 @@
-name: DjGoo CI
+name: Public pull request CI
 
 on:
   pull_request:
 
 concurrency:
-  group: djgoo-ci-${{ github.event.pull_request.number }}
+  group: public-pr-ci-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
@@ -12,10 +12,11 @@ permissions:
 
 jobs:
   test:
-    # Never execute a public fork's contributor-controlled code on AEGIS. A
-    # maintainer must first move reviewed changes onto a branch in this repo.
-    if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Windows, X64]
+    # Public repositories receive GitHub-hosted Actions capacity. While this
+    # repository remains private, trusted branch CI performs the same checks on
+    # AEGIS without exposing that machine to forked pull-request code.
+    if: github.event.repository.private == false
+    runs-on: windows-latest
     timeout-minutes: 25
     steps:
       - name: Check out repository
