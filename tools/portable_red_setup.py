@@ -215,6 +215,10 @@ def main() -> int:
     print("Discord requires each host owner to create their own bot application.")
     print("Never send the bot token to another user and never put it in GitHub.")
     print("Enable the Server Members, Presence, and Message Content gateway intents.")
+    print(
+        "Grant the bot Manage Webhooks in the text channel used for DjGoo Link. "
+        "This lets DjGoo create its encrypted outbound bridge without opening router ports."
+    )
 
     if not args.non_interactive and prompt("Open the Discord developer portal now?"):
         webbrowser.open(DISCORD_APPS_URL)
@@ -225,7 +229,8 @@ def main() -> int:
     print("3. Red will ask for the bot token and command prefix on first start.")
     print("4. DjGoo automatically loads Red Audio and the bundled djgoowelcome cog.")
     print("5. Invite the bot using the URL Red prints after it connects.")
-    print("6. Close the test console before using the normal Start button.")
+    print("6. Grant the bot Manage Webhooks in the channel used for /djgoolink pair.")
+    print("7. Close the test console before using the normal Start button.")
     if not args.non_interactive:
         input("\nPress Enter to close setup...")
     return 0
