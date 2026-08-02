@@ -13,6 +13,7 @@ concurrency:
 
 permissions:
   contents: read
+  statuses: write
 
 jobs:
   test:
@@ -64,3 +65,24 @@ jobs:
           python -m pytest -q 2>&1 | Tee-Object -FilePath pytest.log
           $exitCode = $LASTEXITCODE
           if ($exitCode -ne 0) { throw "Test suite failed with exit $exitCode" }
+
+      - name: Publish trusted CI commit status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $state = if ($env:JOB_STATUS -eq "success") { "success" } else { "failure" }
+          $description = if ($state -eq "success") {
+            "Public audit, compilation, and tests passed on AEGIS"
+          } else {
+            "Trusted branch validation failed on AEGIS"
+          }
+          $target = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          gh api --method POST "repos/$env:GITHUB_REPOSITORY/statuses/$env:GITHUB_SHA" `
+            -f state=$state `
+            -f context="DjGoo/trusted-branch-ci" `
+            -f description=$description `
+            -f target_url=$target
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish trusted CI commit status" }
