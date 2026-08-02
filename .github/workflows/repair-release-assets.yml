@@ -12,6 +12,11 @@ on:
         description: Version to repair; blank uses VERSION
         required: false
         type: string
+  push:
+    branches:
+      - main
+    paths:
+      - .release-verification-trigger
 
 permissions:
   contents: write
@@ -24,6 +29,7 @@ jobs:
   repair:
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
