@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -92,29 +93,38 @@ def _add_rule_direct(port: int) -> bool:
 
 
 def _add_rule_elevated(port: int) -> bool:
-    arguments = " ".join(
-        '"' + item.replace('"', '\\"') + '"'
-        for item in _netsh_arguments(port)
+    command = subprocess.list2cmdline(["netsh", *_netsh_arguments(port)])
+    path = Path(tempfile.gettempdir()) / f"djgoo-firewall-{os.getpid()}.cmd"
+    path.write_text(
+        "@echo off\r\n"
+        + command
+        + "\r\nexit /b %errorlevel%\r\n",
+        encoding="utf-8",
     )
-    script = (
-        "$p = Start-Process -FilePath netsh.exe "
-        f"-ArgumentList '{arguments.replace("'", "''")}' "
-        "-Verb RunAs -Wait -PassThru; exit $p.ExitCode"
-    )
-    result = subprocess.run(
-        [
-            "powershell.exe",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            script,
-        ],
-        capture_output=True,
-        text=True,
-        creationflags=_creation_flags(),
-    )
-    return result.returncode == 0 and firewall_rule_ready(port)
+    try:
+        launched = int(
+            ctypes.windll.shell32.ShellExecuteW(
+                None,
+                "runas",
+                str(path),
+                None,
+                str(path.parent),
+                0,
+            )
+        )
+        if launched <= 32:
+            return False
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
+            if firewall_rule_ready(port):
+                return True
+            time.sleep(0.5)
+        return False
+    finally:
+        try:
+            path.unlink()
+        except OSError:
+            pass
 
 
 def ensure_gateway_firewall(
@@ -124,8 +134,8 @@ def ensure_gateway_firewall(
 ) -> tuple[bool, str]:
     """Ensure the Host accepts same-network recipient connections.
 
-    Windows requires elevation to change inbound firewall policy.  The first Host
-    launch can therefore show one normal UAC prompt.  Success is recorded so the
+    Windows requires elevation to change inbound firewall policy. The first Host
+    launch can therefore show one normal UAC prompt. Success is recorded so the
     check remains quiet on later launches, while the actual firewall rule is
     still verified before trusting the marker.
     """
