@@ -169,13 +169,12 @@ def restart_stale_supervisor(
     environment: Mapping[str, str],
     log: Callable[[str], None],
 ) -> bool:
-    """Replace a supervisor loaded before the installed update.
+    """Replace a supervisor that is demonstrably older than the installed runtime.
 
-    Older incremental updaters could leave the background supervisor alive while
-    replacing its source files. The live process then kept the old listener in
-    memory and rejected newly bindable buttons such as F5 or mouse buttons. This
-    check uses the control socket as the authority when PID files are missing,
-    and requires the current portable supervisor capability contract.
+    Version and capability contract are authoritative. Install timestamps are
+    diagnostic only because the updater can restart the new supervisor before
+    the replacement launcher opens. Treating that harmless ordering as stale
+    caused a second launcher to shut down a healthy stack during Redbot startup.
     """
 
     pid, desired_running, running_version = supervisor_identity(root)
@@ -194,7 +193,10 @@ def restart_stale_supervisor(
     version_is_current = bool(running_version and running_version == installed)
     contract_is_current = contract >= EXPECTED_SUPERVISOR_CONTRACT
 
-    if version_is_current and contract_is_current and not started_before_install:
+    # A current version and current capability contract means the in-memory
+    # supervisor is already suitable, even if updater/launcher timestamps were
+    # written in a different order.
+    if version_is_current and contract_is_current:
         return False
 
     reasons: list[str] = []
