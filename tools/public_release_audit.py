@@ -106,6 +106,10 @@ PLACEHOLDER_WORDS = {
     "your-",
 }
 
+SELF_HOSTED_FORK_GUARD = (
+    "github.event.pull_request.head.repo.full_name == github.repository"
+)
+
 
 class PublicReleaseAuditError(RuntimeError):
     pass
@@ -159,6 +163,33 @@ def _read_text(path: Path) -> str | None:
         return None
 
 
+def _audit_workflow(normalized: str, text: str) -> list[str]:
+    failures: list[str] = []
+    lowered = text.lower()
+    if "pull_request_target:" in lowered:
+        failures.append(
+            f"public workflow uses pull_request_target and requires manual security review: {normalized}"
+        )
+    has_pull_request = bool(
+        re.search(r"(?m)^\s*pull_request\s*:", text)
+    )
+    has_self_hosted = "self-hosted" in lowered
+    if has_pull_request and has_self_hosted and SELF_HOSTED_FORK_GUARD not in text:
+        failures.append(
+            "self-hosted pull-request workflow lacks the same-repository fork guard: "
+            + normalized
+        )
+    if (
+        has_pull_request
+        and re.search(r"(?ms)^permissions:\s*.*?contents:\s*write", text)
+    ):
+        failures.append(
+            "pull-request workflow requests write access to repository contents: "
+            + normalized
+        )
+    return failures
+
+
 def audit_public_release(
     root: Path,
     *,
@@ -190,6 +221,8 @@ def audit_public_release(
         text = _read_text(path)
         if text is None:
             continue
+        if lowered.startswith(".github/workflows/") and path.suffix.lower() in {".yml", ".yaml"}:
+            failures.extend(_audit_workflow(normalized, text))
         for label, pattern in SECRET_PATTERNS:
             if pattern.search(text):
                 failures.append(f"possible {label} in tracked file: {normalized}")
@@ -221,7 +254,7 @@ def audit_public_release(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Reject secrets and private runtime state before DjGoo becomes public."
+        description="Reject secrets and unsafe CI/runtime state before DjGoo becomes public."
     )
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     args = parser.parse_args(argv)
@@ -230,7 +263,10 @@ def main(argv: list[str] | None = None) -> int:
         for failure in failures:
             print(f"PUBLIC RELEASE AUDIT FAILED: {failure}")
         return 1
-    print("Public release audit passed: tracked files contain no detected secrets or private runtime state.")
+    print(
+        "Public release audit passed: no detected secrets, private runtime state, "
+        "or unsafe public self-hosted PR workflow."
+    )
     return 0
 
 
