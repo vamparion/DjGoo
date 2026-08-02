@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to build, such as 0.3.0-alpha.13. Leave blank to use VERSION."
+        description: "Version to build, such as 0.3.0-alpha.16. Leave blank to use VERSION."
         required: false
         type: string
       publish:
@@ -12,17 +12,6 @@ on:
         required: true
         default: true
         type: boolean
-  pull_request:
-    paths:
-      - "VERSION"
-      - "launcher/**"
-      - "voice/**"
-      - "local_cogs/djgoowelcome/**"
-      - "relay/**"
-      - "tools/**"
-      - "requirements-*.txt"
-      - "pyproject.toml"
-      - ".github/workflows/portable-release.yml"
   push:
     branches:
       - main
@@ -40,8 +29,8 @@ on:
       - ".github/workflows/portable-release.yml"
 
 concurrency:
-  group: portable-release-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: portable-release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -52,7 +41,7 @@ env:
 
 jobs:
   build:
-    name: Build and validate Windows packages
+    name: Build, validate, and publish Windows packages
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 90
     permissions:
@@ -186,8 +175,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Portable Music Core setup failed with exit $LASTEXITCODE" }
           & "$root/runtime/python/python.exe" "$root/tools/start_redbot_selector.py" --djgoo-check
           if ($LASTEXITCODE -ne 0) { throw "Portable Music Core self-check failed with exit $LASTEXITCODE" }
-          & "$root/runtime/python/python.exe" -c "import voice.command_parser, voice.connection_manager, voice.input_binding, tools.djgoo_stack; print('DjGoo Host imports OK')"
-          if ($LASTEXITCODE -ne 0) { throw "Portable Host import smoke test failed with exit $LASTEXITCODE" }
+          Push-Location $root
+          try {
+            & "$root/runtime/python/python.exe" -c "from voice import djgoo_voice_listener as listener; from voice.input_binding import ButtonWaiter; assert listener.HotkeyWaiter is ButtonWaiter; listener.HotkeyWaiter('F5', poll_seconds=0.01); listener.HotkeyWaiter('MOUSE4', poll_seconds=0.01); print('Original voice listener generalized binding OK')"
+            if ($LASTEXITCODE -ne 0) { throw "Original listener binding smoke test failed with exit $LASTEXITCODE" }
+            & "$root/runtime/python/python.exe" -c "import tools.djgoo_stack as entry; core=entry.configure_core(entry.load_core()); entry.install_recovery_policy(core); entry.install_input_binding(core); specs=core.build_specs(); voice=next(s for s in specs if s.name=='voice'); assert 'voice.djgoo_voice_listener_bound' in voice.command; assert entry.SUPERVISOR_CONTRACT >= 3; print('Portable supervisor binding contract OK')"
+            if ($LASTEXITCODE -ne 0) { throw "Portable supervisor binding smoke test failed with exit $LASTEXITCODE" }
+            & "$root/runtime/python/python.exe" -c "import voice.command_parser, voice.connection_manager, voice.input_binding, tools.djgoo_stack; print('DjGoo Host imports OK')"
+            if ($LASTEXITCODE -ne 0) { throw "Portable Host import smoke test failed with exit $LASTEXITCODE" }
+          } finally {
+            Pop-Location
+          }
           if (!(Test-Path "$root/DjGoo.exe")) { throw "DjGoo.exe is missing" }
           if (!(Test-Path "$root/DjGoo Mini Player.exe")) { throw "DjGoo Mini Player.exe is missing" }
 
@@ -227,7 +225,7 @@ jobs:
           }
           $lines | Set-Content -Encoding ASCII build/SHA256SUMS.txt
 
-          python -c "import json; from pathlib import Path; p=json.loads(Path('build/DjGoo-Host-update.json').read_text()); assert p['product']=='DjGoo Host'; assert p['version']=='$env:DJGOO_VERSION'; assert p['release_tag']=='v$env:DJGOO_VERSION'; print('Host updater manifest verified')"
+          python -c "import json; from pathlib import Path; p=json.loads(Path('build/DjGoo-Host-update.json').read_text()); paths={f['path'] for f in p['files']}; required={'voice/djgoo_voice_listener.py','voice/input_binding.py','tools/djgoo_stack.py','tools/djgoo_stack_core.py','tools/djgoo_portable_stack_entry.py','tools/supervisor_lifecycle.py'}; assert p['product']=='DjGoo Host'; assert p['version']=='$env:DJGOO_VERSION'; assert p['release_tag']=='v$env:DJGOO_VERSION'; assert required <= paths, sorted(required-paths); print('Host updater manifest and binding files verified')"
           if ($LASTEXITCODE -ne 0) { throw "Host updater manifest verification failed with exit $LASTEXITCODE" }
           python -c "import json; from pathlib import Path; p=json.loads(Path('build/DjGoo-Voice-update.json').read_text()); assert p['product']=='DjGoo Voice'; assert p['version']=='$env:DJGOO_VERSION'; assert p['release_tag']=='v$env:DJGOO_VERSION'; assert all(not f['path'].startswith('runtime/') for f in p['files']); print('Voice updater manifest verified')"
           if ($LASTEXITCODE -ne 0) { throw "Voice updater manifest verification failed with exit $LASTEXITCODE" }
