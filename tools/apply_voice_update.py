@@ -15,6 +15,7 @@ from tools.apply_update import (
     apply_staged_update,
     extract_verified_bundle,
     validate_bundle,
+    wait_for_executable_release,
     wait_for_process_exit,
 )
 from tools.portable_environment import clean_subprocess_environment
@@ -81,7 +82,12 @@ def restart_voice(root: Path, log) -> None:
         log(f"Could not restart DjGoo Voice: {exc}")
 
 
-def run_voice_update(root: Path, bundle: Path, manifest_path: Path, parent_pid: int) -> int:
+def run_voice_update(
+    root: Path,
+    bundle: Path,
+    manifest_path: Path,
+    parent_pid: int,
+) -> int:
     root = root.resolve()
     logs = root / "logs"
     logs.mkdir(parents=True, exist_ok=True)
@@ -99,9 +105,15 @@ def run_voice_update(root: Path, bundle: Path, manifest_path: Path, parent_pid: 
         manifest = load_voice_manifest(manifest_path)
         expected = validate_bundle(bundle, manifest)
         version = str(manifest.get("version") or "unknown")
-        backup = root / "data" / "update-backups" / f"{time.strftime('%Y%m%d-%H%M%S')}-{version}"
+        backup = (
+            root
+            / "data"
+            / "update-backups"
+            / f"{time.strftime('%Y%m%d-%H%M%S')}-{version}"
+        )
         extract_verified_bundle(bundle, staging, expected)
         wait_for_process_exit(parent_pid)
+        wait_for_executable_release(root / LAUNCHER_NAME, log=log)
         apply_staged_update(root, staging, manifest, backup)
         _write_json(
             root / "data" / "installed-version.json",
@@ -109,7 +121,9 @@ def run_voice_update(root: Path, bundle: Path, manifest_path: Path, parent_pid: 
                 "schema": 1,
                 "version": version,
                 "release_tag": str(manifest.get("release_tag") or ""),
-                "runtime_generation": int(manifest.get("runtime_generation") or 1),
+                "runtime_generation": int(
+                    manifest.get("runtime_generation") or 1
+                ),
                 "installed_at": time.time(),
             },
         )
@@ -129,7 +143,12 @@ def run_voice_update(root: Path, bundle: Path, manifest_path: Path, parent_pid: 
         restart_voice(root, log)
         return 0
     except BaseException as exc:
-        log("Recipient update failed:\n" + "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+        log(
+            "Recipient update failed:\n"
+            + "".join(
+                traceback.format_exception(type(exc), exc, exc.__traceback__)
+            )
+        )
         try:
             _write_json(
                 result_path,
@@ -139,6 +158,7 @@ def run_voice_update(root: Path, bundle: Path, manifest_path: Path, parent_pid: 
                     "error": str(exc),
                     "started_at": started_at,
                     "finished_at": time.time(),
+                    "staging": str(staging),
                 },
             )
         except OSError:
@@ -148,13 +168,20 @@ def run_voice_update(root: Path, bundle: Path, manifest_path: Path, parent_pid: 
 
 
 def main(argv: Iterable[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Apply a verified DjGoo Voice update.")
+    parser = argparse.ArgumentParser(
+        description="Apply a verified DjGoo Voice update."
+    )
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--parent-pid", type=int, required=True)
     args = parser.parse_args(list(argv) if argv is not None else None)
-    return run_voice_update(args.root, args.bundle, args.manifest, args.parent_pid)
+    return run_voice_update(
+        args.root,
+        args.bundle,
+        args.manifest,
+        args.parent_pid,
+    )
 
 
 if __name__ == "__main__":
