@@ -24,9 +24,7 @@ def _credential_from_data(data: dict[str, Any]) -> RecipientCredential:
             transport="relay",
             relay_url=str(data["relay_url"]),
             room_id=str(data["room_id"]),
-            host_encryption_public_key=str(
-                data["host_encryption_public_key"]
-            ),
+            host_encryption_public_key=str(data["host_encryption_public_key"]),
             host_encryption_fingerprint_sha256=str(
                 data["host_encryption_fingerprint_sha256"]
             ),
@@ -72,9 +70,7 @@ def _credential_for_endpoint(
             discord_user_id=authenticated.discord_user_id,
             guild_id=authenticated.guild_id,
         )
-    raise ValueError(
-        f"Unsupported DjGoo recipient transport: {endpoint.transport}"
-    )
+    raise ValueError(f"Unsupported DjGoo recipient transport: {endpoint.transport}")
 
 
 def _save_connection(
@@ -88,12 +84,38 @@ def _save_connection(
         {
             "schema": CONNECTION_SCHEMA,
             "preferred_transport": preferred_transport,
-            "credentials": [
-                asdict(credential)
-                for credential in credentials
-            ],
+            "credentials": [asdict(credential) for credential in credentials],
         },
     )
+
+
+async def _probed_pairing_endpoints(
+    invite: PairingInvite,
+) -> tuple[PairingEndpoint, ...]:
+    """Place reachable direct routes first without delaying relay fallback."""
+
+    endpoints = list(invite.ordered_endpoints())
+    direct = [item for item in endpoints if item.transport == "direct"]
+    relay = [item for item in endpoints if item.transport == "relay"]
+    if not direct:
+        return tuple(relay)
+
+    results = await asyncio.gather(
+        *(
+            RemoteGatewayTransport.probe(item.endpoint, item.security)
+            for item in direct
+        ),
+        return_exceptions=True,
+    )
+    reachable: list[PairingEndpoint] = []
+    unreachable: list[PairingEndpoint] = []
+    for endpoint, result in zip(direct, results):
+        (reachable if result is True else unreachable).append(endpoint)
+
+    # A relay is more useful than spending several seconds on every route that
+    # already failed a pinned health probe. Keep one unresponsive direct route as
+    # a final safety attempt for unusual proxies, but do it after relay.
+    return tuple([*reachable, *relay, *unreachable[:1]])
 
 
 async def pair_from_invite(
@@ -107,11 +129,8 @@ async def pair_from_invite(
     authenticated: RecipientCredential | None = None
     selected_transport = ""
 
-    # Only one route must redeem a pairing code. Once the Host issues one device
-    # token, that same identity can travel over every pinned route in the invite.
-    # Route-specific codes remain available when a transport consumes a code but
-    # its response is lost before the recipient receives the token.
-    for endpoint in invite.ordered_endpoints():
+    endpoints = await _probed_pairing_endpoints(invite)
+    for endpoint in endpoints:
         pairing_code = endpoint.pairing_code(invite.code)
         try:
             if endpoint.transport == "direct":
@@ -133,22 +152,14 @@ async def pair_from_invite(
             else:
                 continue
         except Exception as exc:
-            errors.append(
-                f"{endpoint.transport}: {type(exc).__name__}: {exc}"
-            )
+            errors.append(f"{endpoint.transport}: {type(exc).__name__}: {exc}")
             continue
         selected_transport = endpoint.transport
         break
 
     if authenticated is None:
-        detail = (
-            "; ".join(errors[-3:])
-            if errors
-            else "no supported connection method"
-        )
-        raise RuntimeError(
-            f"DjGoo could not complete secure pairing ({detail})"
-        )
+        detail = "; ".join(errors[-4:]) if errors else "no supported connection method"
+        raise RuntimeError(f"DjGoo could not complete secure pairing ({detail})")
 
     credentials = [
         _credential_for_endpoint(endpoint, authenticated)
@@ -182,17 +193,12 @@ def load_recipient_credentials(
             if isinstance(item, dict)
         ]
         if not credentials:
-            raise ValueError(
-                "DjGoo recipient connection contains no usable route"
-            )
+            raise ValueError("DjGoo recipient connection contains no usable route")
         preferred = str(
-            data.get("preferred_transport")
-            or credentials[0].transport
+            data.get("preferred_transport") or credentials[0].transport
         ).strip().lower()
         return credentials, preferred
 
-    # Alpha packages stored one credential object directly. Preserve it and let
-    # the next route change migrate the file into the multi-route schema.
     credential = _credential_from_data(data)
     return [credential], credential.transport
 
@@ -204,12 +210,8 @@ def _ordered_credentials(
     return sorted(
         credentials,
         key=lambda credential: (
-            0
-            if credential.transport == preferred_transport
-            else 1,
-            0
-            if credential.transport == "direct"
-            else 1,
+            0 if credential.transport == preferred_transport else 1,
+            0 if credential.transport == "direct" else 1,
         ),
     )
 
@@ -268,10 +270,7 @@ class RecipientFailoverTransport:
             preferred_transport=self.preferred_transport,
         )
 
-    async def send_async(
-        self,
-        item: dict[str, Any],
-    ) -> dict[str, Any]:
+    async def send_async(self, item: dict[str, Any]) -> dict[str, Any]:
         payload = dict(item)
         payload.setdefault("command_id", str(uuid.uuid4()))
         errors: list[str] = []
@@ -283,22 +282,16 @@ class RecipientFailoverTransport:
                 errors.append(f"{name}: {type(exc).__name__}: {exc}")
                 continue
             self._record_preferred(name)
-            return {
-                **result,
-                "transport": name,
-            }
+            return {**result, "transport": name}
         raise RuntimeError(
             "Every secure DjGoo Link route failed ("
-            + "; ".join(errors[-3:])
+            + "; ".join(errors[-4:])
             + ")"
         )
 
     async def status_async(self) -> dict[str, Any]:
         errors: list[str] = []
-        configured = [
-            credential.transport
-            for credential in self.credentials
-        ]
+        configured = [credential.transport for credential in self.credentials]
         for transport in self._ordered_transports():
             name = transport.credential.transport
             try:
@@ -314,7 +307,7 @@ class RecipientFailoverTransport:
             }
         raise RuntimeError(
             "Every secure DjGoo Link route failed ("
-            + "; ".join(errors[-3:])
+            + "; ".join(errors[-4:])
             + ")"
         )
 
@@ -327,20 +320,12 @@ class RecipientFailoverTransport:
 
 def load_recipient_transport(path: Path) -> RecipientFailoverTransport:
     credentials, preferred = load_recipient_credentials(path)
-    return RecipientFailoverTransport(
-        path,
-        credentials,
-        preferred,
-    )
+    return RecipientFailoverTransport(path, credentials, preferred)
 
 
 def recipient_status(path: Path) -> dict[str, Any]:
     credentials, preferred = load_recipient_credentials(path)
-    transport = RecipientFailoverTransport(
-        path,
-        credentials,
-        preferred,
-    )
+    transport = RecipientFailoverTransport(path, credentials, preferred)
     result = transport.status()
     credential = transport.credential
     return {
