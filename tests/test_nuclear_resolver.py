@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import Mock, patch
 
 from voice.nuclear_resolver import NuclearResolver, normalize_nuclear_track
 
@@ -82,6 +83,50 @@ class NuclearResolverTests(unittest.TestCase):
                 "Daft Punk - Aerodynamic official audio",
             ],
         )
+
+    def test_unavailable_endpoint_opens_circuit_and_skips_repeated_waits(self):
+        now = [100.0]
+        probe = Mock(return_value=False)
+        resolver = NuclearResolver(
+            availability_probe=probe,
+            clock=lambda: now[0],
+            failure_backoff_seconds=60,
+        )
+
+        with patch.object(
+            resolver,
+            "_mcp_call",
+            side_effect=AssertionError("MCP call must not run when the local port is closed"),
+        ):
+            self.assertIsNone(resolver.resolve_track("Sandstorm"))
+            self.assertIsNone(resolver.resolve_track("Digital Love"))
+
+        self.assertEqual(probe.call_count, 1)
+
+        now[0] += 61
+        self.assertIsNone(resolver.resolve_track("One More Time"))
+        self.assertEqual(probe.call_count, 2)
+
+    def test_available_endpoint_keeps_nuclear_metadata_path(self):
+        resolver = NuclearResolver(availability_probe=lambda: True)
+        with patch.object(
+            resolver,
+            "_mcp_call",
+            return_value={
+                "tracks": [
+                    {
+                        "title": "Sandstorm",
+                        "durationMs": 227000,
+                        "artists": [{"name": "Darude"}],
+                    }
+                ]
+            },
+        ) as call:
+            track = resolver.resolve_track("Sandstorm")
+
+        self.assertIsNotNone(track)
+        self.assertEqual(track.title, "Sandstorm")
+        call.assert_called_once()
 
 
 if __name__ == "__main__":

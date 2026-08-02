@@ -150,6 +150,26 @@ def prepare_for_whisper(
     return samples.astype(np.float32, copy=False)
 
 
+def pad_audio_to_minimum(
+    audio: np.ndarray,
+    sample_rate: int,
+    minimum_seconds: float,
+) -> np.ndarray:
+    """Add silence around very short commands without changing their signal."""
+
+    samples = np.asarray(audio, dtype=np.float32).reshape(-1)
+    target_samples = max(0, int(float(sample_rate) * max(0.0, float(minimum_seconds))))
+    if samples.size == 0 or samples.size >= target_samples:
+        return samples
+    missing = target_samples - samples.size
+    leading = missing // 2
+    trailing = missing - leading
+    return np.pad(samples, (leading, trailing), mode="constant").astype(
+        np.float32,
+        copy=False,
+    )
+
+
 def audio_metrics(audio: np.ndarray, sample_rate: int) -> AudioMetrics:
     samples = np.asarray(audio, dtype=np.float32).reshape(-1)
     if samples.size == 0:
