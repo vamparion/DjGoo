@@ -297,6 +297,11 @@ def build_update_bundle(
         encoding="utf-8",
     )
     os.replace(temporary, output_manifest)
+    if self_bootstrap:
+        shutil.rmtree(
+            root / "tools" / "pending_launchers",
+            ignore_errors=True,
+        )
     return manifest
 
 
