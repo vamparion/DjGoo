@@ -1,4 +1,4 @@
-# Release publication verification contract: 9
+# Release publication verification contract: 10
 name: Verify Published Release
 
 on:
@@ -33,7 +33,7 @@ concurrency:
 jobs:
   verify:
     if: github.event_name != 'issue_comment' || startsWith(github.event.comment.body, '/verify-release')
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
       - name: Check out main
@@ -44,7 +44,7 @@ jobs:
       - name: Verify release assets and report status
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $version = (Get-Content VERSION -Raw).Trim()
@@ -69,10 +69,10 @@ jobs:
 
           function Invoke-GitHubJson([string]$Method, [string]$Uri, $Payload = $null) {
             if ($null -eq $Payload) {
-              return Invoke-RestMethod -UseBasicParsing -Method $Method -Uri $Uri -Headers $headers
+              return Invoke-RestMethod -Method $Method -Uri $Uri -Headers $headers
             }
             $json = $Payload | ConvertTo-Json -Depth 10
-            return Invoke-RestMethod -UseBasicParsing -Method $Method -Uri $Uri -Headers $headers -ContentType "application/json" -Body $json
+            return Invoke-RestMethod -Method $Method -Uri $Uri -Headers $headers -ContentType "application/json" -Body $json
           }
 
           try {
