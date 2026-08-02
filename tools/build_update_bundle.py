@@ -22,6 +22,9 @@ LAUNCHER_FILES = (
     "DjGoo.exe",
     "DjGoo Mini Player.exe",
 )
+LAUNCHER_DEFERRED_VERSIONS = {
+    "0.3.0-alpha.19",
+}
 ROOT_FILES = (
     "LICENSE",
     "README.md",
@@ -179,6 +182,8 @@ def build_update_bundle(
     normalized_version = str(version).strip().lstrip("v")
     if not VERSION_PATTERN.fullmatch(normalized_version):
         raise UpdateBundleError(f"Invalid update version: {version}")
+    if normalized_version in LAUNCHER_DEFERRED_VERSIONS:
+        include_launchers = False
 
     files = collect_update_files(
         root,
