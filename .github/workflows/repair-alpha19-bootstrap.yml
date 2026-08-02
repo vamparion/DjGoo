@@ -5,7 +5,10 @@ on:
     branches:
       - main
     paths:
+      - tools/apply_update.py
+      - tools/update_apply_engine.py
       - tools/build_update_bundle.py
+      - tests/test_apply_update.py
       - tests/test_build_update_bundle.py
       - .github/workflows/repair-alpha19-bootstrap.yml
       - .alpha19-bootstrap-trigger
@@ -54,9 +57,13 @@ jobs:
           if (-not $hostExe) {
             throw "The published alpha.19 Host package does not contain DjGoo.exe."
           }
+          $hostRoot = $hostExe.Directory.FullName
+          New-Item -ItemType Directory -Force "$hostRoot/tools" | Out-Null
+          Copy-Item tools/apply_update.py "$hostRoot/tools/apply_update.py" -Force
+          Copy-Item tools/update_apply_engine.py "$hostRoot/tools/update_apply_engine.py" -Force
 
           python tools/build_update_bundle.py `
-            --package-root $hostExe.Directory.FullName `
+            --package-root $hostRoot `
             --output-zip build/DjGoo-Host-update.zip `
             --output-manifest build/DjGoo-Host-update.json `
             --version $version `
@@ -65,7 +72,7 @@ jobs:
             throw "Launcher-deferred Host updater build failed."
           }
 
-          python -c "import json,zipfile; from pathlib import Path; p=json.loads(Path('build/DjGoo-Host-update.json').read_text()); names=set(zipfile.ZipFile('build/DjGoo-Host-update.zip').namelist()); assert p['launcher_update_deferred'] is True; assert 'DjGoo.exe' not in names; assert 'DjGoo Mini Player.exe' not in names; assert 'tools/apply_update.py' in names; assert p['release_tag']=='v0.3.0-alpha.19'; print('alpha.19 bootstrap updater verified')"
+          python -c "import json,zipfile; from pathlib import Path; p=json.loads(Path('build/DjGoo-Host-update.json').read_text()); z=zipfile.ZipFile('build/DjGoo-Host-update.zip'); names=set(z.namelist()); assert p['launcher_update_deferred'] is True; assert 'DjGoo.exe' not in names; assert 'DjGoo Mini Player.exe' not in names; assert 'tools/apply_update.py' in names; assert 'tools/update_apply_engine.py' in names; assert z.read('tools/apply_update.py')==Path('tools/apply_update.py').read_bytes(); assert z.read('tools/update_apply_engine.py')==Path('tools/update_apply_engine.py').read_bytes(); assert p['release_tag']=='v0.3.0-alpha.19'; print('alpha.19 lock-aware bootstrap updater verified')"
           if ($LASTEXITCODE -ne 0) {
             throw "The alpha.19 bootstrap bundle contract is invalid."
           }
@@ -92,4 +99,4 @@ jobs:
               throw "Repaired alpha.19 asset is missing or empty: $required"
             }
           }
-          Write-Host "Launcher-deferred alpha.19 updater published and verified."
+          Write-Host "Lock-aware launcher-deferred alpha.19 updater published and verified."
