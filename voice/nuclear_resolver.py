@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import json
 import re
+import socket
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import urlparse
 
 from voice.operational_log import log_event
 
 
 DEFAULT_MCP_URL = "http://127.0.0.1:8800/mcp"
 MAX_TRACK_SECONDS = 10 * 60
+LOCAL_MCP_HOSTS = {"127.0.0.1", "localhost", "::1"}
 BAD_TITLE_RE = re.compile(
     r"\b("
     r"instrumental|karaoke|reaction|interview|lesson|tutorial|similarit(?:y|ies)|"
@@ -63,13 +67,20 @@ class NuclearResolver:
         self,
         *,
         mcp_url: str = DEFAULT_MCP_URL,
-        timeout_seconds: float = 5.0,
+        timeout_seconds: float = 2.0,
+        failure_backoff_seconds: float = 60.0,
         transport: Optional[Callable[[str, Dict[str, Any]], Dict[str, Any]]] = None,
+        availability_probe: Optional[Callable[[], bool]] = None,
+        clock: Callable[[], float] = time.monotonic,
     ):
         self.mcp_url = mcp_url
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = max(0.1, float(timeout_seconds))
+        self.failure_backoff_seconds = max(1.0, float(failure_backoff_seconds))
         self._transport = transport
+        self._availability_probe = availability_probe
+        self._clock = clock
         self._session_id: Optional[str] = None
+        self._unavailable_until = 0.0
 
     def resolve_track(self, query: str) -> Optional[NuclearTrack]:
         log_event("nuclear.track.resolve.start", query=query, mcp_url=self.mcp_url)
@@ -173,11 +184,71 @@ class NuclearResolver:
     def _call(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
         if self._transport is not None:
             return self._transport(method, params)
+
+        now = self._clock()
+        if now < self._unavailable_until:
+            log_event(
+                "nuclear.mcp.circuit.skipped",
+                method=method,
+                retry_in_seconds=round(self._unavailable_until - now, 1),
+            )
+            return {}
+
+        if not self._endpoint_available():
+            self._mark_unavailable(method, "local endpoint probe failed")
+            return {}
+
         try:
-            return self._mcp_call(method, params)
+            result = self._mcp_call(method, params)
         except (OSError, TimeoutError, urllib.error.URLError, ValueError, KeyError) as exc:
             log_event("nuclear.mcp.call.failed", method=method, error=type(exc).__name__, detail=str(exc))
+            self._session_id = None
+            self._mark_unavailable(method, f"{type(exc).__name__}: {exc}")
             return {}
+
+        self._unavailable_until = 0.0
+        return result
+
+    def _endpoint_available(self) -> bool:
+        if self._availability_probe is not None:
+            try:
+                return bool(self._availability_probe())
+            except Exception as exc:
+                log_event(
+                    "nuclear.mcp.probe.failed",
+                    error=type(exc).__name__,
+                    detail=str(exc),
+                )
+                return False
+
+        parsed = urlparse(self.mcp_url)
+        host = str(parsed.hostname or "").strip().lower()
+        if host not in LOCAL_MCP_HOSTS:
+            return True
+        port = int(parsed.port or (443 if parsed.scheme == "https" else 80))
+        timeout = max(0.05, min(0.20, self.timeout_seconds))
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True
+        except OSError as exc:
+            log_event(
+                "nuclear.mcp.probe.failed",
+                host=host,
+                port=port,
+                timeout_seconds=timeout,
+                error=type(exc).__name__,
+                detail=str(exc),
+            )
+            return False
+
+    def _mark_unavailable(self, method: str, detail: str) -> None:
+        self._unavailable_until = self._clock() + self.failure_backoff_seconds
+        log_event(
+            "nuclear.mcp.circuit.open",
+            method=method,
+            detail=detail,
+            backoff_seconds=self.failure_backoff_seconds,
+        )
 
     def _mcp_call(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
         self._ensure_session()
