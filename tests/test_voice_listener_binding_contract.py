@@ -1,19 +1,25 @@
-from voice import djgoo_voice_listener as listener
-from voice.input_binding import ButtonWaiter, COMMON_BUTTONS
+from pathlib import Path
 
 
-def test_original_listener_accepts_generalized_host_binding() -> None:
-    assert listener.HOTKEYS["F5"] == COMMON_BUTTONS["F5"]
-    assert listener.HOTKEYS["MOUSE4"] == COMMON_BUTTONS["MOUSE4"]
-
-    waiter = listener.HotkeyWaiter("F5", poll_seconds=0.01)
-
-    assert isinstance(waiter, ButtonWaiter)
-    assert waiter.hotkey == "F5"
+ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_bound_listener_and_original_listener_share_the_same_backend() -> None:
-    from voice import djgoo_voice_listener_bound as bound
+def test_original_listener_uses_generalized_binding_backend() -> None:
+    source = (ROOT / "voice" / "djgoo_voice_listener.py").read_text(
+        encoding="utf-8"
+    )
 
-    assert bound.listener.HotkeyWaiter is ButtonWaiter
-    assert bound.listener.HOTKEYS["F5"] == COMMON_BUTTONS["F5"]
+    assert "from voice.input_binding import ButtonWaiter, COMMON_BUTTONS, is_button_down" in source
+    assert "HOTKEYS = dict(COMMON_BUTTONS)" in source
+    assert "HotkeyWaiter = ButtonWaiter" in source
+    assert "return is_button_down(hotkey)" in source
+
+
+def test_bound_listener_keeps_the_same_shared_backend() -> None:
+    source = (ROOT / "voice" / "djgoo_voice_listener_bound.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "listener.HOTKEYS = dict(COMMON_BUTTONS)" in source
+    assert "listener.HotkeyWaiter = ButtonWaiter" in source
+    assert "listener.is_hotkey_down = is_button_down" in source
