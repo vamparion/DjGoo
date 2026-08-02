@@ -11,6 +11,7 @@ REQUIRED_FILES = (
     "DjGoo.exe",
     "DjGoo Mini Player.exe",
     "control_panel/state.py",
+    "tools/apply_update.py",
     "tools/djgoo_stack.py",
     "tools/djgoo_stack_core.py",
     "data/installed-version.json",
@@ -39,6 +40,7 @@ def test_incremental_update_contains_mini_player(tmp_path: Path) -> None:
     assert "DjGoo.exe" in relative
     assert "DjGoo Mini Player.exe" in relative
     assert "control_panel/state.py" in relative
+    assert "tools/apply_update.py" in relative
     assert "tools/djgoo_stack.py" in relative
     assert "tools/djgoo_stack_core.py" in relative
 
