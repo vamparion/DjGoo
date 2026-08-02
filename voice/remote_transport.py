@@ -37,9 +37,7 @@ def normalize_fingerprint(value: str) -> str:
         if character in "0123456789abcdef"
     )
     if len(normalized) != 64:
-        raise ValueError(
-            "TLS fingerprint must contain 64 hexadecimal characters"
-        )
+        raise ValueError("TLS fingerprint must contain 64 hexadecimal characters")
     return normalized
 
 
@@ -64,20 +62,46 @@ class RemoteGatewayTransport:
     def __init__(
         self,
         credential: RemoteCredential,
-        timeout_seconds: float = 8.0,
+        timeout_seconds: float = 5.0,
     ) -> None:
         if credential.transport not in {"", "direct"}:
-            raise ValueError(
-                "Direct transport received a non-direct credential"
-            )
+            raise ValueError("Direct transport received a non-direct credential")
         self.credential = credential
         self.timeout_seconds = float(timeout_seconds)
         self._fingerprint = aiohttp.Fingerprint(
-            bytes.fromhex(
-                normalize_fingerprint(
-                    credential.tls_fingerprint_sha256
-                )
-            )
+            bytes.fromhex(normalize_fingerprint(credential.tls_fingerprint_sha256))
+        )
+
+    @classmethod
+    async def probe(
+        cls,
+        gateway_url: str,
+        tls_fingerprint_sha256: str,
+        *,
+        timeout_seconds: float = 1.4,
+    ) -> bool:
+        """Quickly verify that a pinned direct route is reachable."""
+
+        normalized_url = normalize_gateway_url(gateway_url)
+        fingerprint = aiohttp.Fingerprint(
+            bytes.fromhex(normalize_fingerprint(tls_fingerprint_sha256))
+        )
+        timeout = _timeout(timeout_seconds, connect=min(0.9, timeout_seconds))
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(
+                    urljoin(normalized_url, "v1/health"),
+                    ssl=fingerprint,
+                ) as response:
+                    if response.status != 200:
+                        return False
+                    data = await response.json(content_type=None)
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError):
+            return False
+        return bool(
+            isinstance(data, dict)
+            and data.get("service") == "djgoo-link"
+            and data.get("status") == "ok"
         )
 
     @classmethod
@@ -90,20 +114,11 @@ class RemoteGatewayTransport:
     ) -> RemoteCredential:
         normalized_url = normalize_gateway_url(gateway_url)
         fingerprint = normalize_fingerprint(tls_fingerprint_sha256)
-        ssl_fingerprint = aiohttp.Fingerprint(
-            bytes.fromhex(fingerprint)
-        )
-        # A direct LAN path should connect quickly. A short bounded timeout lets
-        # the one-field pairing flow move to its independent encrypted relay code
-        # without making the recipient guess which transport to choose.
-        timeout = _timeout(6.0, connect=3.0)
+        ssl_fingerprint = aiohttp.Fingerprint(bytes.fromhex(fingerprint))
+        timeout = _timeout(4.0, connect=1.5)
         payload = {
             "code": pairing_code,
-            "device_name": (
-                device_name
-                or socket.gethostname()
-                or "DjGoo Voice"
-            ),
+            "device_name": device_name or socket.gethostname() or "DjGoo Voice",
         }
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(
@@ -114,17 +129,14 @@ class RemoteGatewayTransport:
                 text = await response.text()
                 if response.status not in {200, 201}:
                     raise RuntimeError(
-                        f"Pairing failed ({response.status}): "
-                        f"{text[:300]}"
+                        f"Pairing failed ({response.status}): {text[:300]}"
                     )
                 data = json.loads(text)
         returned_fingerprint = normalize_fingerprint(
             str(data.get("tls_fingerprint_sha256") or fingerprint)
         )
         if returned_fingerprint != fingerprint:
-            raise RuntimeError(
-                "DjGoo Link identity changed during pairing"
-            )
+            raise RuntimeError("DjGoo Link identity changed during pairing")
         return RemoteCredential(
             gateway_url=normalized_url.rstrip("/"),
             tls_fingerprint_sha256=fingerprint,
@@ -135,23 +147,16 @@ class RemoteGatewayTransport:
             transport="direct",
         )
 
-    async def send_async(
-        self,
-        item: dict[str, Any],
-    ) -> dict[str, Any]:
+    async def send_async(self, item: dict[str, Any]) -> dict[str, Any]:
         payload = dict(item)
         payload.setdefault("command_id", str(uuid.uuid4()))
         payload["guild_id"] = self.credential.guild_id
-        headers = {
-            "Authorization": f"Bearer {self.credential.device_token}"
-        }
-        timeout = _timeout(self.timeout_seconds, connect=3.0)
+        headers = {"Authorization": f"Bearer {self.credential.device_token}"}
+        timeout = _timeout(self.timeout_seconds, connect=1.5)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(
                 urljoin(
-                    normalize_gateway_url(
-                        self.credential.gateway_url
-                    ),
+                    normalize_gateway_url(self.credential.gateway_url),
                     "v1/command",
                 ),
                 json=payload,
@@ -161,27 +166,18 @@ class RemoteGatewayTransport:
                 text = await response.text()
                 if response.status not in {200, 202}:
                     raise RuntimeError(
-                        f"Command rejected ({response.status}): "
-                        f"{text[:300]}"
+                        f"Command rejected ({response.status}): {text[:300]}"
                     )
                 data = json.loads(text)
-                return (
-                    data
-                    if isinstance(data, dict)
-                    else {"accepted": False}
-                )
+                return data if isinstance(data, dict) else {"accepted": False}
 
     async def status_async(self) -> dict[str, Any]:
-        headers = {
-            "Authorization": f"Bearer {self.credential.device_token}"
-        }
-        timeout = _timeout(self.timeout_seconds, connect=3.0)
+        headers = {"Authorization": f"Bearer {self.credential.device_token}"}
+        timeout = _timeout(self.timeout_seconds, connect=1.5)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(
                 urljoin(
-                    normalize_gateway_url(
-                        self.credential.gateway_url
-                    ),
+                    normalize_gateway_url(self.credential.gateway_url),
                     "v1/device",
                 ),
                 headers=headers,
@@ -190,14 +186,11 @@ class RemoteGatewayTransport:
                 text = await response.text()
                 if response.status != 200:
                     raise RuntimeError(
-                        f"Connection check failed ({response.status}): "
-                        f"{text[:300]}"
+                        f"Connection check failed ({response.status}): {text[:300]}"
                     )
                 data = json.loads(text)
                 if not isinstance(data, dict):
-                    raise RuntimeError(
-                        "Connection check returned invalid data"
-                    )
+                    raise RuntimeError("Connection check returned invalid data")
                 return data
 
     def send(self, item: dict[str, Any]) -> dict[str, Any]:
@@ -207,19 +200,14 @@ class RemoteGatewayTransport:
         return asyncio.run(self.status_async())
 
 
-def save_credential(
-    path: Path,
-    credential: RemoteCredential,
-) -> None:
+def save_credential(path: Path, credential: RemoteCredential) -> None:
     save_protected_json(path, asdict(credential))
 
 
 def load_credential(path: Path) -> RemoteCredential:
     data = load_protected_json(path)
     return RemoteCredential(
-        gateway_url=normalize_gateway_url(
-            str(data["gateway_url"])
-        ).rstrip("/"),
+        gateway_url=normalize_gateway_url(str(data["gateway_url"])).rstrip("/"),
         tls_fingerprint_sha256=normalize_fingerprint(
             str(data["tls_fingerprint_sha256"])
         ),

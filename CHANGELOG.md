@@ -25,6 +25,9 @@ DjGoo follows Semantic Versioning. Dates use ISO 8601.
 - Verified incremental updates inside `DjGoo Voice`, with recipient-specific release manifests and rollback.
 - **Bind a button** capture for keyboard, mouse, function, navigation, and media buttons on both Host and recipient.
 - One shared visual palette for Host and recipient control centers.
+- Automatic Windows Firewall repair for the certificate-pinned local Voice Gateway.
+- Multiple independently pinned LAN endpoints in every DjGoo Link invitation.
+- A post-release repair and verification workflow that regenerates both updater bundles from the published portable packages.
 
 ### Fixed
 
@@ -44,6 +47,9 @@ DjGoo follows Semantic Versioning. Dates use ISO 8601.
 - Added a local Nuclear MCP availability probe and circuit breaker so an inactive Nuclear service no longer adds repeated multi-second delays to play commands.
 - Prevented ordinary `redbot.command.invoke` diagnostics from erasing Music Core's required readiness fields and triggering a supervisor restart during playback commands.
 - Kept the authoritative Redbot heartbeat lease intact while Audio searches and playback commands are still executing.
+- Incomplete GitHub releases now report their missing Host updater assets instead of claiming DjGoo is already up to date.
+- Recipient pairing probes all direct endpoints concurrently and moves to the encrypted relay before waiting on unreachable LAN addresses.
+- Host and recipient windows now size themselves to their DPI-scaled content on first open without adding scrollbars.
 
 ### Changed
 
@@ -57,6 +63,7 @@ DjGoo follows Semantic Versioning. Dates use ISO 8601.
 - Host and recipient updater assets are published together from one validated Windows build.
 - Recipient incremental updates preserve the active embedded Python runtime, pairing credential, local settings, and logs.
 - Push-to-talk recognition uses a beam-one first pass, timestamp-free decoding, and elapsed-time logging while retaining the existing accuracy model and confidence-gated retry.
+- DjGoo Link saves every route from an invitation and automatically prefers the route that most recently succeeded.
 
 ## [0.1.0] - 2026-07-31
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from tkinter import LEFT, X, Frame, Label, StringVar, Tk, messagebox
 
 import launcher.djgoo_host_experience as host_base
+import launcher.djgoo_launcher as launcher_base
 from launcher.djgoo_launcher import START_STATUS_GRACE_SECONDS
 from launcher.djgoo_theme import (
     ACCENT,
@@ -22,6 +23,8 @@ from launcher.djgoo_theme import (
     PANEL_ALT,
     TEXT,
 )
+from launcher.window_layout import fit_window_to_content
+from tools.update_client_guard import check_for_update as guarded_check_for_update
 
 
 # The Host and recipient intentionally use one shared palette module.
@@ -33,12 +36,15 @@ host_base.MUTED = MUTED
 host_base.ACCENT = ACCENT
 host_base.GOOD = GOOD
 host_base.DANGER = DANGER
+# Replace the base launcher's silent incomplete-release behavior.
+launcher_base.check_for_update = guarded_check_for_update
 
 DjGooControlCenter = host_base.DjGooControlCenter
 Layout = host_base.Layout
 application_root = host_base.application_root
 
 from tools.legacy_music_core import migrate_existing_music_core
+from tools.windows_firewall import ensure_gateway_firewall
 from voice.input_binding import capture_next_button, normalize_button_name
 
 
@@ -47,12 +53,14 @@ class DjGooHostControlCenter(DjGooControlCenter):
         self._legacy_music_core_migrated = migrate_existing_music_core(layout.root)
         self.hotkey = StringVar(root, value=self._load_host_hotkey(layout.root))
         self._binding_button = False
+        self._firewall_busy = False
         super().__init__(root, layout)
         if self._legacy_music_core_migrated:
             self.log(
                 "Existing Discord configuration restored from the previous DjGoo installation."
             )
             self.status_text.set("Stopped — existing Discord connection ready")
+        self.root.after(400, self.ensure_local_link)
 
     def _button(
         self,
@@ -101,7 +109,8 @@ class DjGooHostControlCenter(DjGooControlCenter):
 
     def _build(self) -> None:
         super()._build()
-        voice_panel = Frame(self.root, bg=PANEL, padx=18, pady=12)
+        self.activity.configure(height=6)
+        voice_panel = Frame(self.root, bg=PANEL, padx=16, pady=10)
         voice_panel.pack(fill=X, padx=20, pady=(0, 10), before=self.activity)
         Label(
             voice_panel,
@@ -111,11 +120,11 @@ class DjGooHostControlCenter(DjGooControlCenter):
             fg=TEXT,
         ).pack(anchor="w")
         row = Frame(voice_panel, bg=PANEL)
-        row.pack(fill=X, pady=(8, 0))
+        row.pack(fill=X, pady=(7, 0))
         Label(
             row,
-            text="Push-to-talk button",
-            width=20,
+            text="Push-to-talk",
+            width=14,
             anchor="w",
             bg=PANEL,
             fg=MUTED,
@@ -123,7 +132,7 @@ class DjGooHostControlCenter(DjGooControlCenter):
         Label(
             row,
             textvariable=self.hotkey,
-            width=18,
+            width=10,
             anchor="w",
             font=("Segoe UI", 10, "bold"),
             bg=PANEL,
@@ -135,12 +144,24 @@ class DjGooHostControlCenter(DjGooControlCenter):
             self.bind_button,
             accent=True,
         ).pack(side=LEFT)
+        self._button(
+            row,
+            "Repair local link",
+            self.ensure_local_link,
+        ).pack(side=LEFT, padx=(8, 0))
         Label(
             row,
-            text="Press any keyboard or mouse button after selecting Bind.",
+            text="Keyboard and mouse buttons are detected automatically.",
             bg=PANEL,
             fg=MUTED,
         ).pack(side=LEFT, padx=(12, 0))
+        self.root.after_idle(
+            lambda: fit_window_to_content(
+                self.root,
+                minimum_width=820,
+                minimum_height=610,
+            )
+        )
 
     def _redbot_or_stack_active(self) -> bool:
         """Block configuration only for active Music Core work, not its idle supervisor."""
@@ -154,6 +175,42 @@ class DjGooHostControlCenter(DjGooControlCenter):
         if self._requested_desired is False and age < START_STATUS_GRACE_SECONDS:
             return False
         return bool(state.get("desired_running"))
+
+    def ensure_local_link(self) -> None:
+        if self._firewall_busy:
+            return
+        self._firewall_busy = True
+        self.log("Checking the Windows local-link firewall rule…")
+        threading.Thread(
+            target=self._firewall_worker,
+            name="djgoo-firewall-repair",
+            daemon=True,
+        ).start()
+
+    def _firewall_worker(self) -> None:
+        try:
+            success, detail = ensure_gateway_firewall(self.layout.root, port=47632)
+        except Exception as exc:
+            success, detail = False, f"{type(exc).__name__}: {exc}"
+        self.root.after(
+            0,
+            lambda: self._finish_firewall_check(success, detail),
+        )
+
+    def _finish_firewall_check(self, success: bool, detail: str) -> None:
+        self._firewall_busy = False
+        if success:
+            if detail == "created":
+                self.log("Local DjGoo Voice connections are allowed through Windows Firewall.")
+            else:
+                self.log("Local DjGoo Voice firewall rule is ready.")
+            return
+        self.log("Local link needs attention: " + detail)
+        messagebox.showwarning(
+            "DjGoo Link",
+            detail,
+            parent=self.root,
+        )
 
     def bind_button(self) -> None:
         if self._binding_button:
