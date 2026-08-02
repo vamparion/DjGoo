@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from tkinter import LEFT, X, Frame, Label, Tk
 
 from launcher.djgoo_voice_launcher import (
@@ -10,11 +11,16 @@ from launcher.djgoo_voice_launcher import (
     VoiceRemoteLauncher,
     application_root,
 )
+from launcher.frozen_shutdown import install_frozen_shutdown
 from launcher.window_layout import fit_window_to_content
 
 
 class DjGooVoiceExperience(VoiceRemoteLauncher):
     """Add explicit request timing to the secure recipient controller."""
+
+    def __init__(self, root: Tk, project_root: Path) -> None:
+        super().__init__(root, project_root)
+        install_frozen_shutdown(self.root)
 
     def _build(self) -> None:
         super()._build()
