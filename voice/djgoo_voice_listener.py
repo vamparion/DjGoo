@@ -13,7 +13,12 @@ import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
 
-from voice.audio_capture import PushToTalkAudioCapture, audio_metrics, prepare_for_whisper
+from voice.audio_capture import (
+    PushToTalkAudioCapture,
+    audio_metrics,
+    pad_audio_to_minimum,
+    prepare_for_whisper,
+)
 from voice.command_queue import append_queue_item, command_to_queue_item
 from voice.command_parser import parse_command
 from voice.corrections import apply_corrections, correction_hotwords, load_corrections
@@ -95,7 +100,9 @@ def transcribe(
     vad_filter: bool,
     vad_min_silence_ms: int,
     vad_speech_pad_ms: int,
+    pass_name: str = "primary",
 ) -> SpeechResult:
+    started = time.perf_counter()
     segments, info = model.transcribe(
         audio,
         language=language,
@@ -110,10 +117,25 @@ def transcribe(
         condition_on_previous_text=False,
         initial_prompt=initial_prompt or None,
         hotwords=hotwords or None,
+        without_timestamps=True,
     )
     completed = list(segments)
+    elapsed_ms = round((time.perf_counter() - started) * 1000)
     text = " ".join(segment.text.strip() for segment in completed if segment.text.strip()).strip()
     if not completed:
+        log_event(
+            "voice.transcript.metrics",
+            pass_name=pass_name,
+            language=getattr(info, "language", language),
+            language_probability=getattr(info, "language_probability", None),
+            avg_logprob=None,
+            no_speech_prob=1.0,
+            duration_seconds=0.0,
+            elapsed_ms=elapsed_ms,
+            beam_size=beam_size,
+            vad_filter=vad_filter,
+            text_present=False,
+        )
         return SpeechResult(text="", avg_logprob=float("-inf"), no_speech_prob=1.0, duration_seconds=0.0)
 
     weights = [max(0.05, float(segment.end) - float(segment.start)) for segment in completed]
@@ -123,13 +145,37 @@ def transcribe(
     duration = max(float(segment.end) for segment in completed)
     log_event(
         "voice.transcript.metrics",
+        pass_name=pass_name,
         language=getattr(info, "language", language),
         language_probability=getattr(info, "language_probability", None),
         avg_logprob=round(avg_logprob, 4),
         no_speech_prob=round(no_speech_prob, 4),
         duration_seconds=round(duration, 3),
+        elapsed_ms=elapsed_ms,
+        beam_size=beam_size,
+        vad_filter=vad_filter,
+        text_present=bool(text),
     )
     return SpeechResult(text=text, avg_logprob=avg_logprob, no_speech_prob=no_speech_prob, duration_seconds=duration)
+
+
+def result_is_acceptable(
+    result: SpeechResult,
+    *,
+    min_avg_logprob: float,
+    max_no_speech_prob: float,
+) -> bool:
+    return bool(
+        result.text
+        and result.avg_logprob >= min_avg_logprob
+        and result.no_speech_prob <= max_no_speech_prob
+    )
+
+
+def result_score(result: SpeechResult) -> float:
+    if not result.text:
+        return float("-inf")
+    return float(result.avg_logprob) - float(result.no_speech_prob)
 
 
 def feedback_sound(kind: str, enabled: bool) -> None:
@@ -170,6 +216,9 @@ def run(project_root: Path) -> None:
         input_device=input_device_summary(input_device),
         correction_count=len(corrections),
         vad_filter=settings["vad_filter"],
+        hotkey_vad_filter=settings["hotkey_vad_filter"],
+        beam_size=settings["beam_size"],
+        hotkey_beam_size=settings["hotkey_beam_size"],
     )
 
     print(
@@ -215,7 +264,7 @@ def run(project_root: Path) -> None:
                 log_event("voice.hotkey.detected", hotkey=settings["hotkey"])
                 raw_audio = hotkey_waiter.capture_while_held(
                     capture,
-                    min_seconds=settings["min_record_seconds"],
+                    min_seconds=settings["hotkey_min_record_seconds"],
                     max_seconds=settings["max_record_seconds"],
                 )
                 mode = "hotkey"
@@ -225,10 +274,19 @@ def run(project_root: Path) -> None:
 
             audio = prepare_for_whisper(raw_audio, capture.sample_rate)
             metrics = audio_metrics(audio, 16_000)
+            if mode == "hotkey":
+                recognition_audio = pad_audio_to_minimum(
+                    audio,
+                    16_000,
+                    settings["short_audio_pad_seconds"],
+                )
+            else:
+                recognition_audio = audio
             log_event(
                 "voice.audio.recorded",
                 mode=mode,
                 seconds=round(metrics.seconds, 3),
+                recognition_seconds=round(len(recognition_audio) / 16_000, 3),
                 rms=round(metrics.rms, 6),
                 peak=round(metrics.peak, 6),
                 stream_status=capture.last_status,
@@ -242,22 +300,66 @@ def run(project_root: Path) -> None:
                 feedback_sound("rejected", settings["feedback_beeps"])
                 continue
 
+            if mode == "hotkey":
+                primary_beam_size = settings["hotkey_beam_size"]
+                primary_vad_filter = settings["hotkey_vad_filter"]
+            else:
+                primary_beam_size = settings["beam_size"]
+                primary_vad_filter = settings["vad_filter"]
+
             result = transcribe(
                 model,
-                audio,
+                recognition_audio,
                 language=settings["language"],
-                beam_size=settings["beam_size"],
+                beam_size=primary_beam_size,
                 hotwords=dynamic_hotwords,
                 initial_prompt=settings["initial_prompt"],
-                vad_filter=settings["vad_filter"],
+                vad_filter=primary_vad_filter,
                 vad_min_silence_ms=settings["vad_min_silence_ms"],
                 vad_speech_pad_ms=settings["vad_speech_pad_ms"],
+                pass_name="primary",
             )
+            accepted = result_is_acceptable(
+                result,
+                min_avg_logprob=settings["min_avg_logprob"],
+                max_no_speech_prob=settings["max_no_speech_prob"],
+            )
+
+            if mode == "hotkey" and not accepted:
+                retry_reason = "empty" if not result.text else "low_confidence"
+                retry_beam_size = settings["recognition_retry_beam_size"]
+                log_event(
+                    "voice.transcript.retry",
+                    reason=retry_reason,
+                    primary_beam_size=primary_beam_size,
+                    retry_beam_size=retry_beam_size,
+                )
+                retry = transcribe(
+                    model,
+                    recognition_audio,
+                    language=settings["language"],
+                    beam_size=retry_beam_size,
+                    hotwords=dynamic_hotwords,
+                    initial_prompt=settings["initial_prompt"],
+                    vad_filter=False,
+                    vad_min_silence_ms=settings["vad_min_silence_ms"],
+                    vad_speech_pad_ms=settings["vad_speech_pad_ms"],
+                    pass_name="retry",
+                )
+                retry_accepted = result_is_acceptable(
+                    retry,
+                    min_avg_logprob=settings["min_avg_logprob"],
+                    max_no_speech_prob=settings["max_no_speech_prob"],
+                )
+                if retry_accepted or result_score(retry) > result_score(result):
+                    result = retry
+                    accepted = retry_accepted
+
             if not result.text:
                 log_event("voice.transcript.empty")
                 feedback_sound("rejected", settings["feedback_beeps"])
                 continue
-            if result.avg_logprob < settings["min_avg_logprob"] or result.no_speech_prob > settings["max_no_speech_prob"]:
+            if not accepted:
                 log_event(
                     "voice.transcript.rejected",
                     transcript=result.text,
