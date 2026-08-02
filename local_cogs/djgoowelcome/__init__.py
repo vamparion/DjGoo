@@ -87,6 +87,11 @@ def _install_gateway_firewall_repair() -> None:
             ready=self._djgoo_gateway_ready,
             socket_count=len(sockets or ()),
         )
+        if gateway is not None and not self._djgoo_gateway_ready:
+            # The legacy gateway object assigns _site before awaiting the bind.
+            # Clear that stale marker so invite generation cannot mistake an
+            # allocated-but-unbound TCPSite for a usable direct route.
+            gateway._site = None
         if gateway is None or not self._djgoo_gateway_ready:
             return
         discovery = getattr(self, "_djgoo_lan_discovery", None)
