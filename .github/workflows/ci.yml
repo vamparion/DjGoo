@@ -46,6 +46,13 @@ jobs:
           python -m pip install --requirement requirements-dev.txt
           if ($LASTEXITCODE -ne 0) { throw "Test dependency installation failed with exit $LASTEXITCODE" }
 
+      - name: Audit public-release safety
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          python tools/public_release_audit.py
+          if ($LASTEXITCODE -ne 0) { throw "Public release audit failed with exit $LASTEXITCODE" }
+
       - name: Compile Python sources
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
