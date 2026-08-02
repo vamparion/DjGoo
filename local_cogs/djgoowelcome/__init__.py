@@ -50,30 +50,38 @@ def _install_gateway_firewall_repair() -> None:
                 discovery_port=DISCOVERY_PORT,
             )
 
-            discovery = getattr(self, "_djgoo_lan_discovery", None)
-            if discovery is None:
-                discovery = LanDiscoveryResponder(
-                    gateway_port=int(gateway.port),
-                    fingerprint=gateway.fingerprint,
-                    listen_port=DISCOVERY_PORT,
-                )
-                try:
-                    await discovery.start()
-                except Exception as exc:
-                    log_event(
-                        "voice.gateway.discovery_failed",
-                        error=type(exc).__name__,
-                        detail=str(exc),
-                        port=DISCOVERY_PORT,
-                    )
-                else:
-                    self._djgoo_lan_discovery = discovery
-                    log_event(
-                        "voice.gateway.discovery_ready",
-                        port=DISCOVERY_PORT,
-                        gateway_port=int(gateway.port),
-                    )
+        # Do not advertise a Host until the certificate-pinned TCP gateway has
+        # completed its own startup. A discovery response must mean that the
+        # returned address and port are ready for the recipient's TLS probe.
         await original_start_gateway(self)
+
+        gateway = self._gateway
+        if gateway is None:
+            return
+        discovery = getattr(self, "_djgoo_lan_discovery", None)
+        if discovery is not None:
+            return
+        discovery = LanDiscoveryResponder(
+            gateway_port=int(gateway.port),
+            fingerprint=gateway.fingerprint,
+            listen_port=DISCOVERY_PORT,
+        )
+        try:
+            await discovery.start()
+        except Exception as exc:
+            log_event(
+                "voice.gateway.discovery_failed",
+                error=type(exc).__name__,
+                detail=str(exc),
+                port=DISCOVERY_PORT,
+            )
+        else:
+            self._djgoo_lan_discovery = discovery
+            log_event(
+                "voice.gateway.discovery_ready",
+                port=DISCOVERY_PORT,
+                gateway_port=int(gateway.port),
+            )
 
     def cog_unload(self):
         discovery = getattr(self, "_djgoo_lan_discovery", None)
