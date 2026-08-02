@@ -62,4 +62,5 @@ def test_long_audio_is_not_copied_or_padded() -> None:
 
     padded = pad_audio_to_minimum(audio, sample_rate=8, minimum_seconds=1.0)
 
-    assert padded is audio
+    assert np.shares_memory(padded, audio)
+    np.testing.assert_array_equal(padded, audio)
