@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 
 from redbot.core import commands
@@ -22,6 +23,25 @@ TIMED_REQUEST_INTENTS = {"play_now", "queue_request"}
 cog_module.EnhancedDjGooAudioBridge = RemoteAwareDjGooAudioBridge
 cog_module.JOINING_REMOTE_INTENTS.update(TIMED_REQUEST_INTENTS)
 DjGooWelcome = cog_module.DjGooWelcome
+
+
+def _install_complete_gateway_settings() -> None:
+    if bool(getattr(DjGooWelcome, "_djgoo_complete_gateway_settings", False)):
+        return
+
+    def _gateway_settings(self) -> dict[str, object]:
+        path = self._secrets_path()
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        configured = payload.get("voice_gateway", {})
+        return configured if isinstance(configured, dict) else {}
+
+    DjGooWelcome._gateway_settings = _gateway_settings
+    DjGooWelcome._djgoo_complete_gateway_settings = True
 
 
 def _install_gateway_firewall_repair() -> None:
@@ -56,7 +76,7 @@ def _install_gateway_firewall_repair() -> None:
         await original_start_gateway(self)
 
         gateway = self._gateway
-        if gateway is None:
+        if gateway is None or getattr(gateway, "_site", None) is None:
             return
         discovery = getattr(self, "_djgoo_lan_discovery", None)
         if discovery is not None:
@@ -132,6 +152,7 @@ def _install_timed_chat_routing() -> None:
     DjGooWelcome._djgoo_timed_chat_routing = True
 
 
+_install_complete_gateway_settings()
 _install_gateway_firewall_repair()
 _install_timed_chat_routing()
 
