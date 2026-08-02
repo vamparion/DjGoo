@@ -20,7 +20,8 @@ jobs:
   test:
     if: >-
       github.event_name == 'pull_request' &&
-      !startsWith(github.event.pull_request.title, 'Cancel obsolete portable release')
+      !startsWith(github.event.pull_request.title, 'Cancel obsolete portable release') &&
+      !startsWith(github.event.pull_request.title, 'Verify published alpha.20 release')
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 20
     steps:
