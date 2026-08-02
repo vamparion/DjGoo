@@ -1,0 +1,23 @@
+# Cancellation trigger contract: 1
+name: Cancel Obsolete PR46 Build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/cancel-obsolete-pr46.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portable-release-46
+  cancel-in-progress: true
+
+jobs:
+  replacement:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm obsolete build replacement
+        run: echo "Obsolete PR 46 build has been replaced."
