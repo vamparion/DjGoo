@@ -1,4 +1,4 @@
-# Release publication verification contract: 5
+# Release publication verification contract: 6
 name: Verify Published Release
 
 on:
@@ -89,7 +89,7 @@ jobs:
           cat > verification.md <<EOF
           Automated verifier started for **${tag}**.
 
-          Started: `$(date -u +%Y-%m-%dT%H:%M:%SZ)`
+          Started: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 
           Checking the GitHub release and all required updater/full-package assets now.
           EOF
@@ -127,10 +127,10 @@ jobs:
               cat > verification.md <<EOF
           **Verified complete: ${tag}**
 
-          Published: `${published_at}`
-          Verified: `$(date -u +%Y-%m-%dT%H:%M:%SZ)`
-          Release ID: `${release_id}`
-          Target: `${target}`
+          Published: ${published_at}
+          Verified: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          Release ID: ${release_id}
+          Target: ${target}
 
           All required assets are present, uploaded, and non-empty:
 
@@ -150,7 +150,7 @@ jobs:
               cat > verification.md <<EOF
           Automated verification is still running for **${tag}**.
 
-          Last checked: `$(date -u +%Y-%m-%dT%H:%M:%SZ)`
+          Last checked: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 
           Missing or incomplete required assets:
 
