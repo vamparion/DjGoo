@@ -35,6 +35,8 @@ DjGoo follows Semantic Versioning. Dates use ISO 8601.
 - Preserved and recognized existing Discord/Music Core state when upgrading or moving a portable DjGoo folder.
 - Stopped treating the idle background supervisor as an active Music Core process when changing Discord configuration.
 - Kept newly bundled Audio Engine files when migrating older user configuration.
+- Replaced the obsolete `redbot.exe` diagnostics probe with the portable supervisor PID and heartbeat state.
+- Health failures now identify the exact Audio Engine, Music Core, or Voice Control component and expose its current error logs.
 
 ### Changed
 
