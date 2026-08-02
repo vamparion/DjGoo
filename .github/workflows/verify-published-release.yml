@@ -1,4 +1,4 @@
-# Release publication verification contract: 10
+# Release publication verification contract: 11
 name: Verify Published Release
 
 on:
@@ -17,9 +17,6 @@ on:
       - ".github/workflows/portable-release.yml"
       - ".github/workflows/verify-published-release.yml"
   workflow_dispatch:
-  issue_comment:
-    types:
-      - created
 
 permissions:
   contents: read
@@ -32,8 +29,7 @@ concurrency:
 
 jobs:
   verify:
-    if: github.event_name != 'issue_comment' || startsWith(github.event.comment.body, '/verify-release')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 35
     steps:
       - name: Check out main
@@ -41,10 +37,10 @@ jobs:
         with:
           ref: main
 
-      - name: Verify release assets and report status
+      - name: Verify release assets
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: pwsh
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           $version = (Get-Content VERSION -Raw).Trim()
@@ -65,122 +61,84 @@ jobs:
             "X-GitHub-Api-Version" = "2022-11-28"
             "User-Agent" = "DjGoo-Release-Verifier"
           }
-          $apiRoot = "https://api.github.com/repos/$env:GITHUB_REPOSITORY"
+          $api = "https://api.github.com/repos/$env:GITHUB_REPOSITORY"
 
-          function Invoke-GitHubJson([string]$Method, [string]$Uri, $Payload = $null) {
+          function Request([string]$Method, [string]$Uri, $Payload = $null) {
             if ($null -eq $Payload) {
-              return Invoke-RestMethod -Method $Method -Uri $Uri -Headers $headers
+              return Invoke-RestMethod -UseBasicParsing -Method $Method -Uri $Uri -Headers $headers
             }
-            $json = $Payload | ConvertTo-Json -Depth 10
-            return Invoke-RestMethod -Method $Method -Uri $Uri -Headers $headers -ContentType "application/json" -Body $json
+            return Invoke-RestMethod -UseBasicParsing -Method $Method -Uri $Uri -Headers $headers -ContentType "application/json" -Body ($Payload | ConvertTo-Json -Depth 10)
           }
 
-          try {
-            $queued = Invoke-GitHubJson "GET" "$apiRoot/actions/runs?status=queued&per_page=100"
-            foreach ($run in @($queued.workflow_runs)) {
-              if ([string]$run.id -eq [string]$env:GITHUB_RUN_ID) { continue }
-              try {
-                Invoke-GitHubJson "POST" "$apiRoot/actions/runs/$($run.id)/cancel" | Out-Null
-                Write-Host "Cancelled obsolete queued run $($run.id)"
-              } catch {
-                Write-Host "Could not cancel run $($run.id): $($_.Exception.Message)"
-              }
-            }
-          } catch {
-            Write-Host "Could not enumerate queued runs: $($_.Exception.Message)"
-          }
-
-          $issues = @(Invoke-GitHubJson "GET" "$apiRoot/issues?state=all&per_page=100")
-          $issue = $issues | Where-Object {
-            [string]$_.title -eq $title -and $null -eq $_.pull_request
-          } | Select-Object -First 1
+          $issues = @(Request GET "$api/issues?state=all&per_page=100")
+          $issue = $issues | Where-Object { [string]$_.title -eq $title -and $null -eq $_.pull_request } | Select-Object -First 1
           if ($null -eq $issue) {
-            $issue = Invoke-GitHubJson "POST" "$apiRoot/issues" @{
-              title = $title
-              body = "Automated release verification has started."
-            }
+            $issue = Request POST "$api/issues" @{ title = $title; body = "Automated verification is starting." }
           }
           $issueNumber = [int]$issue.number
 
-          function Update-VerificationIssue([string]$Body, [bool]$Complete) {
-            $payload = @{
-              body = $Body
-              state = if ($Complete) { "closed" } else { "open" }
-            }
+          function Report([string]$Body, [bool]$Complete) {
+            $payload = @{ body = $Body; state = if ($Complete) { "closed" } else { "open" } }
             if ($Complete) { $payload.state_reason = "completed" }
-            Invoke-GitHubJson "PATCH" "$apiRoot/issues/$issueNumber" $payload | Out-Null
+            Request PATCH "$api/issues/$issueNumber" $payload | Out-Null
           }
 
-          $started = [DateTimeOffset]::UtcNow.ToString("o")
-          Update-VerificationIssue @"
-          Automated verifier started for **$tag**.
-
-          Started: $started
-
-          Checking the GitHub release and all required updater/full-package assets now.
-          "@ $false
+          Report "Automated verifier started for **$tag** at $([DateTimeOffset]::UtcNow.ToString('o'))." $false
 
           for ($attempt = 1; $attempt -le 180; $attempt++) {
             $release = $null
             $missing = @($required)
-            $assetLines = @()
+            $lines = @()
             try {
-              $release = Invoke-GitHubJson "GET" "$apiRoot/releases/tags/$tag"
+              $release = Request GET "$api/releases/tags/$tag"
               $uploaded = @{}
               foreach ($asset in @($release.assets)) {
                 $name = [string]$asset.name
                 $size = [int64]$asset.size
                 $state = [string]$asset.state
-                if (-not [string]::IsNullOrWhiteSpace($name) -and $size -gt 0 -and (!$state -or $state -eq "uploaded")) {
-                  $uploaded[$name] = $true
-                }
-                $assetLines += "- ``$name`` - $size bytes - $state"
+                if ($name -and $size -gt 0 -and (!$state -or $state -eq "uploaded")) { $uploaded[$name] = $true }
+                $lines += "- ``$name`` — $size bytes — $state"
               }
               $missing = @($required | Where-Object { -not $uploaded.ContainsKey($_) })
             } catch {
               Write-Host "Waiting for $tag: $($_.Exception.Message)"
             }
 
-            $complete = $null -ne $release -and $missing.Count -eq 0
-            if ($complete) {
-              $verified = [DateTimeOffset]::UtcNow.ToString("o")
+            if ($null -ne $release -and $missing.Count -eq 0) {
               $body = @"
           **Verified complete: $tag**
 
           Published: $($release.published_at)
-          Verified: $verified
+          Verified: $([DateTimeOffset]::UtcNow.ToString("o"))
           Release ID: $($release.id)
           Target: $($release.target_commitish)
 
-          All required assets are present, uploaded, and non-empty:
+          All required assets are uploaded and non-empty:
 
-          $($assetLines -join "`n")
+          $($lines -join "`n")
           "@
-              Update-VerificationIssue $body $true
-              Write-Host "All required release assets are uploaded and verified."
+              Report $body $true
+              Write-Host "All required assets verified."
               exit 0
             }
 
             if ($attempt -eq 1 -or $attempt % 6 -eq 0) {
-              $checked = [DateTimeOffset]::UtcNow.ToString("o")
               $missingLines = @($missing | ForEach-Object { "- ``$_``" })
               $body = @"
           Automated verification is still running for **$tag**.
 
-          Last checked: $checked
+          Checked: $([DateTimeOffset]::UtcNow.ToString("o"))
 
-          Missing or incomplete required assets:
-
+          Missing or incomplete:
           $($missingLines -join "`n")
 
-          Assets currently reported by GitHub:
-
-          $($assetLines -join "`n")
+          GitHub currently reports:
+          $($lines -join "`n")
           "@
-              Update-VerificationIssue $body $false
+              Report $body $false
             }
             Start-Sleep -Seconds 10
           }
 
-          Update-VerificationIssue "Verification timed out after 30 minutes for **$tag**." $false
+          Report "Verification timed out after 30 minutes for **$tag**." $false
           throw "$tag did not become complete within 30 minutes."
