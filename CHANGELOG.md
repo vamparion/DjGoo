@@ -31,6 +31,7 @@ DjGoo follows Semantic Versioning. Dates use ISO 8601.
 - Certificate-pinned recipient-led UDP LAN discovery that derives the usable Host address from the reply source instead of trusting adapter enumeration.
 - Program-scoped DjGoo Voice outbound firewall rules for UDP discovery and TCP gateway connections on all Windows profiles.
 - A public-release audit that rejects detected credentials, private runtime paths, missing public project documents, and incomplete ignore rules.
+- Automatic provisioning of an end-to-end encrypted Discord-backed outbound route when the bot has **Manage Webhooks** in the pairing channel.
 
 ### Fixed
 
@@ -56,6 +57,9 @@ DjGoo follows Semantic Versioning. Dates use ISO 8601.
 - Recipient pairing no longer treats a valid-looking ASTER, VPN, virtual-adapter, stale, or multi-NIC address as authoritative.
 - Firewall verification uses structured Windows Firewall metadata when available instead of depending only on localized `netsh` field labels.
 - Disabled Windows Firewall profiles no longer cause an unnecessary UAC repair failure.
+- Complete `voice_gateway` settings are preserved instead of being discarded by the legacy notification-only secrets loader.
+- DjGoo no longer creates a LAN-only invite when no reliable outbound route is available.
+- LAN discovery no longer advertises a Host whose certificate-pinned TCP gateway failed to bind.
 
 ### Changed
 
@@ -71,6 +75,7 @@ DjGoo follows Semantic Versioning. Dates use ISO 8601.
 - Push-to-talk recognition uses a beam-one first pass, timestamp-free decoding, and elapsed-time logging while retaining the existing accuracy model and confidence-gated retry.
 - DjGoo Link saves every route from an invitation and automatically prefers the route that most recently succeeded.
 - Public GitHub releases update without a repository token; private forks retain the encrypted read-only token path.
+- Pairing now uses the outbound encrypted route first. LAN discovery and direct TLS are optional backups rather than the primary dependency.
 
 ## [0.1.0] - 2026-07-31
 
