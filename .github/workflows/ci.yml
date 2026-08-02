@@ -18,7 +18,9 @@ permissions:
 
 jobs:
   test:
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request' &&
+      !startsWith(github.event.pull_request.title, 'Cancel obsolete portable release')
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 20
     steps:
