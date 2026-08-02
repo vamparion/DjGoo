@@ -2,15 +2,9 @@ name: DjGoo CI
 
 on:
   pull_request:
-  # Keep the main push event only to cancel any older queued main CI run through
-  # the concurrency group below. The test job itself is PR-only because the
-  # Portable Releases workflow runs the same full suite before publishing.
-  push:
-    branches:
-      - main
 
 concurrency:
-  group: djgoo-ci-${{ github.event.pull_request.number || github.ref }}
+  group: djgoo-ci-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
@@ -18,12 +12,11 @@ permissions:
 
 jobs:
   test:
-    if: >-
-      github.event_name == 'pull_request' &&
-      !startsWith(github.event.pull_request.title, 'Cancel obsolete portable release') &&
-      !startsWith(github.event.pull_request.title, 'Verify published alpha.20 release')
-    runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 20
+    # Public pull requests must never execute contributor-controlled code on the
+    # owner's self-hosted release machine. Public repositories receive hosted
+    # Actions minutes, while AEGIS remains reserved for trusted main releases.
+    runs-on: windows-latest
+    timeout-minutes: 25
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
