@@ -114,7 +114,7 @@ class PublicReleaseAuditError(RuntimeError):
 def _git_tracked_files(root: Path) -> list[str] | None:
     try:
         result = subprocess.run(
-            ["git", "ls-files", "-z"],
+            ["git", "-c", "safe.directory=*", "ls-files", "-z"],
             cwd=root,
             capture_output=True,
             check=False,
@@ -130,15 +130,42 @@ def _git_tracked_files(root: Path) -> list[str] | None:
     ]
 
 
+def _ignored_fallback_paths(root: Path) -> tuple[set[str], tuple[str, ...]]:
+    gitignore = _read_text(root / ".gitignore") or ""
+    exact: set[str] = set()
+    prefixes: list[str] = []
+    for raw in gitignore.splitlines():
+        value = raw.strip().replace("\\", "/")
+        if not value or value.startswith(("#", "!")):
+            continue
+        value = value.lstrip("/")
+        if value.endswith("/"):
+            prefixes.append(value)
+        else:
+            exact.add(value)
+    return exact, tuple(prefixes)
+
+
 def tracked_files(root: Path) -> list[str]:
     tracked = _git_tracked_files(root)
     if tracked is not None:
         return sorted(dict.fromkeys(tracked))
-    return sorted(
-        path.relative_to(root).as_posix()
-        for path in root.rglob("*")
-        if path.is_file() and ".git" not in path.parts
-    )
+
+    # A source archive has no Git index. In that case inspect source-like files,
+    # but respect ignored runtime directories so locally generated logs, models,
+    # credentials, and caches are not misclassified as tracked repository data.
+    ignored_exact, ignored_prefixes = _ignored_fallback_paths(root)
+    result: list[str] = []
+    for path in root.rglob("*"):
+        if not path.is_file() or ".git" in path.parts:
+            continue
+        relative = path.relative_to(root).as_posix()
+        if relative in ignored_exact:
+            continue
+        if any(relative.startswith(prefix) for prefix in ignored_prefixes):
+            continue
+        result.append(relative)
+    return sorted(dict.fromkeys(result))
 
 
 def _looks_like_placeholder(value: str) -> bool:
@@ -157,6 +184,13 @@ def _read_text(path: Path) -> str | None:
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
+
+
+def _normalize_relative_path(relative: str) -> str:
+    normalized = relative.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized.lstrip("/")
 
 
 def _audit_workflow(normalized: str, text: str) -> list[str]:
@@ -199,7 +233,7 @@ def audit_public_release(
         failures.append("missing public project files: " + ", ".join(missing))
 
     for relative in tracked:
-        normalized = relative.replace("\\", "/").lstrip("./")
+        normalized = _normalize_relative_path(relative)
         lowered = normalized.lower()
         if normalized in FORBIDDEN_TRACKED_PATHS:
             failures.append(f"private runtime file is tracked: {normalized}")
