@@ -1,0 +1,146 @@
+name: Repair and verify release assets
+
+on:
+  workflow_run:
+    workflows:
+      - Portable Releases
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to repair; blank uses VERSION
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-release-${{ github.event.workflow_run.head_sha || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out release tooling
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Resolve release tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          requested='${{ inputs.version }}'
+          if [[ -n "${requested// }" ]]; then
+            version="${requested#v}"
+          else
+            version="$(tr -d '\r\n ' < VERSION)"
+            version="${version#v}"
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]; then
+            echo "Invalid DjGoo version: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Download complete portable packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag='${{ steps.version.outputs.tag }}'
+          for attempt in $(seq 1 30); do
+            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 10
+          done
+          rm -rf repair build
+          mkdir -p repair/host repair/voice build
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'DjGoo-Host-win-x64.zip' \
+            --pattern 'DjGoo-Voice-win-x64.zip' \
+            --dir repair \
+            --clobber
+          test -s repair/DjGoo-Host-win-x64.zip
+          test -s repair/DjGoo-Voice-win-x64.zip
+          unzip -q repair/DjGoo-Host-win-x64.zip -d repair/host
+          unzip -q repair/DjGoo-Voice-win-x64.zip -d repair/voice
+
+      - name: Rebuild updater assets from published packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          host_root="$(dirname "$(find repair/host -type f -name 'DjGoo.exe' -print -quit)")"
+          voice_root="$(dirname "$(find repair/voice -type f -name 'DjGoo Voice.exe' -print -quit)")"
+          test -n "$host_root"
+          test -n "$voice_root"
+          python tools/build_update_bundle.py \
+            --package-root "$host_root" \
+            --output-zip build/DjGoo-Host-update.zip \
+            --output-manifest build/DjGoo-Host-update.json \
+            --version '${{ steps.version.outputs.version }}'
+          python tools/build_voice_update_bundle.py \
+            --package-root "$voice_root" \
+            --output-zip build/DjGoo-Voice-update.zip \
+            --output-manifest build/DjGoo-Voice-update.json \
+            --version '${{ steps.version.outputs.version }}'
+          test -s build/DjGoo-Host-update.zip
+          test -s build/DjGoo-Host-update.json
+          test -s build/DjGoo-Voice-update.zip
+          test -s build/DjGoo-Voice-update.json
+
+      - name: Upload updater assets with overwrite
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload '${{ steps.version.outputs.tag }}' \
+            build/DjGoo-Host-update.zip \
+            build/DjGoo-Host-update.json \
+            build/DjGoo-Voice-update.zip \
+            build/DjGoo-Voice-update.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+
+      - name: Verify updater-visible release is complete
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag='${{ steps.version.outputs.tag }}'
+          assets_json="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets)"
+          python - "$assets_json" <<'PY'
+          import json
+          import sys
+
+          payload = json.loads(sys.argv[1])
+          sizes = {
+              str(item.get("name")): int(item.get("size") or 0)
+              for item in payload.get("assets", [])
+          }
+          required = {
+              "DjGoo-Host-win-x64.zip",
+              "DjGoo-Voice-win-x64.zip",
+              "DjGoo-Host-update.zip",
+              "DjGoo-Host-update.json",
+              "DjGoo-Voice-update.zip",
+              "DjGoo-Voice-update.json",
+              "SHA256SUMS.txt",
+          }
+          missing = sorted(name for name in required if sizes.get(name, 0) <= 0)
+          if missing:
+              raise SystemExit("Release is incomplete: " + ", ".join(missing))
+          print("Updater-visible release verified:")
+          for name in sorted(required):
+              print(f"  {name}: {sizes[name]} bytes")
+          PY
