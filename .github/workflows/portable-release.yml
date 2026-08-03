@@ -50,7 +50,7 @@ jobs:
 
       - name: Resolve version and publication mode
         id: version
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           $version = if ($env:REQUESTED_VERSION.Trim()) {
@@ -85,7 +85,7 @@ jobs:
           java-version: "17"
 
       - name: Install small build toolset
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           python -m pip install --upgrade pip
@@ -95,7 +95,7 @@ jobs:
 
       - name: Prepare immutable cached Python and speech layers
         id: runtimes
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           $cacheBase = if ($env:RUNNER_TOOL_CACHE) {
@@ -120,7 +120,7 @@ jobs:
           "- Shared speech: $($runtime.speech_key)" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
       - name: Resolve and cache pinned Audio Engine
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           $botPython = Join-Path $env:BOT_PYTHON_LAYER "python.exe"
@@ -144,7 +144,7 @@ jobs:
           "LAVALINK_PIN=$pin" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build cached minimal Java runtime
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           python tools/build_minimal_jre.py `
@@ -157,7 +157,7 @@ jobs:
           "- Minimal Java: $($java.cache_key) ($($java.modules.Count) modules)" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
       - name: Build app layers and extraction-free launchers
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           Remove-Item build/full-release -Recurse -Force -ErrorAction SilentlyContinue
@@ -173,7 +173,7 @@ jobs:
           python tools/build_thin_launchers.py --output build/full-release/launchers
 
       - name: Assemble layered Host and Voice packages
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           python tools/build_layered_package.py `
@@ -212,7 +212,7 @@ jobs:
           python -c "from pathlib import Path; from tools.build_layered_package import _write_manifest; _write_manifest(Path('build/DjGoo-Host-win-x64'), '$env:DJGOO_VERSION', 'host'); _write_manifest(Path('build/DjGoo-Voice-win-x64'), '$env:DJGOO_VERSION', 'voice')"
 
       - name: Build optional Host speech asset
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           python tools/build_speech_runtime.py `
@@ -222,7 +222,7 @@ jobs:
             --version $env:DJGOO_VERSION
 
       - name: Smoke-test layered packages
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           $host = (Resolve-Path build/DjGoo-Host-win-x64).Path
@@ -256,7 +256,7 @@ jobs:
           if ((Get-Item "$voice/DjGoo Voice.exe").Length -gt 524288) { throw "DjGoo Voice thin launcher is unexpectedly large" }
 
       - name: Create efficient standard ZIP archives
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           python tools/fast_zip.py `
@@ -268,7 +268,7 @@ jobs:
 
       - name: Retrieve already-published fast updater assets
         if: steps.version.outputs.publish == 'true'
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           $tag = "${{ steps.version.outputs.tag }}"
@@ -299,7 +299,7 @@ jobs:
 
       - name: Build unified release checksum inventory
         if: steps.version.outputs.publish == 'true'
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           $assets = @(
@@ -324,7 +324,7 @@ jobs:
 
       - name: Complete the existing GitHub prerelease
         if: steps.version.outputs.publish == 'true'
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           $tag = "${{ steps.version.outputs.tag }}"
@@ -347,7 +347,7 @@ jobs:
 
       - name: Download and verify all final release assets
         if: steps.version.outputs.publish == 'true'
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           $tag = "${{ steps.version.outputs.tag }}"
