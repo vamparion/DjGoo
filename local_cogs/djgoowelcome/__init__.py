@@ -12,6 +12,7 @@ from .remote_aware_bridge import RemoteAwareDjGooAudioBridge
 from tools.windows_firewall import ensure_gateway_firewall
 from voice.lan_discovery import DISCOVERY_PORT, LanDiscoveryResponder
 from voice.operational_log import log_event
+from voice.pairing_code_routes import install_route_safe_pairing_codes
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -169,6 +170,7 @@ def _install_timed_chat_routing() -> None:
     DjGooWelcome._djgoo_timed_chat_routing = True
 
 
+install_route_safe_pairing_codes()
 _install_complete_gateway_settings()
 _install_gateway_firewall_repair()
 _install_timed_chat_routing()
