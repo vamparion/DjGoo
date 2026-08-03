@@ -83,16 +83,15 @@ def _jdeps_modules(java_home: Path, jar: Path) -> set[str]:
     if result.returncode != 0:
         return set(DEFAULT_MODULES)
     text = (result.stdout or "").strip().splitlines()
-    if not text:
-        return set(DEFAULT_MODULES)
     modules = {
         value.strip()
-        for value in text[-1].split(",")
+        for value in (text[-1].split(",") if text else ())
         if re.fullmatch(r"[A-Za-z0-9_.]+", value.strip())
     }
-    if not modules:
-        modules = set(DEFAULT_MODULES)
-    modules.update({"jdk.crypto.ec", "jdk.unsupported"})
+    # jdeps cannot see every module loaded reflectively by Lavalink/plugins.
+    # Retain a conservative runtime-only baseline while still excluding the
+    # compiler toolchain, source archives, headers, man pages, and full JDK.
+    modules.update(DEFAULT_MODULES)
     return modules
 
 
@@ -153,9 +152,7 @@ def build(java_home: Path, jar: Path, cache_root: Path) -> dict[str, object]:
     if not jlink.is_file():
         raise MinimalJreError(f"jlink is missing under {java_home}")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = Path(
-        tempfile.mkdtemp(prefix=f"jre-{key}-", dir=destination.parent)
-    )
+    temporary = Path(tempfile.mkdtemp(prefix=f"jre-{key}-", dir=destination.parent))
     shutil.rmtree(temporary)
     try:
         result = subprocess.run(
