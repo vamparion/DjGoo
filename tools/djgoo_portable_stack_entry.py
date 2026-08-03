@@ -13,7 +13,7 @@ APP_ROOT = active_app_root(PROJECT_ROOT)
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
 
-from tools.djgoo_portable_stack import configure_core, load_core
+from tools.layered_stack import configure_core, load_core
 from tools.input_binding_adapter import install_input_binding
 from tools.portable_environment import clean_subprocess_environment, portable_environment
 from tools.recovery_policy import install_recovery_policy
