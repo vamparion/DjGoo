@@ -17,16 +17,18 @@ def main() -> int:
     for path in TARGETS:
         text = path.read_text(encoding="utf-8")
         count = text.count(OLD)
-        if count == 0:
-            raise RuntimeError(f"No default PowerShell shell declarations found in {path}")
-        path.write_text(text.replace(OLD, NEW), encoding="utf-8")
+        if count:
+            path.write_text(text.replace(OLD, NEW), encoding="utf-8")
         total += count
         print(f"updated {path}: {count} shell declarations")
 
     remaining = [str(path) for path in TARGETS if OLD in path.read_text(encoding="utf-8")]
     if remaining:
         raise RuntimeError("Unrepaired PowerShell declarations remain: " + ", ".join(remaining))
-    print(f"updated {total} release workflow shell declarations")
+    if total:
+        print(f"updated {total} release workflow shell declarations")
+    else:
+        print("release workflow shells are already repaired")
     return 0
 
 
