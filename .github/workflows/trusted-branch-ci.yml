@@ -116,7 +116,7 @@ jobs:
             --version $version
           if ($LASTEXITCODE -ne 0) { throw "Layered Voice updater build failed" }
 
-          python -c "import json,zipfile; from pathlib import Path; root=Path('build/trusted-layered'); h=json.loads((root/'DjGoo-Host-update.json').read_text()); v=json.loads((root/'DjGoo-Voice-update.json').read_text()); assert h['package_layout']=='versioned-app-v1'; assert v['package_layout']=='versioned-app-v1'; assert h['runtime_generation']==4 and v['runtime_generation']==4; assert not any(x['path'].startswith('runtime/') for x in h['files']+v['files']); assert (root/'launchers/DjGoo.exe').stat().st_size < 524288; assert (root/'launchers/DjGoo Voice.exe').stat().st_size < 524288; zipfile.ZipFile(root/'DjGoo-Host-update.zip').testzip() is None; zipfile.ZipFile(root/'DjGoo-Voice-update.zip').testzip() is None; print('Windows layered fast-release smoke test passed')"
+          python -c "import json,zipfile; from pathlib import Path; root=Path('build/trusted-layered'); h=json.loads((root/'DjGoo-Host-update.json').read_text()); v=json.loads((root/'DjGoo-Voice-update.json').read_text()); assert h['package_layout']=='versioned-app-v1'; assert v['package_layout']=='versioned-app-v1'; assert h['runtime_generation']==4 and v['runtime_generation']==4; assert not any(x['path'].startswith('runtime/') for x in h['files']+v['files']); assert (root/'launchers/DjGoo.exe').stat().st_size < 524288; assert (root/'launchers/DjGoo Voice.exe').stat().st_size < 524288; assert zipfile.ZipFile(root/'DjGoo-Host-update.zip').testzip() is None; assert zipfile.ZipFile(root/'DjGoo-Voice-update.zip').testzip() is None; print('Windows layered fast-release smoke test passed')"
           if ($LASTEXITCODE -ne 0) { throw "Layered updater contract smoke test failed" }
 
       - name: Publish trusted CI commit status
@@ -126,6 +126,10 @@ jobs:
           JOB_STATUS: ${{ job.status }}
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
+          if ($env:JOB_STATUS -eq "cancelled") {
+            Write-Host "Superseded trusted CI run was cancelled; leaving commit status to the newer run."
+            exit 0
+          }
           $state = if ($env:JOB_STATUS -eq "success") { "success" } else { "failure" }
           $description = if ($state -eq "success") {
             "Audit, tests, launchers, and fast updater packaging passed"
