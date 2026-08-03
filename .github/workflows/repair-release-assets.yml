@@ -39,7 +39,7 @@ jobs:
 
       - name: Download complete release
         id: version
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           $version = if ($env:REQUESTED_VERSION.Trim()) {
@@ -85,7 +85,7 @@ jobs:
           }
 
       - name: Verify hashes, manifests, and layered package contracts
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           @'
@@ -191,7 +191,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Layered release verification failed" }
 
       - name: Record completion receipt
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           "## Verified layered release ${{ steps.version.outputs.tag }}" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           "- Application-only Host and Voice updater assets are valid." | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
