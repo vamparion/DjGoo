@@ -20,7 +20,7 @@ jobs:
     # Only branches pushed inside vamparion/DjGoo can trigger this workflow.
     # Forked pull requests cannot execute code on the AEGIS release machine.
     runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -66,6 +66,59 @@ jobs:
           $exitCode = $LASTEXITCODE
           if ($exitCode -ne 0) { throw "Test suite failed with exit $exitCode" }
 
+      - name: Smoke-test Windows thin launchers and fast updater packaging
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = (Get-Content VERSION -Raw).Trim().TrimStart("v")
+          Remove-Item build/trusted-layered -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force build/trusted-layered | Out-Null
+
+          python tools/build_app_layer.py `
+            --product host `
+            --version $version `
+            --output build/trusted-layered/host-app
+          if ($LASTEXITCODE -ne 0) { throw "Host application layer build failed" }
+          python tools/build_app_layer.py `
+            --product voice `
+            --version $version `
+            --output build/trusted-layered/voice-app
+          if ($LASTEXITCODE -ne 0) { throw "Voice application layer build failed" }
+          python tools/build_thin_launchers.py `
+            --output build/trusted-layered/launchers
+          if ($LASTEXITCODE -ne 0) { throw "Thin launcher build failed" }
+
+          python tools/build_layered_update_root.py `
+            --product host `
+            --version $version `
+            --app-layer build/trusted-layered/host-app `
+            --launchers build/trusted-layered/launchers `
+            --output build/trusted-layered/host-root
+          if ($LASTEXITCODE -ne 0) { throw "Host update root build failed" }
+          python tools/build_layered_update_root.py `
+            --product voice `
+            --version $version `
+            --app-layer build/trusted-layered/voice-app `
+            --launchers build/trusted-layered/launchers `
+            --output build/trusted-layered/voice-root
+          if ($LASTEXITCODE -ne 0) { throw "Voice update root build failed" }
+
+          python tools/build_update_bundle.py `
+            --package-root build/trusted-layered/host-root `
+            --output-zip build/trusted-layered/DjGoo-Host-update.zip `
+            --output-manifest build/trusted-layered/DjGoo-Host-update.json `
+            --version $version
+          if ($LASTEXITCODE -ne 0) { throw "Layered Host updater build failed" }
+          python tools/build_voice_update_bundle.py `
+            --package-root build/trusted-layered/voice-root `
+            --output-zip build/trusted-layered/DjGoo-Voice-update.zip `
+            --output-manifest build/trusted-layered/DjGoo-Voice-update.json `
+            --version $version
+          if ($LASTEXITCODE -ne 0) { throw "Layered Voice updater build failed" }
+
+          python -c "import json,zipfile; from pathlib import Path; root=Path('build/trusted-layered'); h=json.loads((root/'DjGoo-Host-update.json').read_text()); v=json.loads((root/'DjGoo-Voice-update.json').read_text()); assert h['package_layout']=='versioned-app-v1'; assert v['package_layout']=='versioned-app-v1'; assert h['runtime_generation']==4 and v['runtime_generation']==4; assert not any(x['path'].startswith('runtime/') for x in h['files']+v['files']); assert (root/'launchers/DjGoo.exe').stat().st_size < 524288; assert (root/'launchers/DjGoo Voice.exe').stat().st_size < 524288; zipfile.ZipFile(root/'DjGoo-Host-update.zip').testzip() is None; zipfile.ZipFile(root/'DjGoo-Voice-update.zip').testzip() is None; print('Windows layered fast-release smoke test passed')"
+          if ($LASTEXITCODE -ne 0) { throw "Layered updater contract smoke test failed" }
+
       - name: Publish trusted CI commit status
         if: always()
         env:
@@ -75,7 +128,7 @@ jobs:
         run: |
           $state = if ($env:JOB_STATUS -eq "success") { "success" } else { "failure" }
           $description = if ($state -eq "success") {
-            "Public audit, compilation, and tests passed on AEGIS"
+            "Audit, tests, launchers, and fast updater packaging passed"
           } else {
             "Trusted branch validation failed on AEGIS"
           }

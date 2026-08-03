@@ -144,10 +144,7 @@ def test_alpha21_update_contains_detached_launcher_completion(tmp_path: Path) ->
     with zipfile.ZipFile(output_zip) as archive:
         names = set(archive.namelist())
         assert archive.read("tools/pending_launchers/DjGoo.exe") == b"launcher"
-        assert (
-            archive.read("tools/pending_launchers/DjGoo Mini Player.exe")
-            == b"mini-player"
-        )
+        assert archive.read("tools/pending_launchers/DjGoo Mini Player.exe") == b"mini-player"
 
     assert "DjGoo.exe" not in names
     assert "DjGoo Mini Player.exe" not in names
@@ -161,10 +158,12 @@ def test_alpha21_update_contains_detached_launcher_completion(tmp_path: Path) ->
     assert not (package / "tools" / "pending_launchers").exists()
 
 
-def test_self_bootstrap_policy_is_future_proof() -> None:
+def test_self_bootstrap_policy_ends_after_thin_launcher_migration() -> None:
     assert _requires_self_bootstrap("0.3.0-alpha.19") is False
     assert _requires_self_bootstrap("0.3.0-alpha.20") is True
-    assert _requires_self_bootstrap("0.3.0-alpha.21") is True
-    assert _requires_self_bootstrap("0.3.0-beta.1") is True
-    assert _requires_self_bootstrap("0.3.0") is True
-    assert _requires_self_bootstrap("0.4.0-alpha.1") is True
+    assert _requires_self_bootstrap("0.3.0-alpha.24") is True
+    assert _requires_self_bootstrap("0.3.0-alpha.25") is True
+    assert _requires_self_bootstrap("0.3.0-alpha.26") is False
+    assert _requires_self_bootstrap("0.3.0-beta.1") is False
+    assert _requires_self_bootstrap("0.3.0") is False
+    assert _requires_self_bootstrap("0.4.0-alpha.1") is False

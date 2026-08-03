@@ -1,0 +1,189 @@
+name: Fast Application Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version; blank uses VERSION
+        required: false
+        type: string
+      publish:
+        description: Publish updater assets
+        required: true
+        default: true
+        type: boolean
+  push:
+    branches:
+      - main
+    paths:
+      - VERSION
+      - launcher/**
+      - voice/**
+      - local_cogs/djgoowelcome/**
+      - relay/**
+      - tools/**
+      - config/**
+      - requirements-*.txt
+      - pyproject.toml
+      - .github/workflows/fast-app-release.yml
+
+concurrency:
+  group: fast-app-release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  updater:
+    name: Test and publish small updater layers
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $value = if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.version }}".Trim()) {
+            "${{ inputs.version }}".Trim().TrimStart("v")
+          } else {
+            (Get-Content VERSION -Raw).Trim().TrimStart("v")
+          }
+          if ($value -notmatch '^\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?$') {
+            throw "Invalid DjGoo version: $value"
+          }
+          $publish = if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            "${{ inputs.publish }}".ToLowerInvariant()
+          } else { "true" }
+          "DJGOO_VERSION=$value" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "version=$value" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "tag=v$value" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "publish=$publish" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install test dependencies
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Audit, compile, and test
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          python tools/public_release_audit.py
+          python -m compileall -q launcher voice tools local_cogs relay tests
+          python -m pytest -q
+
+      - name: Build versioned application layers
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          Remove-Item build/fast-release -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force build/fast-release | Out-Null
+          python tools/build_app_layer.py --product host --version $env:DJGOO_VERSION --output build/fast-release/host-app
+          python tools/build_app_layer.py --product voice --version $env:DJGOO_VERSION --output build/fast-release/voice-app
+          python tools/build_thin_launchers.py --output build/fast-release/launchers
+
+      - name: Stage migration-safe update roots
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          python tools/build_layered_update_root.py `
+            --product host `
+            --version $env:DJGOO_VERSION `
+            --app-layer build/fast-release/host-app `
+            --launchers build/fast-release/launchers `
+            --output build/fast-release/host-root
+          python tools/build_layered_update_root.py `
+            --product voice `
+            --version $env:DJGOO_VERSION `
+            --app-layer build/fast-release/voice-app `
+            --launchers build/fast-release/launchers `
+            --output build/fast-release/voice-root
+
+      - name: Build and verify updater assets
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          python tools/build_update_bundle.py `
+            --package-root build/fast-release/host-root `
+            --output-zip build/DjGoo-Host-update.zip `
+            --output-manifest build/DjGoo-Host-update.json `
+            --version $env:DJGOO_VERSION
+          python tools/build_voice_update_bundle.py `
+            --package-root build/fast-release/voice-root `
+            --output-zip build/DjGoo-Voice-update.zip `
+            --output-manifest build/DjGoo-Voice-update.json `
+            --version $env:DJGOO_VERSION
+          @(
+            "DjGoo-Host-update.zip",
+            "DjGoo-Host-update.json",
+            "DjGoo-Voice-update.zip",
+            "DjGoo-Voice-update.json"
+          ) | ForEach-Object {
+            $hash = (Get-FileHash "build/$_" -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $_"
+          } | Set-Content -Encoding ASCII build/SHA256SUMS-updates.txt
+          python -c "import json; from pathlib import Path; h=json.loads(Path('build/DjGoo-Host-update.json').read_text()); v=json.loads(Path('build/DjGoo-Voice-update.json').read_text()); assert h['package_layout']=='versioned-app-v1'; assert v['package_layout']=='versioned-app-v1'; assert not any(x['path'].startswith('runtime/') for x in h['files']+v['files']); print('application-only updater manifests verified')"
+
+      - name: Publish updater-visible prerelease
+        if: steps.version.outputs.publish == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: DjGoo ${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          files: |
+            build/DjGoo-Host-update.zip
+            build/DjGoo-Host-update.json
+            build/DjGoo-Voice-update.zip
+            build/DjGoo-Voice-update.json
+            build/SHA256SUMS-updates.txt
+
+      - name: Download and verify published updater assets
+        if: steps.version.outputs.publish == 'true'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          Remove-Item published-fast -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force published-fast | Out-Null
+          gh release download "${{ steps.version.outputs.tag }}" `
+            --repo $env:GITHUB_REPOSITORY `
+            --pattern "DjGoo-Host-update.zip" `
+            --pattern "DjGoo-Host-update.json" `
+            --pattern "DjGoo-Voice-update.zip" `
+            --pattern "DjGoo-Voice-update.json" `
+            --pattern "SHA256SUMS-updates.txt" `
+            --dir published-fast `
+            --clobber
+          foreach ($name in @(
+            "DjGoo-Host-update.zip",
+            "DjGoo-Host-update.json",
+            "DjGoo-Voice-update.zip",
+            "DjGoo-Voice-update.json",
+            "SHA256SUMS-updates.txt"
+          )) {
+            $built = (Get-FileHash "build/$name" -Algorithm SHA256).Hash
+            $published = (Get-FileHash "published-fast/$name" -Algorithm SHA256).Hash
+            if ($built -ne $published) { throw "Published updater differs: $name" }
+          }
+          "## Updater-visible ${{ steps.version.outputs.tag }}" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "Existing Host and Voice installations can update without waiting for runtime packages." | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Iterable
 
 
-DIRECTORY_PREFIXES = (
+LEGACY_DIRECTORY_PREFIXES = (
     "tools",
     "voice",
     "local_cogs",
@@ -19,14 +19,10 @@ DIRECTORY_PREFIXES = (
     "control_panel_dist",
     "launcher",
 )
-LAUNCHER_FILES = (
-    "DjGoo.exe",
-    "DjGoo Mini Player.exe",
-)
-LAUNCHER_DEFERRED_VERSIONS = {
-    "0.3.0-alpha.19",
-}
+LAUNCHER_FILES = ("DjGoo.exe", "DjGoo Mini Player.exe")
+LAUNCHER_DEFERRED_VERSIONS = {"0.3.0-alpha.19"}
 SELF_BOOTSTRAP_MINIMUM = (0, 3, 0, 0, 20)
+SELF_BOOTSTRAP_MAXIMUM = (0, 3, 0, 0, 25)
 SELF_BOOTSTRAP_FILES = {
     "tools/pending_launchers/DjGoo.exe",
     "tools/pending_launchers/DjGoo Mini Player.exe",
@@ -34,7 +30,7 @@ SELF_BOOTSTRAP_FILES = {
     "tools/djgoo_stack.py",
     "tools/apply_update.py",
 }
-ROOT_FILES = (
+LEGACY_ROOT_FILES = (
     "LICENSE",
     "README.md",
     "THIRD_PARTY_NOTICES.md",
@@ -47,7 +43,7 @@ ROOT_FILES = (
     "data/discordbot/cogs/Audio/Lavalink.jar",
     "data/discordbot/cogs/Audio/application.yml",
 )
-CONFIG_FILES = (
+LEGACY_CONFIG_FILES = (
     "config/secrets.example.json",
     "config/voice-corrections.example.json",
 )
@@ -88,18 +84,14 @@ def _eligible(path: Path) -> bool:
     )
 
 
-def _directory_files(
-    package_root: Path,
-    relative_directory: str,
-) -> Iterable[Path]:
+def _directory_files(package_root: Path, relative_directory: str) -> Iterable[Path]:
     directory = package_root / relative_directory
     if not directory.exists():
         return ()
     return (
         path
         for path in directory.rglob("*")
-        if path.is_file()
-        and _eligible(path.relative_to(package_root))
+        if path.is_file() and _eligible(path.relative_to(package_root))
     )
 
 
@@ -126,14 +118,10 @@ def _version_key(value: str) -> tuple[int, int, int, int, int]:
 
 
 def _requires_self_bootstrap(version: str) -> bool:
-    """Keep future releases directly installable by pre-alpha.19 Hosts.
+    """Defer launchers only through the alpha.25 thin-launcher migration."""
 
-    Old update workers cannot replace the PyInstaller launcher that started them.
-    Every release from alpha.20 onward therefore installs application code first
-    and lets the portable stack complete launcher replacement out of process.
-    """
-
-    return _version_key(version) >= SELF_BOOTSTRAP_MINIMUM
+    key = _version_key(version)
+    return SELF_BOOTSTRAP_MINIMUM <= key <= SELF_BOOTSTRAP_MAXIMUM
 
 
 def _stage_self_bootstrap_launchers(package_root: Path) -> None:
@@ -150,7 +138,6 @@ def _stage_self_bootstrap_launchers(package_root: Path) -> None:
             "The package cannot create a self-bootstrapping launcher update; "
             f"missing: {missing}"
         )
-
     pending = root / "tools" / "pending_launchers"
     shutil.rmtree(pending, ignore_errors=True)
     pending.mkdir(parents=True, exist_ok=True)
@@ -158,7 +145,59 @@ def _stage_self_bootstrap_launchers(package_root: Path) -> None:
         shutil.copy2(root / filename, pending / filename)
 
 
-def collect_update_files(
+def _is_layered(root: Path, version: str) -> bool:
+    return bool(
+        (root / "current.json").is_file()
+        and (root / "app" / version).is_dir()
+    )
+
+
+def collect_layered_update_files(
+    package_root: Path,
+    version: str,
+    *,
+    include_launchers: bool,
+) -> list[Path]:
+    root = package_root.resolve()
+    collected: dict[str, Path] = {}
+
+    def add(path: Path) -> None:
+        if not path.is_file():
+            return
+        relative = path.relative_to(root)
+        if not _eligible(relative) or relative.parts[:1] == ("runtime",):
+            return
+        collected[relative.as_posix()] = path
+
+    if include_launchers:
+        for name in LAUNCHER_FILES:
+            add(root / name)
+    for name in ("current.json", "data/installed-version.json"):
+        add(root / name)
+    for directory in (f"app/{version}", "tools"):
+        for path in _directory_files(root, directory):
+            add(path)
+
+    required = {
+        "current.json",
+        "data/installed-version.json",
+        f"app/{version}/app-layer.json",
+        f"app/{version}/launcher/djgoo_layered_host.py",
+        f"app/{version}/tools/apply_update.py",
+        "tools/apply_update.py",
+        "tools/djgoo_stack.py",
+    }
+    if include_launchers:
+        required.update(LAUNCHER_FILES)
+    missing = sorted(required.difference(collected))
+    if missing:
+        raise UpdateBundleError(f"Layered Host update is incomplete: {missing}")
+    if any(name.startswith("runtime/") for name in collected):
+        raise UpdateBundleError("Application-only Host update unexpectedly contains a runtime")
+    return [collected[name] for name in sorted(collected)]
+
+
+def collect_legacy_update_files(
     package_root: Path,
     *,
     include_launchers: bool = True,
@@ -174,38 +213,28 @@ def collect_update_files(
             return
         if relative.startswith("data/") and relative not in SAFE_DATA_FILES:
             return
-        if relative.startswith(("logs/", ".localappdata/")):
-            return
-        if relative == "config/secrets.json":
+        if relative.startswith(("logs/", ".localappdata/")) or relative == "config/secrets.json":
             return
         collected[relative] = path
 
     if include_launchers:
         for filename in LAUNCHER_FILES:
             add(root / filename)
-    for filename in ROOT_FILES:
+    for filename in LEGACY_ROOT_FILES:
         add(root / filename)
-    for filename in CONFIG_FILES:
+    for filename in LEGACY_CONFIG_FILES:
         add(root / filename)
-    for directory in DIRECTORY_PREFIXES:
+    for directory in LEGACY_DIRECTORY_PREFIXES:
         for path in _directory_files(root, directory):
             add(path)
 
     site_packages = root / "runtime" / "python" / "Lib" / "site-packages"
-    pip_package = site_packages / "pip"
-    for path in _directory_files(
-        root,
-        pip_package.relative_to(root).as_posix(),
-    ):
+    for path in _directory_files(root, (site_packages / "pip").relative_to(root).as_posix()):
         add(path)
     if site_packages.exists():
         for dist_info in site_packages.glob("pip-*.dist-info"):
-            if dist_info.is_dir():
-                for path in _directory_files(
-                    root,
-                    dist_info.relative_to(root).as_posix(),
-                ):
-                    add(path)
+            for path in _directory_files(root, dist_info.relative_to(root).as_posix()):
+                add(path)
 
     required = {
         "control_panel/state.py",
@@ -221,17 +250,25 @@ def collect_update_files(
         required.update(LAUNCHER_FILES)
     missing = sorted(required.difference(collected))
     if missing:
-        raise UpdateBundleError(
-            f"The package is missing required update files: {missing}"
-        )
-    if not any(
-        name.startswith("runtime/python/Lib/site-packages/pip/")
-        for name in collected
-    ):
-        raise UpdateBundleError(
-            "The package does not contain the bundled pip module"
-        )
+        raise UpdateBundleError(f"The package is missing required update files: {missing}")
     return [collected[name] for name in sorted(collected)]
+
+
+def collect_update_files(
+    package_root: Path,
+    *,
+    include_launchers: bool = True,
+    version: str | None = None,
+) -> list[Path]:
+    root = package_root.resolve()
+    normalized = str(version or "").strip().lstrip("v")
+    if normalized and _is_layered(root, normalized):
+        return collect_layered_update_files(
+            root,
+            normalized,
+            include_launchers=include_launchers,
+        )
+    return collect_legacy_update_files(root, include_launchers=include_launchers)
 
 
 def build_update_bundle(
@@ -247,6 +284,7 @@ def build_update_bundle(
     if not VERSION_PATTERN.fullmatch(normalized_version):
         raise UpdateBundleError(f"Invalid update version: {version}")
 
+    layered = _is_layered(root, normalized_version)
     self_bootstrap = _requires_self_bootstrap(normalized_version)
     if normalized_version in LAUNCHER_DEFERRED_VERSIONS or self_bootstrap:
         include_launchers = False
@@ -255,38 +293,28 @@ def build_update_bundle(
     try:
         if self_bootstrap:
             _stage_self_bootstrap_launchers(root)
-
         files = collect_update_files(
             root,
             include_launchers=include_launchers,
+            version=normalized_version,
         )
-        relative_files = {
-            path.relative_to(root).as_posix()
-            for path in files
-        }
+        relative_files = {path.relative_to(root).as_posix() for path in files}
         if self_bootstrap:
-            missing_bootstrap = sorted(
-                SELF_BOOTSTRAP_FILES.difference(relative_files)
-            )
+            missing_bootstrap = sorted(SELF_BOOTSTRAP_FILES.difference(relative_files))
             if missing_bootstrap:
                 raise UpdateBundleError(
-                    "The self-bootstrapping update is incomplete: "
-                    f"{missing_bootstrap}"
+                    f"The self-bootstrapping update is incomplete: {missing_bootstrap}"
                 )
 
         output_zip.parent.mkdir(parents=True, exist_ok=True)
         output_manifest.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            output_zip.unlink()
-        except FileNotFoundError:
-            pass
-
+        output_zip.unlink(missing_ok=True)
         entries: list[dict[str, object]] = []
         with zipfile.ZipFile(
             output_zip,
             "w",
             compression=zipfile.ZIP_DEFLATED,
-            compresslevel=9,
+            compresslevel=6 if layered else 9,
         ) as archive:
             for path in files:
                 relative = path.relative_to(root).as_posix()
@@ -307,22 +335,16 @@ def build_update_bundle(
             "bundle_asset": BUNDLE_NAME,
             "bundle_sha256": sha256_file(output_zip),
             "bundle_size": output_zip.stat().st_size,
-            "runtime_generation": 3,
+            "runtime_generation": 4 if layered else 3,
+            "package_layout": "versioned-app-v1" if layered else "legacy-flat",
             "requires_full_install": False,
             "launcher_update_deferred": not include_launchers,
-            "launcher_completion_mode": (
-                "portable-stack" if self_bootstrap else ""
-            ),
+            "launcher_completion_mode": "portable-stack" if self_bootstrap else "",
             "files": entries,
             "deletes": [],
         }
-        temporary = output_manifest.with_suffix(
-            output_manifest.suffix + ".tmp"
-        )
-        temporary.write_text(
-            json.dumps(manifest, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        temporary = output_manifest.with_suffix(output_manifest.suffix + ".tmp")
+        temporary.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         os.replace(temporary, output_manifest)
         return manifest
     finally:
@@ -331,33 +353,12 @@ def build_update_bundle(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Build a verified incremental DjGoo Host update."
-    )
-    parser.add_argument(
-        "--package-root",
-        type=Path,
-        required=True,
-    )
-    parser.add_argument(
-        "--output-zip",
-        type=Path,
-        required=True,
-    )
-    parser.add_argument(
-        "--output-manifest",
-        type=Path,
-        required=True,
-    )
+    parser = argparse.ArgumentParser(description="Build a verified incremental DjGoo Host update.")
+    parser.add_argument("--package-root", type=Path, required=True)
+    parser.add_argument("--output-zip", type=Path, required=True)
+    parser.add_argument("--output-manifest", type=Path, required=True)
     parser.add_argument("--version", required=True)
-    parser.add_argument(
-        "--defer-launchers",
-        action="store_true",
-        help=(
-            "Build a bootstrap update that installs the updater engine and "
-            "supporting files without replacing the running one-file launchers."
-        ),
-    )
+    parser.add_argument("--defer-launchers", action="store_true")
     args = parser.parse_args()
     build_update_bundle(
         args.package_root.resolve(),

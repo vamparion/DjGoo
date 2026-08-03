@@ -1,4 +1,4 @@
-name: Repair and verify release assets
+name: Verify layered release assets
 
 on:
   workflow_run:
@@ -9,19 +9,19 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version to repair; blank uses VERSION
+        description: Version to verify; blank uses VERSION
         required: false
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: repair-release-${{ github.event.workflow_run.head_sha || github.ref }}
+  group: verify-layered-release-${{ github.event.workflow_run.head_sha || github.ref }}
   cancel-in-progress: false
 
 jobs:
-  repair:
+  verify:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
@@ -30,20 +30,20 @@ jobs:
     timeout-minutes: 30
     env:
       GH_TOKEN: ${{ github.token }}
+      REQUESTED_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || '' }}
     steps:
-      - name: Check out release tooling
+      - name: Check out verification tooling
         uses: actions/checkout@v4
         with:
           ref: main
 
-      - name: Repair and verify updater-visible release
-        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+      - name: Download complete release
+        id: version
+        shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
-
-          $requested = "${{ inputs.version }}".Trim()
-          $version = if ($requested) {
-            $requested.TrimStart("v")
+          $version = if ($env:REQUESTED_VERSION.Trim()) {
+            $env:REQUESTED_VERSION.Trim().TrimStart("v")
           } else {
             (Get-Content VERSION -Raw).Trim().TrimStart("v")
           }
@@ -51,105 +51,9 @@ jobs:
             throw "Invalid DjGoo version: $version"
           }
           $tag = "v$version"
+          "DJGOO_VERSION=$version" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "tag=$tag" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-          $releaseReady = $false
-          for ($attempt = 1; $attempt -le 60; $attempt++) {
-            $releaseJson = gh release view $tag -R $env:GITHUB_REPOSITORY --json assets 2>$null
-            if ($LASTEXITCODE -eq 0) {
-              $release = $releaseJson | ConvertFrom-Json
-              $names = @($release.assets | ForEach-Object { [string]$_.name })
-              if (
-                $names -contains "DjGoo-Host-win-x64.zip" -and
-                $names -contains "DjGoo-Voice-win-x64.zip"
-              ) {
-                $releaseReady = $true
-                break
-              }
-            }
-            Start-Sleep -Seconds 10
-          }
-          if (-not $releaseReady) {
-            throw "The full portable packages for $tag never became available."
-          }
-
-          Remove-Item repair, build -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force repair, repair/host, repair/voice, build | Out-Null
-
-          gh release download $tag -R $env:GITHUB_REPOSITORY `
-            --pattern "DjGoo-Host-win-x64.zip" `
-            --pattern "DjGoo-Voice-win-x64.zip" `
-            --dir repair `
-            --clobber
-          if ($LASTEXITCODE -ne 0) {
-            throw "Could not download the published portable packages."
-          }
-          foreach ($path in @(
-            "repair/DjGoo-Host-win-x64.zip",
-            "repair/DjGoo-Voice-win-x64.zip"
-          )) {
-            if (!(Test-Path $path) -or (Get-Item $path).Length -le 0) {
-              throw "Published package is missing or empty: $path"
-            }
-          }
-
-          Expand-Archive repair/DjGoo-Host-win-x64.zip repair/host -Force
-          Expand-Archive repair/DjGoo-Voice-win-x64.zip repair/voice -Force
-          $hostExe = Get-ChildItem repair/host -Recurse -File -Filter "DjGoo.exe" | Select-Object -First 1
-          $voiceExe = Get-ChildItem repair/voice -Recurse -File -Filter "DjGoo Voice.exe" | Select-Object -First 1
-          if (-not $hostExe) { throw "Published Host package does not contain DjGoo.exe." }
-          if (-not $voiceExe) { throw "Published Voice package does not contain DjGoo Voice.exe." }
-
-          python tools/build_update_bundle.py `
-            --package-root $hostExe.Directory.FullName `
-            --output-zip build/DjGoo-Host-update.zip `
-            --output-manifest build/DjGoo-Host-update.json `
-            --version $version
-          if ($LASTEXITCODE -ne 0) { throw "Host updater rebuild failed." }
-
-          python tools/build_voice_update_bundle.py `
-            --package-root $voiceExe.Directory.FullName `
-            --output-zip build/DjGoo-Voice-update.zip `
-            --output-manifest build/DjGoo-Voice-update.json `
-            --version $version
-          if ($LASTEXITCODE -ne 0) { throw "Voice updater rebuild failed." }
-
-          $releaseFiles = [ordered]@{
-            "DjGoo-Host-win-x64.zip" = "repair/DjGoo-Host-win-x64.zip"
-            "DjGoo-Voice-win-x64.zip" = "repair/DjGoo-Voice-win-x64.zip"
-            "DjGoo-Host-update.zip" = "build/DjGoo-Host-update.zip"
-            "DjGoo-Host-update.json" = "build/DjGoo-Host-update.json"
-            "DjGoo-Voice-update.zip" = "build/DjGoo-Voice-update.zip"
-            "DjGoo-Voice-update.json" = "build/DjGoo-Voice-update.json"
-          }
-          $checksumLines = foreach ($entry in $releaseFiles.GetEnumerator()) {
-            if (!(Test-Path $entry.Value) -or (Get-Item $entry.Value).Length -le 0) {
-              throw "Release asset is missing or empty: $($entry.Key)"
-            }
-            $hash = (Get-FileHash $entry.Value -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $($entry.Key)"
-          }
-          $checksumLines | Set-Content -Encoding ASCII build/SHA256SUMS.txt
-
-          gh release upload $tag `
-            build/DjGoo-Host-update.zip `
-            build/DjGoo-Host-update.json `
-            build/DjGoo-Voice-update.zip `
-            build/DjGoo-Voice-update.json `
-            build/SHA256SUMS.txt `
-            -R $env:GITHUB_REPOSITORY `
-            --clobber
-          if ($LASTEXITCODE -ne 0) {
-            throw "GitHub rejected the repaired updater assets."
-          }
-
-          $published = gh release view $tag -R $env:GITHUB_REPOSITORY --json assets | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0) {
-            throw "Could not inspect the repaired release."
-          }
-          $sizes = @{}
-          foreach ($asset in $published.assets) {
-            $sizes[[string]$asset.name] = [int64]$asset.size
-          }
           $required = @(
             "DjGoo-Host-win-x64.zip",
             "DjGoo-Voice-win-x64.zip",
@@ -157,47 +61,140 @@ jobs:
             "DjGoo-Host-update.json",
             "DjGoo-Voice-update.zip",
             "DjGoo-Voice-update.json",
+            "DjGoo-SpeechRuntime-win-x64.zip",
+            "DjGoo-SpeechRuntime.json",
             "SHA256SUMS.txt"
           )
-          $missing = @($required | Where-Object {
-            !$sizes.ContainsKey($_) -or $sizes[$_] -le 0
-          })
-          if ($missing.Count -gt 0) {
-            throw "Release is incomplete: $($missing -join ', ')"
+          $release = gh release view $tag -R $env:GITHUB_REPOSITORY --json assets,isPrerelease,tagName | ConvertFrom-Json
+          if ([string]$release.tagName -ne $tag -or -not [bool]$release.isPrerelease) {
+            throw "Release metadata is invalid for $tag"
+          }
+          $sizes = @{}
+          foreach ($asset in $release.assets) { $sizes[[string]$asset.name] = [int64]$asset.size }
+          $missing = @($required | Where-Object { !$sizes.ContainsKey($_) -or $sizes[$_] -le 0 })
+          if ($missing.Count -gt 0) { throw "Release is incomplete: $($missing -join ', ')" }
+
+          Remove-Item verify-release -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force verify-release | Out-Null
+          foreach ($name in $required) {
+            gh release download $tag -R $env:GITHUB_REPOSITORY `
+              --pattern $name `
+              --dir verify-release `
+              --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Could not download $name" }
           }
 
-          Remove-Item published-check -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force published-check | Out-Null
-          gh release download $tag -R $env:GITHUB_REPOSITORY `
-            --pattern "DjGoo-Host-update.zip" `
-            --pattern "DjGoo-Host-update.json" `
-            --pattern "DjGoo-Voice-update.zip" `
-            --pattern "DjGoo-Voice-update.json" `
-            --pattern "SHA256SUMS.txt" `
-            --dir published-check `
-            --clobber
-          if ($LASTEXITCODE -ne 0) {
-            throw "Published updater assets could not be downloaded."
-          }
-          foreach ($entry in @(
-            @{ Published = "published-check/DjGoo-Host-update.zip"; Built = "build/DjGoo-Host-update.zip" },
-            @{ Published = "published-check/DjGoo-Host-update.json"; Built = "build/DjGoo-Host-update.json" },
-            @{ Published = "published-check/DjGoo-Voice-update.zip"; Built = "build/DjGoo-Voice-update.zip" },
-            @{ Published = "published-check/DjGoo-Voice-update.json"; Built = "build/DjGoo-Voice-update.json" },
-            @{ Published = "published-check/SHA256SUMS.txt"; Built = "build/SHA256SUMS.txt" }
-          )) {
-            if (
-              (Get-FileHash $entry.Published -Algorithm SHA256).Hash -ne
-              (Get-FileHash $entry.Built -Algorithm SHA256).Hash
-            ) {
-              throw "Published asset does not match the verified build: $($entry.Published)"
-            }
+      - name: Verify hashes, manifests, and layered package contracts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          @'
+          import hashlib
+          import json
+          import zipfile
+          from pathlib import Path, PurePosixPath
+
+          root = Path("verify-release")
+          version = "__VERSION__"
+          expected_assets = {
+              "DjGoo-Host-win-x64.zip",
+              "DjGoo-Voice-win-x64.zip",
+              "DjGoo-Host-update.zip",
+              "DjGoo-Host-update.json",
+              "DjGoo-Voice-update.zip",
+              "DjGoo-Voice-update.json",
+              "DjGoo-SpeechRuntime-win-x64.zip",
+              "DjGoo-SpeechRuntime.json",
           }
 
-          "## Verified release $tag" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
-          foreach ($name in ($required | Sort-Object)) {
-            $line = "$name : $($sizes[$name]) bytes"
-            Write-Host $line
-            "- $line" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
-          }
-          Write-Host "Updater-visible release verified: $tag"
+          def sha256(data: bytes) -> str:
+              return hashlib.sha256(data).hexdigest()
+
+          checksums = {}
+          for line in (root / "SHA256SUMS.txt").read_text(encoding="ascii").splitlines():
+              digest, name = line.split(None, 1)
+              checksums[name.strip()] = digest.lower()
+          assert set(checksums) == expected_assets, (set(checksums), expected_assets)
+          for name in expected_assets:
+              path = root / name
+              assert path.is_file() and path.stat().st_size > 0, name
+              assert sha256(path.read_bytes()) == checksums[name], name
+
+          products = (
+              ("DjGoo-Host-update", "DjGoo Host"),
+              ("DjGoo-Voice-update", "DjGoo Voice"),
+          )
+          for stem, product in products:
+              bundle = root / f"{stem}.zip"
+              manifest_bytes = (root / f"{stem}.json").read_bytes()
+              manifest = json.loads(manifest_bytes)
+              assert manifest["product"] == product
+              assert manifest["version"] == version
+              assert manifest["release_tag"] == f"v{version}"
+              assert manifest["runtime_generation"] == 4
+              assert manifest["package_layout"] == "versioned-app-v1"
+              assert manifest["bundle_size"] == bundle.stat().st_size
+              assert manifest["bundle_sha256"] == sha256(bundle.read_bytes())
+              listed = {item["path"]: item for item in manifest["files"]}
+              assert listed
+              assert not any(path.startswith("runtime/") for path in listed)
+              assert f"app/{version}/app-layer.json" in listed
+              assert "current.json" in listed
+              with zipfile.ZipFile(bundle) as archive:
+                  assert archive.testzip() is None
+                  actual = {
+                      info.filename
+                      for info in archive.infolist()
+                      if not info.is_dir()
+                  }
+                  assert actual == set(listed)
+                  for name, item in listed.items():
+                      data = archive.read(name)
+                      assert len(data) == item["size"], name
+                      assert sha256(data) == item["sha256"], name
+
+          speech_bundle = root / "DjGoo-SpeechRuntime-win-x64.zip"
+          speech = json.loads((root / "DjGoo-SpeechRuntime.json").read_text())
+          assert speech["product"] == "DjGoo Speech Runtime"
+          assert speech["version"] == version
+          assert speech["runtime_generation"] == 4
+          assert speech["bundle_size"] == speech_bundle.stat().st_size
+          assert speech["bundle_sha256"] == sha256(speech_bundle.read_bytes())
+          speech_files = {item["path"]: item for item in speech["files"]}
+          assert speech_files
+          assert all(path.startswith("runtime/speech/") for path in speech_files)
+          with zipfile.ZipFile(speech_bundle) as archive:
+              assert archive.testzip() is None
+              actual = {i.filename for i in archive.infolist() if not i.is_dir()}
+              assert actual == set(speech_files)
+
+          for package_name, executable, python_dir in (
+              ("DjGoo-Host-win-x64.zip", "DjGoo.exe", "python-bot"),
+              ("DjGoo-Voice-win-x64.zip", "DjGoo Voice.exe", "python-voice"),
+          ):
+              with zipfile.ZipFile(root / package_name) as archive:
+                  assert archive.testzip() is None
+                  names = {i.filename for i in archive.infolist() if not i.is_dir()}
+                  prefix = package_name.removesuffix(".zip") + "/"
+                  assert prefix + executable in names
+                  assert prefix + "current.json" in names
+                  assert prefix + f"app/{version}/app-layer.json" in names
+                  assert any(
+                      name.startswith(prefix + f"runtime/{python_dir}/")
+                      for name in names
+                  )
+                  assert not any("_MEI" in name for name in names)
+
+          print("Layered alpha.25 release assets verified")
+          '@.Replace("__VERSION__", $env:DJGOO_VERSION) | Set-Content -Encoding UTF8 verify_layered_release.py
+          python verify_layered_release.py
+          if ($LASTEXITCODE -ne 0) { throw "Layered release verification failed" }
+
+      - name: Record completion receipt
+        shell: powershell
+        run: |
+          "## Verified layered release ${{ steps.version.outputs.tag }}" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "- Application-only Host and Voice updater assets are valid." | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "- Clean Host and Voice packages use versioned app layers and shared runtimes." | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "- Optional Host speech runtime is independently downloadable and verified." | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          Write-Host "Final layered release verification passed."

@@ -9,18 +9,20 @@ from . import djgoowelcome as cog_module
 from .guide_cog import DjGooGuide
 from .relay_cog import DjGooRelay
 from .remote_aware_bridge import RemoteAwareDjGooAudioBridge
+from tools.app_layout import package_root
 from tools.windows_firewall import ensure_gateway_firewall
 from voice.lan_discovery import DISCOVERY_PORT, LanDiscoveryResponder
 from voice.operational_log import log_event
 from voice.pairing_code_routes import install_route_safe_pairing_codes
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = package_root(Path(__file__).resolve().parents[2])
 TIMED_REQUEST_INTENTS = {"play_now", "queue_request"}
 
 
 # Select the complete DjGoo bridge at the package boundary while retaining one
 # playback authority. Third-party engine names stay behind this internal seam.
+cog_module.PROJECT_ROOT = PROJECT_ROOT
 cog_module.EnhancedDjGooAudioBridge = RemoteAwareDjGooAudioBridge
 cog_module.JOINING_REMOTE_INTENTS.update(TIMED_REQUEST_INTENTS)
 DjGooWelcome = cog_module.DjGooWelcome
