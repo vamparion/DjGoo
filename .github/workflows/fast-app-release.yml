@@ -26,6 +26,8 @@ on:
       - requirements-*.txt
       - pyproject.toml
       - .github/workflows/fast-app-release.yml
+      - .github/workflows/portable-release.yml
+      - .github/workflows/repair-release-assets.yml
 
 concurrency:
   group: fast-app-release-${{ github.ref }}
@@ -33,6 +35,7 @@ concurrency:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   updater:
@@ -44,17 +47,14 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Resolve version
         id: version
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
-          Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
-          $effectivePolicy = Get-ExecutionPolicy
-          if ($effectivePolicy -notin @("RemoteSigned", "Bypass", "Unrestricted")) {
-            throw "AEGIS PowerShell policy is still $effectivePolicy after repair"
-          }
           $value = if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.version }}".Trim()) {
             "${{ inputs.version }}".Trim().TrimStart("v")
           } else {
@@ -77,6 +77,17 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: requirements-dev.txt
+
+      - name: Generate permanent release shell repair PR
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        env:
+          REPAIR_BRANCH: release/alpha25-shell-fix-generated
+        run: |
+          $ErrorActionPreference = "Stop"
+          python tools/fix_release_workflow_shells.py
+          if ($LASTEXITCODE -ne 0) { throw "Could not rewrite release workflow shells" }
+          python tools/publish_release_shell_repair.py
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish release shell repair PR" }
 
       - name: Install test dependencies
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
