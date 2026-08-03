@@ -61,7 +61,6 @@ def build(output: Path) -> list[Path]:
             "/target:winexe",
             "/platform:x64",
             "/optimize+",
-            "/deterministic+",
             "/reference:System.dll",
             "/reference:System.Windows.Forms.dll",
             f"/out:{destination}",
