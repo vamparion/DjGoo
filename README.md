@@ -2,44 +2,77 @@
 
 DjGoo is a game-first Discord music controller built on Red-DiscordBot Audio and Lavalink. It provides local push-to-talk control, paired multi-user voice clients, safer track selection, radio profiles, and resilient process supervision without requiring players to leave a full-screen game.
 
-> **Status:** alpha. Automated source and package validation is active. Real Windows, microphone, Discord, and mixed-network acceptance testing is still required before a stable release.
+> **Status:** alpha. Automated source, update, package, and public-release validation is active. Real Windows, microphone, Discord, and mixed-network acceptance testing is still required before a stable release.
 
 ## Download
 
 Use the repository's **Releases** section rather than downloading the source ZIP.
 
-A complete Windows x64 release contains seven updater-visible assets:
+A complete Windows x64 release contains nine verified assets:
 
-- `DjGoo-Host-win-x64.zip` — complete first-install Host package, including the Discord bot, Red Audio, Lavalink, portable Python and Java runtimes, `DjGoo.exe`, and optional local voice recognition.
-- `DjGoo-Voice-win-x64.zip` — complete recipient package containing `DjGoo Voice.exe` and its local speech-recognition runtime.
-- `DjGoo-Host-update.zip` and `DjGoo-Host-update.json` — verified incremental Host update and manifest.
-- `DjGoo-Voice-update.zip` and `DjGoo-Voice-update.json` — verified incremental recipient update and manifest.
-- `SHA256SUMS.txt` — checksums for all published packages and updater assets.
+- `DjGoo-Host-win-x64.zip` — complete first-install Host package with the Discord bot, Red Audio, Lavalink, a portable Python runtime, a minimal Java runtime, and extraction-free Windows launchers.
+- `DjGoo-Voice-win-x64.zip` — complete recipient package with the Voice application, portable Python runtime, and local speech-recognition layer.
+- `DjGoo-Host-update.zip` and `DjGoo-Host-update.json` — runtime-independent Host application update and manifest.
+- `DjGoo-Voice-update.zip` and `DjGoo-Voice-update.json` — runtime-independent recipient application update and manifest.
+- `DjGoo-SpeechRuntime-win-x64.zip` and `DjGoo-SpeechRuntime.json` — optional Host speech-recognition layer and manifest.
+- `SHA256SUMS.txt` — checksums for every package and updater asset.
 
-The packages require no separate Python, Java, Node, PowerShell, or installer. Each complete package includes a file manifest and CycloneDX SBOM.
+The packages require no separately installed Python, Java, Node, PowerShell, or installer. Each clean package includes file manifests and CycloneDX runtime SBOMs.
+
+## Package layout
+
+Alpha.25 separates frequently changing DjGoo code from large, rarely changing runtimes:
+
+```text
+DjGoo/
+├── DjGoo.exe
+├── DjGoo Mini Player.exe
+├── current.json
+├── app/
+│   └── 0.3.0-alpha.25/
+├── runtime/
+│   ├── python-bot/
+│   ├── java/
+│   └── speech/             optional on Host
+├── data/
+├── config/
+└── logs/
+```
+
+The Windows executables are small launchers that start the shared portable runtime. They do not use PyInstaller one-file extraction and do not create `_MEI...` temporary directories. `current.json` selects the active versioned application layer, allowing application updates and rollback without replacing Python, Java, speech libraries, models, or user data.
 
 ## Host quick start
 
-1. Download `DjGoo-Host-win-x64.zip` from Releases and verify its entry in `SHA256SUMS.txt`.
-2. Extract the ZIP into any writable folder.
+1. Download `DjGoo-Host-win-x64.zip` and `SHA256SUMS.txt` from Releases.
+2. Verify the package checksum, then extract it into any writable folder.
 3. Run `DjGoo.exe`.
-4. Approve the first Windows UAC request. DjGoo creates narrowly scoped inbound rules for TCP gateway port `47632` and UDP discovery port `47631` on all Windows network profiles.
+4. Approve the first Windows UAC request. DjGoo creates narrowly scoped inbound rules for TCP `47632` and UDP `47631` on all Windows network profiles.
 5. Select **Connect Discord** and configure a Discord bot application.
 6. Select **Start**.
 
-Configuration, Red data, downloaded models, paired-device credentials, and logs remain inside the extracted folder. The folder can be moved, backed up, or deleted without an installer.
+Local Host speech recognition is optional. Select **Install local voice** in the Host control center to download and verify the separate speech runtime. Discord commands, music playback, paired recipients, and every non-speech Host function work without that layer.
+
+Configuration, Red data, downloaded models, paired-device credentials, and logs remain outside `app/`. Moving or updating the application layer does not replace them.
 
 ## Updating
 
-Use **Check for updates** in either `DjGoo.exe` or `DjGoo Voice.exe`. DjGoo downloads the product-specific incremental ZIP and manifest, verifies the release version, bundle size, SHA-256 digest, archive paths, and every file hash, then performs a backup, atomic replacement, rollback on failure, and launcher restart.
+Use **Check for updates** in `DjGoo.exe` or `DjGoo Voice.exe`. The fast release workflow publishes the Host and Voice application updates first. Existing installations can therefore update without waiting for clean Python, Java, speech, and first-install packages to be rebuilt.
 
-Normal updates preserve runtimes that are intentionally outside the incremental scope, models, bot data, logs, settings, Discord credentials, pairing credentials, and user secrets.
+DjGoo verifies the selected release, manifest, bundle size, SHA-256 digest, archive membership, path safety, and every file hash. It then performs backup, atomic replacement, rollback on failure, and restart. Alpha.25 performs one deferred replacement to migrate older PyInstaller launchers. Later thin-launcher updates no longer require that compatibility step.
 
-Public GitHub releases are checked without a GitHub token. A private fork or private pre-release repository may request a fine-grained token with read-only **Contents** access; DjGoo encrypts it for the current Windows account with DPAPI and does not write it to logs. This token is unrelated to the Discord bot token.
+Normal updates preserve:
+
+- portable Python, minimal Java, and speech runtime layers;
+- downloaded speech models;
+- Discord and Red configuration;
+- pairing credentials and Host device records;
+- radio history, settings, logs, and user data.
+
+Public releases require no GitHub token. Private forks may request a fine-grained token with read-only **Contents** access; DjGoo encrypts it for the current Windows account with DPAPI and does not write it to logs.
 
 ## Multiple voice users
 
-A Discord server uses one DjGoo Host and one playback authority. Other players run DjGoo Voice; they do not create another Discord bot and never receive the Host's Discord token or webhook credentials.
+A Discord server uses one DjGoo Host and one playback authority. Other players run DjGoo Voice; they do not create another Discord bot and never receive the Host's bot token.
 
 ```text
 Player 1 microphone ─┐
@@ -50,18 +83,20 @@ Player 3 microphone ─┘
 ### Pair a recipient
 
 1. Start the Host and join the intended Discord voice channel.
-2. Run `/djgoolink pair` in Discord. DjGoo sends a private, five-minute invite containing a one-time code, the Host TLS identity, and every available fallback transport.
-3. Extract `DjGoo-Voice-win-x64.zip` and run `DjGoo Voice.exe`.
-4. Approve the first UAC request. DjGoo Voice creates only two program-scoped outbound rules: UDP `47631` for LAN discovery and TCP `47632` for the pinned gateway. It does not expose an inbound recipient port.
-5. Paste the complete invite and select **Paste and connect**.
+2. Run `/djgoolink pair` in Discord. DjGoo sends a private five-minute invitation.
+3. Open `DjGoo Voice.exe` on the recipient computer.
+4. Paste the complete invitation and select **Paste and connect**.
+5. After pairing succeeds, DjGoo Voice stores a Windows-protected device credential and reconnects in later sessions without another five-minute invitation.
 
-Alpha.21 and later do not trust a guessed Host adapter address. The recipient broadcasts a short discovery request containing the expected TLS fingerprint. Only the matching Host responds, and the recipient derives the usable gateway URL from the reply's source address. This avoids stale, VPN, ASTER, virtual-adapter, and multi-NIC addresses.
+The five-minute limit applies only to initial pairing. The paired device credential has no five-minute session limit and remains valid until revoked or removed.
 
 Connection order is:
 
-1. certificate-pinned recipient-led LAN discovery;
-2. any still-valid direct invite hints;
-3. end-to-end encrypted Discord or hosted relay fallback when configured.
+1. end-to-end encrypted Discord-backed or hosted outbound route;
+2. certificate-pinned recipient-led LAN discovery;
+3. certificate-pinned direct route hints.
+
+The outbound route uses ordinary HTTPS and does not require router port forwarding or an inbound recipient firewall rule. The optional LAN path avoids guessed ASTER, VPN, virtual-adapter, stale, and multi-NIC addresses by deriving the Host address from an authenticated discovery response.
 
 Speech recognition and parsing run locally. Raw microphone audio is rejected by the Host gateway. Only structured command metadata is transmitted. The Host validates the paired device, Discord user, guild, current voice channel, permissions, timestamp, rate limit, and command UUID for every request.
 
@@ -71,11 +106,11 @@ Speech recognition and parsing run locally. Raw microphone audio is rejected by 
 /djgoo revoke <device-id>
 ```
 
-The direct gateway is for a trusted LAN or authenticated private overlay. Do not forward TCP `47632` or UDP `47631` from a residential router to the public internet. See `docs/MULTI_USER_VOICE.md` and `SECURITY.md` for protocol and threat boundaries.
+Do not forward TCP `47632` or UDP `47631` from a residential router to the public internet. See `docs/MULTI_USER_VOICE.md` and `SECURITY.md` for protocol and threat boundaries.
 
 ## Core behavior
 
-- Supervises Lavalink, Redbot, and local voice recognition as independent components.
+- Supervises Lavalink, Redbot, and optional local Host voice recognition independently.
 - Verifies process identity and fresh health state instead of trusting stale PID files or log phrases.
 - Captures push-to-talk audio with pre-roll and release-tail buffering.
 - Uses Faster-Whisper, VAD, confidence rejection, and configurable phrase corrections.
@@ -129,11 +164,11 @@ A normal skip creates temporary negative feedback. Only an explicit ban creates 
 
 ## Public repository safety
 
-DjGoo keeps runtime state beside the extracted package, but those paths are excluded from Git. Never commit `config/secrets.json`, `data/`, `logs/`, `.localappdata/`, private keys, pairing credentials, update tokens, Discord bot tokens, or webhook URLs.
+Never commit `config/secrets.json`, `data/`, `logs/`, `.localappdata/`, private keys, pairing credentials, update tokens, Discord bot tokens, or webhook URLs.
 
-CI runs `tools/public_release_audit.py` and rejects detected credentials, private runtime paths, missing license/security documents, or an incomplete `.gitignore`. This audit supplements GitHub secret scanning; it does not make a leaked credential safe. Rotate any credential that was ever committed before changing repository visibility.
+CI runs `tools/public_release_audit.py` and rejects detected credentials, private runtime paths, missing license/security documents, unsafe public pull-request workflows, or an incomplete `.gitignore`. Forked pull-request code does not execute on the self-hosted AEGIS release machine.
 
-Security reports should use GitHub private vulnerability reporting after it is enabled. Do not place credentials or exploitable details in public issues.
+This audit supplements GitHub secret scanning; it does not make a leaked credential safe. Rotate anything that may have appeared in Git history, Actions logs, issues, pull requests, artifacts, or screenshots before changing repository visibility.
 
 ## Develop from source
 
@@ -152,27 +187,22 @@ py -3.11 -m venv .voice-venv
 .\.voice-venv\Scripts\python.exe -m pytest -q
 ```
 
-Run the Python applications directly:
+Run source applications directly:
 
 ```powershell
 .\.venv\Scripts\python.exe -m launcher.djgoo_host_experience
 .\.voice-venv\Scripts\python.exe -m launcher.djgoo_voice_experience
 ```
 
-The repository intentionally contains no committed `.ps1` or `.vbs` application entrypoints. Launch, setup, supervision, and maintenance behavior belongs in tested Python modules. CI enforces this boundary.
-
 ## Release engineering
 
-The self-hosted Windows release pipeline:
+Alpha.25 uses three release stages:
 
-- runs the public-release audit, source compilation, and complete automated test suite;
-- assembles redistributable Python and Java runtimes where required;
-- installs binary dependencies into isolated portable runtimes;
-- creates the Host and recipient PyInstaller executables;
-- smoke-tests the generated packages under their bundled runtimes;
-- creates manifests, CycloneDX SBOMs, updater ZIPs, and SHA-256 checksums;
-- rejects updater bundles containing logs, secrets, credentials, user data, or files outside the declared manifest;
-- publishes only after all seven release assets are non-empty and downloadable.
+1. **Fast Application Release** runs the public audit, compilation, and complete test suite; builds versioned Host/Voice app layers and tiny launchers; publishes and downloads the four updater assets.
+2. **Portable Releases** reuses hash-keyed Python and speech layers from AEGIS, builds a `jlink` Java runtime for Lavalink, assembles clean packages, creates standard multithreaded ZIP archives, and appends full-package and optional-speech assets to the same prerelease.
+3. **Verify layered release assets** downloads all nine final assets and verifies checksums, updater manifests, archive membership, runtime exclusion, versioned app pointers, and clean-package contracts without rebuilding or modifying the release.
+
+Runtime caches are keyed by the Python version, dependency-file hashes, Java version, Lavalink hash, and required Java modules. A normal application change does not reinstall or rehash those runtime layers in the update path.
 
 See `docs/ARCHITECTURE.md`, `docs/MULTI_USER_VOICE.md`, `CONTRIBUTING.md`, `SECURITY.md`, and `CHANGELOG.md`.
 
