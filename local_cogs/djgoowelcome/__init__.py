@@ -20,6 +20,8 @@ PROJECT_ROOT = package_root(Path(__file__).resolve().parents[2])
 TIMED_REQUEST_INTENTS = {"play_now", "queue_request"}
 
 
+# Select the complete DjGoo bridge at the package boundary while retaining one
+# playback authority. Third-party engine names stay behind this internal seam.
 cog_module.PROJECT_ROOT = PROJECT_ROOT
 cog_module.EnhancedDjGooAudioBridge = RemoteAwareDjGooAudioBridge
 cog_module.JOINING_REMOTE_INTENTS.update(TIMED_REQUEST_INTENTS)
@@ -72,6 +74,10 @@ def _install_gateway_firewall_repair() -> None:
                 discovery_port=DISCOVERY_PORT,
             )
 
+        # Do not advertise a Host until the certificate-pinned TCP gateway has
+        # completed its own startup. The original method logs and returns when
+        # binding fails, so inspect the live aiohttp server rather than merely
+        # checking whether a TCPSite object was allocated.
         await original_start_gateway(self)
 
         gateway = self._gateway
@@ -85,6 +91,9 @@ def _install_gateway_firewall_repair() -> None:
             socket_count=len(sockets or ()),
         )
         if gateway is not None and not self._djgoo_gateway_ready:
+            # The legacy gateway object assigns _site before awaiting the bind.
+            # Clear that stale marker so invite generation cannot mistake an
+            # allocated-but-unbound TCPSite for a usable direct route.
             gateway._site = None
         if gateway is None or not self._djgoo_gateway_ready:
             return
@@ -138,7 +147,9 @@ def _install_timed_chat_routing() -> None:
             and message.author != self.bot.user
             and not getattr(message.author, "bot", False)
         ):
-            command_text = cog_module.parse_djgoo_chat_command(message.content)
+            command_text = cog_module.parse_djgoo_chat_command(
+                message.content
+            )
             if command_text:
                 parsed = cog_module.parse_command(message.content)
                 if parsed.intent in TIMED_REQUEST_INTENTS:
