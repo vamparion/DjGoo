@@ -79,7 +79,12 @@ def test_portable_stack_schedules_completion_when_pending(
         "--root",
         str(tmp_path.resolve()),
     ]
-    assert calls[0]["env"] == {"CLEAN": "1"}
+    environment = calls[0]["env"]
+    assert environment["CLEAN"] == "1"
+    assert environment["DJGOO_HOME"] == str(tmp_path.resolve())
+    assert environment["DJGOO_APP_ROOT"] == str(tmp_path.resolve())
+    assert environment["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+    assert environment["LOCALAPPDATA"] == str((tmp_path / ".localappdata").resolve())
 
 
 def test_portable_stack_does_not_schedule_without_pending(
