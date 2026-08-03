@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from tools.app_layout import active_app_root, package_root
+from tools.cleanup_legacy_layout import cleanup_legacy_layout
 
 
 def main() -> int:
@@ -11,6 +12,7 @@ def main() -> int:
     app = active_app_root(root)
     os.environ["DJGOO_HOME"] = str(root)
     os.environ["DJGOO_APP_ROOT"] = str(app)
+    cleanup_legacy_layout(root)
 
     import launcher.djgoo_voice_launcher as voice_base
 
