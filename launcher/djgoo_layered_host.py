@@ -47,7 +47,7 @@ def main() -> int:
 
         @property
         def update_worker(self) -> Path:
-            return self.app_root / "tools" / "apply_update.py"
+            return self.app_root / "tools" / "layered_apply_update.py"
 
     base.application_root = lambda: root
     base.Layout = LayeredLayout
