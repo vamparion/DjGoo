@@ -45,6 +45,14 @@ def main() -> int:
         "user.email",
         "41898282+github-actions[bot]@users.noreply.github.com",
     )
+    run(
+        "git",
+        "config",
+        "--global",
+        "--add",
+        "safe.directory",
+        PROJECT_ROOT.as_posix(),
+    )
     run("git", "fetch", "origin", "main")
     run("git", "switch", "--force-create", REPAIR_BRANCH, "origin/main")
 
