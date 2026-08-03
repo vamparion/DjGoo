@@ -225,25 +225,25 @@ jobs:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
-          $host = (Resolve-Path build/DjGoo-Host-win-x64).Path
-          $hostApp = Join-Path $host "app\$env:DJGOO_VERSION"
-          $env:DJGOO_HOME = $host
+          $hostRoot = (Resolve-Path build/DjGoo-Host-win-x64).Path
+          $hostApp = Join-Path $hostRoot "app\$env:DJGOO_VERSION"
+          $env:DJGOO_HOME = $hostRoot
           $env:DJGOO_APP_ROOT = $hostApp
           $env:PYTHONPATH = $hostApp
-          & "$host/runtime/python-bot/python.exe" `
+          & "$hostRoot/runtime/python-bot/python.exe" `
             "$hostApp/tools/portable_red_setup.py" `
-            --project-root $host `
+            --project-root $hostRoot `
             --non-interactive
           if ($LASTEXITCODE -ne 0) { throw "Layered Host setup smoke test failed" }
-          & "$host/runtime/python-bot/python.exe" `
+          & "$hostRoot/runtime/python-bot/python.exe" `
             "$hostApp/tools/layered_redbot_selector.py" `
             --djgoo-check
           if ($LASTEXITCODE -ne 0) { throw "Layered Host Music Core smoke test failed" }
-          & "$host/runtime/python-bot/python.exe" -c "from tools.app_layout import active_app_root; import launcher.djgoo_layered_host, tools.layered_stack, voice.connection_manager; from pathlib import Path; assert active_app_root(Path(r'$host')).name == '$env:DJGOO_VERSION'; print('Layered Host imports OK')"
+          & "$hostRoot/runtime/python-bot/python.exe" -c "from tools.app_layout import active_app_root; import launcher.djgoo_layered_host, tools.layered_stack, voice.connection_manager; from pathlib import Path; assert active_app_root(Path(r'$hostRoot')).name == '$env:DJGOO_VERSION'; print('Layered Host imports OK')"
           if ($LASTEXITCODE -ne 0) { throw "Layered Host import smoke test failed" }
-          $javaOutput = (& "$host/runtime/java/bin/java.exe" -jar "$host/data/discordbot/cogs/Audio/Lavalink.jar" --version 2>&1 | Out-String)
+          $javaOutput = (& "$hostRoot/runtime/java/bin/java.exe" -jar "$hostRoot/data/discordbot/cogs/Audio/Lavalink.jar" --version 2>&1 | Out-String)
           if ($LASTEXITCODE -ne 0 -or $javaOutput -notmatch "Version:") { throw "Minimal Host Java runtime failed: $javaOutput" }
-          if ((Get-Item "$host/DjGoo.exe").Length -gt 524288) { throw "DjGoo thin launcher is unexpectedly large" }
+          if ((Get-Item "$hostRoot/DjGoo.exe").Length -gt 524288) { throw "DjGoo thin launcher is unexpectedly large" }
 
           $voice = (Resolve-Path build/DjGoo-Voice-win-x64).Path
           $voiceApp = Join-Path $voice "app\$env:DJGOO_VERSION"
