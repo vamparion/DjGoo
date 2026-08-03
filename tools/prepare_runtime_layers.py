@@ -54,6 +54,58 @@ def _python_embed(cache: Path, version: str, expected_md5: str) -> Path:
     return archive
 
 
+def _first_existing(candidates: list[Path]) -> Path | None:
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _install_tk_runtime(destination: Path) -> None:
+    """Add the Tcl/Tk slice omitted by the Windows embeddable ZIP.
+
+    PyInstaller previously carried this dependency inside each GUI executable.
+    Thin launchers run the control centers through the shared runtime, so both
+    Host and Voice Python layers need the standard ``tkinter`` package, its
+    native extension, Tcl/Tk DLLs, and script libraries.
+    """
+
+    base = Path(sys.base_prefix).resolve()
+    tkinter_source = base / "Lib" / "tkinter"
+    tcl_source = base / "tcl"
+    if not tkinter_source.is_dir() or not tcl_source.is_dir():
+        raise RuntimeLayerError(
+            f"Build Python does not contain its Tcl/Tk standard-library slice: {base}"
+        )
+
+    shutil.copytree(
+        tkinter_source,
+        destination / "Lib" / "tkinter",
+        dirs_exist_ok=True,
+    )
+    shutil.copytree(
+        tcl_source,
+        destination / "tcl",
+        dirs_exist_ok=True,
+    )
+
+    native_files = ("_tkinter.pyd", "tcl86t.dll", "tk86t.dll")
+    for filename in native_files:
+        source = _first_existing(
+            [
+                base / "DLLs" / filename,
+                base / filename,
+            ]
+        )
+        if source is None:
+            raise RuntimeLayerError(
+                f"Build Python Tcl/Tk native file is missing: {filename}"
+            )
+        # Embeddable Python loads extension modules and dependent DLLs from the
+        # executable directory, matching the layout of its other .pyd files.
+        shutil.copy2(source, destination / filename)
+
+
 def _extract_python(archive: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(archive) as bundle:
@@ -64,10 +116,11 @@ def _extract_python(archive: Path, destination: Path) -> None:
     if pth is None:
         raise RuntimeLayerError("Embedded Python did not contain a python*._pth file")
     pth.write_text(
-        "python311.zip\n.\nLib/site-packages\nimport site\n",
+        "python311.zip\n.\nLib\nLib/site-packages\nimport site\n",
         encoding="ascii",
     )
     (site_packages / "djgoo-root.pth").write_text("../../../..\n", encoding="ascii")
+    _install_tk_runtime(destination)
 
 
 def _pip_install(target: Path, requirements: Path) -> None:
@@ -120,11 +173,12 @@ def prepare(
     voice_requirements = PROJECT_ROOT / "requirements-voice-base.txt"
     speech_requirements = PROJECT_ROOT / "requirements-speech.txt"
 
+    # v2 includes the Tcl/Tk slice required by extraction-free GUI launchers.
     bot_key = _digest(
-        [b"python-bot-v1", python_version.encode(), _file_bytes(bot_requirements)]
+        [b"python-bot-v2-tk", python_version.encode(), _file_bytes(bot_requirements)]
     )
     voice_key = _digest(
-        [b"python-voice-v1", python_version.encode(), _file_bytes(voice_requirements)]
+        [b"python-voice-v2-tk", python_version.encode(), _file_bytes(voice_requirements)]
     )
     speech_key = _digest(
         [b"speech-v1", python_version.encode(), _file_bytes(speech_requirements)]
