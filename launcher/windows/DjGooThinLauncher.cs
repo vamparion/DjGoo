@@ -53,8 +53,8 @@ internal static class DjGooThinLauncher
         bool voice = name.Contains("voice");
         bool mini = name.Contains("mini");
         string module = voice
-            ? "launcher.djgoo_voice_control_center"
-            : mini ? "launcher.djgoo_overlay" : "launcher.djgoo_host_control_center";
+            ? "launcher.djgoo_layered_voice"
+            : mini ? "launcher.djgoo_layered_mini" : "launcher.djgoo_layered_host";
         string runtimeName = voice ? "python-voice" : "python-bot";
         string pythonw = FirstExisting(
             Path.Combine(root, "runtime", runtimeName, "pythonw.exe"),
