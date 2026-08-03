@@ -13,7 +13,9 @@ from typing import Any, Dict, Tuple
 import aiohttp
 from redbot.core import commands
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+from tools.app_layout import package_root
+
+PROJECT_ROOT = package_root(Path(__file__).resolve().parents[2])
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -97,393 +99,238 @@ class DjGooWelcome(commands.Cog):
             self.bot.loop.create_task(self._start_gateway()) if self._gateway is not None else None
         )
         self._queue_task = self.bot.loop.create_task(self._command_queue_loop())
-
-    def cog_unload(self):
-        self._queue_task.cancel()
-        if self._gateway_task is not None:
-            self._gateway_task.cancel()
-        if self._gateway is not None:
-            self.bot.loop.create_task(self._gateway.stop())
-
-    async def red_delete_data_for_user(self, **kwargs):
-        user_id = kwargs.get("user_id")
-        if user_id is None:
-            return
-        await asyncio.to_thread(self._pairing_store.delete_user, int(user_id))
+        self._presence_task = self.bot.loop.create_task(self._presence_loop())
+        self._cleanup_task = self.bot.loop.create_task(self._cleanup_pairing_state_loop())
 
     def _secrets_path(self) -> Path:
-        configured = os.environ.get("DJGOO_SECRETS_FILE")
-        if configured:
-            return Path(configured)
         return PROJECT_ROOT / "config" / "secrets.json"
+
+    def _remote_queue_path(self) -> Path:
+        return PROJECT_ROOT / "data" / "voice-command-queue.jsonl"
 
     def _gateway_settings(self) -> dict[str, Any]:
         secrets = load_secrets(self._secrets_path())
-        configured = secrets.get("voice_gateway", {})
-        return configured if isinstance(configured, dict) else {}
+        gateway = secrets.get("voice_gateway", {}) if isinstance(secrets, dict) else {}
+        return gateway if isinstance(gateway, dict) else {}
 
     def _build_gateway(self) -> VoiceCommandGateway | None:
         settings = self._gateway_settings()
         if not bool(settings.get("enabled", True)):
-            log_event("voice.gateway.disabled")
             return None
-        identity = ensure_tls_identity(
-            PROJECT_ROOT / "data" / "certs" / "voice-gateway.crt.pem",
-            PROJECT_ROOT / "data" / "certs" / "voice-gateway.key.pem",
-        )
+        identity = ensure_tls_identity(PROJECT_ROOT / "data" / "voice-gateway")
         return VoiceCommandGateway(
-            self._pairing_store,
-            self._remote_queue_path(),
-            self._authorize_remote,
-            identity,
-            host=str(settings.get("bind_host") or "0.0.0.0"),
+            bind_host=str(settings.get("bind_host") or "0.0.0.0"),
             port=int(settings.get("port") or 47632),
+            certificate_path=identity.certificate_path,
+            private_key_path=identity.private_key_path,
+            fingerprint=identity.fingerprint_sha256,
+            pairing_store=self._pairing_store,
+            queue_path=self._remote_queue_path(),
+            authorize=self._authorize_remote,
         )
 
     async def _start_gateway(self) -> None:
-        assert self._gateway is not None
-        await self.bot.wait_until_red_ready()
+        gateway = self._gateway
+        if gateway is None:
+            return
         try:
-            await self._gateway.start()
-        except asyncio.CancelledError:
-            raise
+            await gateway.start()
         except Exception as exc:
-            log.exception("DjGoo Voice Gateway failed to start")
-            log_event("voice.gateway.start_failed", error=type(exc).__name__, detail=str(exc))
-            return
-        log_event(
-            "voice.gateway.ready",
-            bind_host=self._gateway.host,
-            port=self._gateway.port,
-            fingerprint=self._gateway.fingerprint,
-        )
-
-    def _advertised_gateway_url(self) -> str:
-        settings = self._gateway_settings()
-        configured = str(settings.get("advertise_url") or "").strip().rstrip("/")
-        if configured:
-            return configured
-        try:
-            address = socket.gethostbyname(socket.gethostname())
-        except OSError:
-            address = "127.0.0.1"
-        if not address or address.startswith("127."):
-            address = "127.0.0.1"
-        port = self._gateway.port if self._gateway is not None else int(settings.get("port") or 47632)
-        return f"https://{address}:{port}"
-
-    async def _authorize_remote(self, identity: DeviceIdentity, intent: str) -> AuthorizationResult:
-        guild = self.bot.get_guild(identity.guild_id)
-        if guild is None:
-            return AuthorizationResult(False, "The paired Discord server is not available")
-        member = guild.get_member(identity.user_id)
-        if member is None:
-            with contextlib.suppress(Exception):
-                member = await guild.fetch_member(identity.user_id)
-        if member is None:
-            return AuthorizationResult(False, "The paired Discord member is not available")
-        voice_state = getattr(member, "voice", None)
-        member_channel = getattr(voice_state, "channel", None)
-        if member_channel is None:
-            return AuthorizationResult(False, "Join a Discord voice channel before using DjGoo Voice")
-
-        voice_client = getattr(guild, "voice_client", None)
-        bot_channel = getattr(voice_client, "channel", None)
-        if bot_channel is not None and int(bot_channel.id) != int(member_channel.id):
-            return AuthorizationResult(False, "Join the same voice channel as DjGoo")
-        if bot_channel is None and intent not in JOINING_REMOTE_INTENTS:
-            return AuthorizationResult(False, "Start a song or radio station before using that control")
-
-        permissions = getattr(member, "guild_permissions", None)
-        is_manager = bool(getattr(permissions, "manage_guild", False)) or int(member.id) == int(guild.owner_id)
-        if intent in DESTRUCTIVE_REMOTE_INTENTS and not is_manager:
-            return AuthorizationResult(False, "That command requires Manage Server or server ownership")
-        return AuthorizationResult(True, voice_channel_id=int(member_channel.id))
-
-    def _cooldown_key(self, member, channel) -> Tuple[int, int]:
-        return (int(member.id), int(channel.id))
-
-    def _queue_path(self) -> Path:
-        secrets = load_secrets(self._secrets_path())
-        voice = secrets.get("voice", {}) if isinstance(secrets.get("voice", {}), dict) else {}
-        configured = voice.get("queue_path", "")
-        if configured:
-            configured_path = Path(str(configured))
-            return configured_path if configured_path.is_absolute() else PROJECT_ROOT / configured_path
-        return PROJECT_ROOT / "data" / "voice-command-queue.jsonl"
-
-    def _remote_queue_path(self) -> Path:
-        settings = self._gateway_settings()
-        configured = str(settings.get("queue_path") or "").strip()
-        if configured:
-            path = Path(configured)
-            return path if path.is_absolute() else PROJECT_ROOT / path
-        return PROJECT_ROOT / "data" / "remote-command-queue.jsonl"
-
-    def _is_on_cooldown(self, member, channel) -> bool:
-        key = self._cooldown_key(member, channel)
-        now = time.monotonic()
-        last_sent = self._last_sent.get(key, 0.0)
-        if now - last_sent < self._cooldown_seconds:
-            return True
-        self._last_sent[key] = now
-        return False
-
-    async def _send_webhook_payload(self, payload: Dict[str, Any]) -> None:
-        secrets = load_secrets(self._secrets_path())
-        webhook_url = secrets.get("webhook_url", "")
-        if not webhook_url:
-            log.warning("DjGoo webhook is not configured. Edit config/secrets.json.")
-            log_event("discord.webhook.missing")
-            return
-
-        try:
-            timeout = aiohttp.ClientTimeout(total=10)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(webhook_url, json=payload) as response:
-                    log_event(
-                        "discord.webhook.sent",
-                        status=response.status,
-                        embed_titles=[embed.get("title", "") for embed in payload.get("embeds", [])],
-                        has_content=bool(payload.get("content")),
-                    )
-                    if response.status >= 400:
-                        body = await response.text()
-                        log.warning("DjGoo webhook failed with HTTP %s: %s", response.status, body[:500])
-                        log_event("discord.webhook.failed", status=response.status, body=body[:500])
-        except (aiohttp.ClientError, asyncio.TimeoutError):
-            log.exception("DjGoo webhook request failed.")
-            log_event("discord.webhook.exception")
-
-    async def _handle_queued_item(self, item: dict[str, Any]) -> None:
-        log_event(
-            "voice.queue.item.received",
-            type=item.get("type"),
-            source=item.get("source"),
-            intent=item.get("intent"),
-            action=item.get("action"),
-            query=item.get("query"),
-            playlist=item.get("playlist"),
-            raw=item.get("raw"),
-            user_id=item.get("user_id"),
-            device_id=item.get("device_id"),
-            command_id=item.get("command_id"),
-        )
-        if item.get("intent") not in FAST_CONTROL_INTENTS:
-            await self._send_webhook_payload(build_voice_command_payload(item))
-        else:
-            await self._send_webhook_payload(build_fast_control_payload(item))
-            log_event("voice.command.fast_notification_sent", intent=item.get("intent"))
-        result = await self._audio_bridge.handle(item)
-        log.info(
-            "DjGoo handled %s command from %s: %s",
-            item.get("intent") or item.get("action") or item.get("type"),
-            item.get("source", "unknown"),
-            result,
-        )
-        log_event(
-            "voice.queue.item.handled",
-            type=item.get("type"),
-            source=item.get("source"),
-            intent=item.get("intent"),
-            result=result,
-            user_id=item.get("user_id"),
-            command_id=item.get("command_id"),
-        )
+            log_event(
+                "voice.gateway.failed",
+                error=type(exc).__name__,
+                detail=str(exc),
+            )
 
     async def _command_queue_loop(self) -> None:
-        await self.bot.wait_until_red_ready()
-        log_event(
-            "redbot.ready",
-            guild_count=len(self.bot.guilds),
-            audio_loaded=self.bot.get_cog("Audio") is not None,
-            discord_ready=self.bot.is_ready(),
-        )
-        await self._audio_bridge.resume_saved_playback()
-        next_heartbeat = 0.0
-        queue_paths = (self._queue_path(), self._remote_queue_path())
         while True:
             try:
-                now = time.monotonic()
-                if now >= next_heartbeat:
-                    log_event(
-                        "redbot.heartbeat",
-                        guild_count=len(self.bot.guilds),
-                        audio_loaded=self.bot.get_cog("Audio") is not None,
-                        discord_ready=self.bot.is_ready(),
-                        voice_gateway_ready=self._gateway is not None,
-                    )
-                    next_heartbeat = now + 5.0
-
-                for queue_path in queue_paths:
-                    items = drain_queue(queue_path)
-                    if items:
-                        log_event("voice.queue.drained", count=len(items), queue_path=str(queue_path))
-                    for item in items:
-                        await self._handle_queued_item(item)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                log.exception("DjGoo voice command queue loop failed.")
-                log_event("voice.queue.loop.exception")
+                for item in drain_queue(self._remote_queue_path()):
+                    await self._audio_bridge.handle(item)
+            except Exception as exc:
+                log_event(
+                    "voice.queue.failed",
+                    error=type(exc).__name__,
+                    detail=str(exc),
+                )
             await asyncio.sleep(0.2)
 
-    @commands.hybrid_group(name="djgoo", invoke_without_command=True)
-    async def djgoo_group(self, ctx: commands.Context) -> None:
-        """Manage DjGoo Voice Remote pairing."""
-        await ctx.send("Use `djgoo pair`, `djgoo devices`, or `djgoo revoke <device-id>`. ")
+    async def _presence_loop(self) -> None:
+        await self.bot.wait_until_red_ready()
+        while True:
+            try:
+                guild_count = len(getattr(self.bot, "guilds", ()))
+                audio_loaded = self.bot.get_cog("Audio") is not None
+                discord_ready = bool(self.bot.is_ready())
+                write = {
+                    "guild_count": guild_count,
+                    "audio_loaded": audio_loaded,
+                    "discord_ready": discord_ready,
+                    "voice_gateway_ready": bool(
+                        self._gateway is not None
+                        and getattr(self._gateway, "_site", None) is not None
+                    ),
+                }
+                log_event("redbot.heartbeat", **write)
+                from voice.health import write_heartbeat
 
-    @djgoo_group.command(name="pair")
-    @commands.guild_only()
-    async def djgoo_pair(self, ctx: commands.Context) -> None:
-        """Create a private, short-lived Voice Remote pairing code."""
-        if self._gateway is None:
-            await ctx.send("DjGoo Voice Gateway is disabled on this Host.")
-            return
-        code = await asyncio.to_thread(
-            self._pairing_store.create_pairing_code,
-            int(ctx.author.id),
-            int(ctx.guild.id),
-            300,
-        )
-        message = (
-            "DjGoo Voice pairing details\n\n"
-            f"Gateway URL: `{self._advertised_gateway_url()}`\n"
-            f"Pairing code: `{code}`\n"
-            f"TLS fingerprint: `{self._gateway.fingerprint}`\n\n"
-            "The code expires in five minutes and can be used once. "
-            "Keep the device token created during pairing private."
-        )
-        try:
-            await ctx.author.send(message)
-        except Exception:
-            await ctx.send("I could not send you a private message. Enable DMs from this server and try again.")
-            return
-        await ctx.send("Pairing details were sent to you privately.", delete_after=12)
-        log_event("voice.pairing.code_created", user_id=ctx.author.id, guild_id=ctx.guild.id)
+                write_heartbeat(
+                    "redbot",
+                    project_root=PROJECT_ROOT,
+                    fields=write,
+                )
+            except Exception as exc:
+                log.debug("DjGoo heartbeat failed: %s", exc)
+            await asyncio.sleep(5)
 
-    @djgoo_group.command(name="devices")
-    @commands.guild_only()
-    async def djgoo_devices(self, ctx: commands.Context) -> None:
-        """List your active paired Voice Remote devices."""
-        devices = await asyncio.to_thread(
-            self._pairing_store.list_devices,
-            int(ctx.author.id),
-            int(ctx.guild.id),
-        )
-        if not devices:
-            await ctx.send("You do not have any active DjGoo Voice devices.")
-            return
-        lines = [
-            f"`{device.device_id}` — {device.device_name} — last seen <t:{int(device.last_seen_at)}:R>"
-            for device in devices
-        ]
-        await ctx.author.send("Your DjGoo Voice devices:\n" + "\n".join(lines))
-        await ctx.send("Your active devices were sent to you privately.", delete_after=12)
+    async def _cleanup_pairing_state_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.to_thread(self._pairing_store.cleanup)
+            except Exception as exc:
+                log.debug("DjGoo pairing cleanup failed: %s", exc)
+            await asyncio.sleep(60)
 
-    @djgoo_group.command(name="revoke")
-    @commands.guild_only()
-    async def djgoo_revoke(self, ctx: commands.Context, device_id: str) -> None:
-        """Revoke one of your paired Voice Remote devices."""
-        revoked = await asyncio.to_thread(
-            self._pairing_store.revoke_device,
-            device_id.strip(),
-            int(ctx.author.id),
-            int(ctx.guild.id),
+    async def _send_webhook_payload(self, payload: dict[str, Any]) -> None:
+        secrets = load_secrets(self._secrets_path())
+        webhook_url = str(secrets.get("webhook_url") or "").strip()
+        if not webhook_url:
+            return
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(webhook_url, json=payload) as response:
+                response.raise_for_status()
+
+    async def _authorize_remote(
+        self,
+        device: DeviceIdentity,
+        payload: dict[str, Any],
+    ) -> AuthorizationResult:
+        guild = self.bot.get_guild(int(device.guild_id))
+        if guild is None:
+            return AuthorizationResult(False, "DjGoo is no longer in the paired server")
+        member = guild.get_member(int(device.discord_user_id))
+        if member is None:
+            try:
+                member = await guild.fetch_member(int(device.discord_user_id))
+            except Exception:
+                return AuthorizationResult(False, "The paired Discord user is not in this server")
+        voice = getattr(member, "voice", None)
+        channel = getattr(voice, "channel", None)
+        if channel is None:
+            return AuthorizationResult(False, "Join a Discord voice channel before controlling DjGoo")
+        me = guild.me
+        bot_voice = getattr(getattr(me, "voice", None), "channel", None)
+        if bot_voice is not None and bot_voice.id != channel.id:
+            return AuthorizationResult(False, "Join the same voice channel as DjGoo")
+        intent = str(payload.get("intent") or "").strip()
+        permissions = getattr(member, "guild_permissions", None)
+        if intent in DESTRUCTIVE_REMOTE_INTENTS and not (
+            bool(getattr(permissions, "manage_guild", False))
+            or int(member.id) == int(guild.owner_id)
+        ):
+            return AuthorizationResult(False, "This control requires Manage Server")
+        return AuthorizationResult(
+            True,
+            discord_user_id=int(member.id),
+            guild_id=int(guild.id),
+            voice_channel_id=int(channel.id),
+            display_name=str(getattr(member, "display_name", member.name)),
         )
-        if revoked:
-            await ctx.send("That DjGoo Voice device has been revoked.")
-            log_event("voice.device.revoked", user_id=ctx.author.id, guild_id=ctx.guild.id, device_id=device_id)
-        else:
-            await ctx.send("No active device with that ID belongs to you in this server.")
+
+    async def _dispatch_chat_command(self, message, command_text: str) -> None:
+        parsed = parse_command(command_text)
+        item = command_to_queue_item(
+            parsed,
+            transcript=message.content,
+            source="discord_chat",
+        )
+        await self._audio_bridge.handle(item)
 
     @commands.Cog.listener()
-    async def on_voice_state_update(self, member, before, after):
-        if not should_send_welcome(member, before, after):
-            return
-        channel = after.channel
-        if self._is_on_cooldown(member, channel):
-            return
-        payload = build_welcome_payload(member.display_name, channel.name)
-        await self._send_webhook_payload(payload)
-
-    @commands.Cog.listener()
-    async def on_message(self, message):
-        if message.guild is None:
-            return
-        if message.author == self.bot.user:
-            if self._is_red_track_enqueue_message(message):
-                await self._audio_bridge.handle_red_track_enqueue_message(message)
+    async def on_message(self, message) -> None:
+        if message.guild is None or message.author == self.bot.user:
             return
         if getattr(message.author, "bot", False):
             return
-
         command_text = parse_djgoo_chat_command(message.content)
-        if not command_text:
+        if command_text:
+            await self._dispatch_chat_command(message, command_text)
             return
-
-        parsed = parse_command(message.content)
-        log_event(
-            "chat.command.received",
+        if not should_send_welcome(
+            message.content,
+            last_sent=self._last_sent,
             guild_id=message.guild.id,
             channel_id=message.channel.id,
-            author_id=message.author.id,
-            content=message.content,
-            command_text=command_text,
-            parsed_intent=parsed.intent,
-            parsed_query=parsed.query,
-            parsed_playlist=parsed.playlist,
-        )
-        bridge_intents = {
-            "play",
-            "play_album",
-            "start_radio",
-            "station_like_current",
-            "station_more_like_current",
-            "station_less_like_current",
-            "station_ban_current",
-            "station_status",
-            "stop_radio",
-            "save_current_to_playlist",
-            "save_last_to_playlist",
-            "play_playlist",
-            "shuffle_playlist",
-            "volume_up",
-            "volume_down",
-            "remove_current",
-            "seek",
-            "remove_queue",
-            "shuffle_queue",
-            "repeat",
-            "autoplay",
-            "favorite_current",
-            "undo_station_ban",
-        }
-        if parsed.intent in bridge_intents:
-            result = await self._audio_bridge.handle(
-                command_to_queue_item(parsed, transcript=message.content, source="chat")
-            )
-            log_event("chat.command.handled_by_bridge", intent=parsed.intent, result=result)
+            cooldown_seconds=self._cooldown_seconds,
+        ):
             return
+        payload = build_welcome_payload(message.author.mention)
+        await message.channel.send(**payload)
+        self._last_sent[(message.guild.id, message.channel.id)] = time.monotonic()
 
-        original_content = message.content
-        message.content = f"!{command_text}"
-        try:
-            await self.bot.process_commands(message)
-            log_event("chat.command.forwarded_to_redbot", command_text=command_text)
-        finally:
-            message.content = original_content
+    @commands.hybrid_group(name="djgoo", invoke_without_command=True)
+    async def djgoo_group(self, ctx: commands.Context) -> None:
+        """Show DjGoo controls."""
+        payload = build_fast_control_payload()
+        await ctx.send(**payload)
 
-    @commands.Cog.listener()
-    async def on_red_audio_track_start(self, guild, track, requester):
-        await self._audio_bridge.handle_track_start(guild, track)
+    @djgoo_group.command(name="play")
+    async def play(self, ctx: commands.Context, *, query: str) -> None:
+        """Play a track through DjGoo."""
+        item = command_to_queue_item(
+            parse_command(f"play {query}"),
+            transcript=f"play {query}",
+            source="discord_command",
+        )
+        item["discord_user_id"] = int(ctx.author.id)
+        item["guild_id"] = int(ctx.guild.id) if ctx.guild else 0
+        await self._audio_bridge.handle(item)
+        await ctx.send(f"DjGoo accepted: {query}")
 
-    @commands.Cog.listener()
-    async def on_red_audio_track_enqueue(self, guild, track, requester):
-        await self._audio_bridge.handle_track_enqueue(guild, track)
+    @djgoo_group.command(name="devices")
+    @commands.guild_only()
+    @commands.admin_or_permissions(manage_guild=True)
+    async def devices(self, ctx: commands.Context) -> None:
+        """List paired DjGoo Voice devices."""
+        devices = await asyncio.to_thread(
+            self._pairing_store.list_devices,
+            int(ctx.guild.id),
+        )
+        if not devices:
+            await ctx.send("No DjGoo Voice devices are paired with this server.")
+            return
+        lines = ["Paired DjGoo Voice devices:"]
+        for device in devices:
+            suffix = " (revoked)" if device.revoked_at else ""
+            lines.append(
+                f"- `{device.device_id}` — {device.device_name} — Discord `{device.discord_user_id}`{suffix}"
+            )
+        await ctx.send("\n".join(lines))
 
-    def _is_red_track_enqueue_message(self, message) -> bool:
-        for embed in getattr(message, "embeds", []):
-            if (getattr(embed, "title", "") or "").strip().lower() == "track enqueued":
-                return True
-        return False
+    @djgoo_group.command(name="revoke")
+    @commands.guild_only()
+    @commands.admin_or_permissions(manage_guild=True)
+    async def revoke(self, ctx: commands.Context, device_id: str) -> None:
+        """Revoke one paired DjGoo Voice device."""
+        changed = await asyncio.to_thread(
+            self._pairing_store.revoke_device,
+            device_id,
+            int(ctx.guild.id),
+        )
+        if changed:
+            await ctx.send(f"Revoked DjGoo Voice device `{device_id}`.")
+        else:
+            await ctx.send("That device was not found or was already revoked.")
+
+    def cog_unload(self) -> None:
+        for task in (
+            self._gateway_task,
+            self._queue_task,
+            self._presence_task,
+            self._cleanup_task,
+        ):
+            if task is not None:
+                task.cancel()
+        if self._gateway is not None:
+            self.bot.loop.create_task(self._gateway.stop())
