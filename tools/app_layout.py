@@ -48,9 +48,22 @@ def read_current(root: Path) -> dict[str, object] | None:
     return payload
 
 
-def active_app_root(root: Path, *, require: bool = False) -> Path:
+def active_app_root(
+    root: Path,
+    *,
+    require: bool = False,
+    environment: Mapping[str, str] | None = None,
+) -> Path:
+    """Resolve the active application layer for one package root.
+
+    ``environment`` is explicit for subprocess construction. When a caller is
+    building an environment from a supplied mapping, process-global variables
+    from another DjGoo instance or test must not leak into that result.
+    """
+
     root = root.resolve()
-    configured = str(os.environ.get("DJGOO_APP_ROOT") or "").strip()
+    source = os.environ if environment is None else environment
+    configured = str(source.get("DJGOO_APP_ROOT") or "").strip()
     if configured:
         candidate = Path(configured).expanduser().resolve()
         try:
@@ -140,8 +153,8 @@ def layered_environment(
     base: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     root = root.resolve()
-    app_root = active_app_root(root)
     env = dict(os.environ if base is None else base)
+    app_root = active_app_root(root, environment=env)
     env["DJGOO_HOME"] = str(root)
     env["DJGOO_APP_ROOT"] = str(app_root)
 
