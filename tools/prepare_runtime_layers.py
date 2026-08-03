@@ -16,6 +16,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ACTIVE_APP_PTH_LINE = (
     "import os,sys; "
+    "sys.path.insert(0,os.path.join(os.environ.get('DJGOO_HOME',''),"
+    "'runtime','speech','Lib','site-packages')) "
+    "if os.path.isdir(os.path.join(os.environ.get('DJGOO_HOME',''),"
+    "'runtime','speech','Lib','site-packages')) else None; "
     "sys.path.insert(0,os.environ['DJGOO_APP_ROOT']) "
     "if os.path.isdir(os.environ.get('DJGOO_APP_ROOT','')) else None"
 )
@@ -126,8 +130,9 @@ def _extract_python(archive: Path, destination: Path) -> None:
     )
     # The embeddable distribution's ._pth mode intentionally ignores
     # PYTHONPATH. Add the mutable package root for bootstrap modules, then use
-    # an executable .pth line to put the active immutable app layer first.
-    # Thin launchers set DJGOO_APP_ROOT from current.json before Python starts.
+    # an executable .pth line to add the optional shared speech layer and put
+    # the active immutable app layer first. Thin launchers set DJGOO_HOME and
+    # DJGOO_APP_ROOT from their package location and current.json.
     (site_packages / "djgoo-root.pth").write_text(
         "../../../..\n" + ACTIVE_APP_PTH_LINE + "\n",
         encoding="ascii",
@@ -185,14 +190,22 @@ def prepare(
     voice_requirements = PROJECT_ROOT / "requirements-voice-base.txt"
     speech_requirements = PROJECT_ROOT / "requirements-speech.txt"
 
-    # v3 adds the active app layer to sys.path from DJGOO_APP_ROOT. This is
-    # required because Windows embeddable Python ignores PYTHONPATH in ._pth
-    # mode even though the extraction-free launchers set it defensively.
+    # v4 adds the optional shared speech layer under DJGOO_HOME to sys.path.
+    # Windows embeddable Python ignores PYTHONPATH in ._pth mode, so both the
+    # active app and speech paths must be installed through site processing.
     bot_key = _digest(
-        [b"python-bot-v3-tk-active-app", python_version.encode(), _file_bytes(bot_requirements)]
+        [
+            b"python-bot-v4-tk-active-app-speech",
+            python_version.encode(),
+            _file_bytes(bot_requirements),
+        ]
     )
     voice_key = _digest(
-        [b"python-voice-v3-tk-active-app", python_version.encode(), _file_bytes(voice_requirements)]
+        [
+            b"python-voice-v4-tk-active-app-speech",
+            python_version.encode(),
+            _file_bytes(voice_requirements),
+        ]
     )
     speech_key = _digest(
         [b"speech-v1", python_version.encode(), _file_bytes(speech_requirements)]
