@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPAIR_BRANCH = os.environ.get("REPAIR_BRANCH", "release/alpha25-shell-fix-generated")
 REPOSITORY = os.environ["GITHUB_REPOSITORY"]
 TARGETS = (
@@ -16,8 +17,13 @@ TARGETS = (
 
 
 def run(*args: str, capture: bool = False) -> str:
+    environment = dict(os.environ)
+    environment.pop("GIT_DIR", None)
+    environment.pop("GIT_WORK_TREE", None)
     completed = subprocess.run(
         list(args),
+        cwd=PROJECT_ROOT,
+        env=environment,
         check=True,
         text=True,
         capture_output=capture,
@@ -26,14 +32,27 @@ def run(*args: str, capture: bool = False) -> str:
 
 
 def main() -> int:
-    run("git", "config", "user.name", "github-actions[bot]")
+    repaired = {
+        path: (PROJECT_ROOT / path).read_text(encoding="utf-8")
+        for path in TARGETS
+    }
+
+    run("git", "config", "--global", "user.name", "github-actions[bot]")
     run(
         "git",
         "config",
+        "--global",
         "user.email",
         "41898282+github-actions[bot]@users.noreply.github.com",
     )
-    run("git", "switch", "-C", REPAIR_BRANCH)
+    run("git", "fetch", "origin", "main")
+    run("git", "switch", "--force-create", REPAIR_BRANCH, "origin/main")
+
+    for path, content in repaired.items():
+        destination = PROJECT_ROOT / path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(content, encoding="utf-8")
+
     run("git", "add", *TARGETS)
     run("git", "diff", "--cached", "--check")
 
