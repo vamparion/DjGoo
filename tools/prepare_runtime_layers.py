@@ -14,6 +14,11 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ACTIVE_APP_PTH_LINE = (
+    "import os,sys; "
+    "sys.path.insert(0,os.environ['DJGOO_APP_ROOT']) "
+    "if os.path.isdir(os.environ.get('DJGOO_APP_ROOT','')) else None"
+)
 
 
 class RuntimeLayerError(RuntimeError):
@@ -119,7 +124,14 @@ def _extract_python(archive: Path, destination: Path) -> None:
         "python311.zip\n.\nLib\nLib/site-packages\nimport site\n",
         encoding="ascii",
     )
-    (site_packages / "djgoo-root.pth").write_text("../../../..\n", encoding="ascii")
+    # The embeddable distribution's ._pth mode intentionally ignores
+    # PYTHONPATH. Add the mutable package root for bootstrap modules, then use
+    # an executable .pth line to put the active immutable app layer first.
+    # Thin launchers set DJGOO_APP_ROOT from current.json before Python starts.
+    (site_packages / "djgoo-root.pth").write_text(
+        "../../../..\n" + ACTIVE_APP_PTH_LINE + "\n",
+        encoding="ascii",
+    )
     _install_tk_runtime(destination)
 
 
@@ -173,12 +185,14 @@ def prepare(
     voice_requirements = PROJECT_ROOT / "requirements-voice-base.txt"
     speech_requirements = PROJECT_ROOT / "requirements-speech.txt"
 
-    # v2 includes the Tcl/Tk slice required by extraction-free GUI launchers.
+    # v3 adds the active app layer to sys.path from DJGOO_APP_ROOT. This is
+    # required because Windows embeddable Python ignores PYTHONPATH in ._pth
+    # mode even though the extraction-free launchers set it defensively.
     bot_key = _digest(
-        [b"python-bot-v2-tk", python_version.encode(), _file_bytes(bot_requirements)]
+        [b"python-bot-v3-tk-active-app", python_version.encode(), _file_bytes(bot_requirements)]
     )
     voice_key = _digest(
-        [b"python-voice-v2-tk", python_version.encode(), _file_bytes(voice_requirements)]
+        [b"python-voice-v3-tk-active-app", python_version.encode(), _file_bytes(voice_requirements)]
     )
     speech_key = _digest(
         [b"speech-v1", python_version.encode(), _file_bytes(speech_requirements)]
