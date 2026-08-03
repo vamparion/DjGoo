@@ -131,6 +131,37 @@ def _copy_public_root_files(app_layer: Path, root: Path) -> None:
             shutil.copy2(source, config / name)
 
 
+def _copy_root_bootstrap_tools(app_layer: Path, root: Path, product: str) -> None:
+    source_tools = app_layer / "tools"
+    destination = root / "tools"
+    destination.mkdir(parents=True, exist_ok=True)
+    if product == "host":
+        names = (
+            "apply_update.py",
+            "complete_launcher_update.py",
+            "app_layout.py",
+            "portable_environment.py",
+            "layered_stack_bootstrap.py",
+        )
+    else:
+        names = (
+            "apply_voice_update.py",
+            "voice_update_client.py",
+            "update_client.py",
+            "update_auth.py",
+            "app_layout.py",
+            "portable_environment.py",
+        )
+    for name in names:
+        source = source_tools / name
+        if source.is_file():
+            shutil.copy2(source, destination / name)
+    if product == "host":
+        bootstrap = source_tools / "layered_stack_bootstrap.py"
+        if bootstrap.is_file():
+            shutil.copy2(bootstrap, destination / "djgoo_stack.py")
+
+
 def _install_host_audio(
     root: Path,
     runtime_python: Path,
@@ -204,6 +235,7 @@ def build(
         encoding="utf-8",
     )
     _copy_public_root_files(app_layer, output)
+    _copy_root_bootstrap_tools(app_layer, output, normalized_product)
 
     if normalized_product == "host":
         launcher_names = ("DjGoo.exe", "DjGoo Mini Player.exe")
