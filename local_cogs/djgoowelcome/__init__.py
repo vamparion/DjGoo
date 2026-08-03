@@ -20,6 +20,7 @@ PROJECT_ROOT = package_root(Path(__file__).resolve().parents[2])
 TIMED_REQUEST_INTENTS = {"play_now", "queue_request"}
 
 
+cog_module.PROJECT_ROOT = PROJECT_ROOT
 cog_module.EnhancedDjGooAudioBridge = RemoteAwareDjGooAudioBridge
 cog_module.JOINING_REMOTE_INTENTS.update(TIMED_REQUEST_INTENTS)
 DjGooWelcome = cog_module.DjGooWelcome
