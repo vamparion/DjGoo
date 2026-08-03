@@ -17,7 +17,6 @@ load_core = legacy.load_core
 def host_speech_available(root: Path) -> bool:
     if speech_runtime_ready(root):
         return True
-    # In-place alpha.24 migrations retain the original combined runtime.
     legacy_site = root / "runtime" / "python" / "Lib" / "site-packages"
     return (legacy_site / "faster_whisper").is_dir()
 
@@ -79,7 +78,7 @@ def configure_core(
     core.BOT_PYTHON = bot_python
     core.VOICE_PYTHON = bot_python
     core.PYTHONW = bot_pythonw if bot_pythonw.is_file() else bot_python
-    core.REDBOT_SELECTOR = app / "tools" / "start_redbot_selector.py"
+    core.REDBOT_SELECTOR = app / "tools" / "layered_redbot_selector.py"
     core.JAVA = root / "runtime" / "java" / "bin" / "java.exe"
     core.LAVALINK_DIR = root / "data" / "discordbot" / "cogs" / "Audio"
     core.LAVALINK_JAR = core.LAVALINK_DIR / "Lavalink.jar"
