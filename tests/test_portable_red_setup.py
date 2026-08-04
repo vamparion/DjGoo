@@ -159,6 +159,9 @@ def test_console_preflight_repairs_old_list_schema(tmp_path: Path, monkeypatch) 
 
 def test_run_redbot_repairs_instance_before_loading_red(tmp_path: Path, monkeypatch) -> None:
     calls: list[str] = []
+    settings = tmp_path / "data" / INSTANCE_NAME / "core" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"token": "configured"}), encoding="utf-8")
     monkeypatch.setattr(
         start_redbot_selector,
         "ensure_instance",
@@ -185,6 +188,63 @@ def test_run_redbot_repairs_instance_before_loading_red(tmp_path: Path, monkeypa
     assert calls == ["ensure", "bind", "patch", "red"]
 
 
+def test_background_redbot_start_requires_completed_music_core_setup(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = tmp_path / "data" / INSTANCE_NAME / "core" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        start_redbot_selector,
+        "ensure_instance",
+        lambda _root: tmp_path / "config.json",
+    )
+    monkeypatch.setattr(
+        start_redbot_selector,
+        "bind_red_data_manager",
+        lambda _root: tmp_path / "config.json",
+    )
+
+    try:
+        start_redbot_selector.run_redbot(tmp_path)
+    except start_redbot_selector.MusicCoreSetupRequired as exc:
+        assert "Music Core setup is required" in str(exc)
+    else:
+        raise AssertionError("background Redbot start should require setup")
+
+
+def test_console_redbot_start_allows_first_run_prompt(tmp_path: Path, monkeypatch) -> None:
+    settings = tmp_path / "data" / INSTANCE_NAME / "core" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text("{}\n", encoding="utf-8")
+    calls: list[str] = []
+    monkeypatch.setattr(
+        start_redbot_selector,
+        "ensure_instance",
+        lambda _root: calls.append("ensure") or tmp_path / "config.json",
+    )
+    monkeypatch.setattr(
+        start_redbot_selector,
+        "bind_red_data_manager",
+        lambda _root: calls.append("bind") or tmp_path / "config.json",
+    )
+    monkeypatch.setattr(
+        start_redbot_selector,
+        "apply_runtime_patches",
+        lambda _root: calls.append("patch"),
+    )
+    monkeypatch.setattr(
+        start_redbot_selector.runpy,
+        "run_module",
+        lambda *_args, **_kwargs: calls.append("red"),
+    )
+
+    start_redbot_selector.run_redbot(tmp_path, allow_interactive_setup=True)
+
+    assert calls == ["ensure", "bind", "patch", "red"]
+
+
 def test_launcher_layout_exposes_update_and_console_helpers(tmp_path: Path) -> None:
     layout = Layout(tmp_path)
     assert layout.bot_console_script == tmp_path / "tools" / "start_redbot_selector.py"
@@ -195,7 +255,7 @@ def test_launcher_layout_exposes_update_and_console_helpers(tmp_path: Path) -> N
 def test_console_mode_keeps_nonzero_red_exit_visible(monkeypatch) -> None:
     prompts: list[str] = []
 
-    def fail(_project_root: Path) -> None:
+    def fail(_project_root: Path, **_kwargs) -> None:
         raise SystemExit(78)
 
     monkeypatch.setattr(start_redbot_selector, "run_redbot", fail)
@@ -206,7 +266,7 @@ def test_console_mode_keeps_nonzero_red_exit_visible(monkeypatch) -> None:
 
 
 def test_supervisor_mode_never_waits_for_console_input(monkeypatch) -> None:
-    def fail(_project_root: Path) -> None:
+    def fail(_project_root: Path, **_kwargs) -> None:
         raise SystemExit(78)
 
     monkeypatch.setattr(start_redbot_selector, "run_redbot", fail)

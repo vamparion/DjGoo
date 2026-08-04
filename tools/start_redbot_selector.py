@@ -25,6 +25,7 @@ STARTUP_COGS = ("audio", "djgoowelcome")
 CONSOLE_FLAG = "--djgoo-console"
 CHECK_FLAG = "--djgoo-check"
 DUPLICATE_EXIT_CODE = 75
+SETUP_REQUIRED_EXIT_CODE = 78
 LAVALINK_BIND_HOST = "::1"
 # Red-Lavalink interpolates the configured host directly into ws://{host}:{port}.
 # IPv6 literals therefore require brackets in the client setting.
@@ -34,6 +35,10 @@ LAVALINK_PASSWORD = "youshallnotpass"
 
 
 class RedbotAlreadyRunning(RuntimeError):
+    pass
+
+
+class MusicCoreSetupRequired(RuntimeError):
     pass
 
 
@@ -85,6 +90,35 @@ class SingleInstance:
 
 def redbot_lock_path(project_root: Path = PROJECT_ROOT) -> Path:
     return project_root / "data" / "redbot-instance.lock"
+
+
+def redbot_settings_path(project_root: Path = PROJECT_ROOT) -> Path:
+    return project_root / "data" / INSTANCE_NAME / "core" / "settings.json"
+
+
+def music_core_is_configured(project_root: Path = PROJECT_ROOT) -> bool:
+    """Return True once Red has saved first-run bot settings.
+
+    Red starts an interactive token prompt when the settings file is absent or
+    still the initial empty JSON object. That is fine for the visible test
+    console, but fatal for DjGoo's hidden supervised startup.
+    """
+
+    settings = redbot_settings_path(project_root)
+    try:
+        payload = json.loads(settings.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, dict) and bool(payload)
+
+
+def setup_required_message(project_root: Path = PROJECT_ROOT) -> str:
+    return (
+        "DjGoo Music Core setup is required before background startup can run.\n"
+        "Open DjGoo, choose Music Core setup, then use Test bot console once "
+        "to enter the Discord bot token and command prefix.\n"
+        f"Red settings file: {redbot_settings_path(project_root)}"
+    )
 
 
 def duplicate_instance_message(project_root: Path = PROJECT_ROOT) -> str:
@@ -297,13 +331,15 @@ def _pause_after_error() -> None:
         pass
 
 
-def run_redbot(project_root: Path = PROJECT_ROOT) -> None:
+def run_redbot(project_root: Path = PROJECT_ROOT, *, allow_interactive_setup: bool = False) -> None:
     instance = SingleInstance(redbot_lock_path(project_root))
     if not instance.acquire():
         raise RedbotAlreadyRunning(duplicate_instance_message(project_root))
     try:
         ensure_instance(project_root)
         bind_red_data_manager(project_root)
+        if not allow_interactive_setup and not music_core_is_configured(project_root):
+            raise MusicCoreSetupRequired(setup_required_message(project_root))
         apply_runtime_patches(project_root)
         sys.argv = redbot_argv(project_root)
         runpy.run_module("redbot", run_name="__main__")
@@ -318,12 +354,17 @@ def main(argv: list[str] | None = None) -> int:
         if CHECK_FLAG in arguments:
             check_portable_red(PROJECT_ROOT)
         else:
-            run_redbot(PROJECT_ROOT)
+            run_redbot(PROJECT_ROOT, allow_interactive_setup=console_mode)
     except RedbotAlreadyRunning as exc:
         print(str(exc), file=sys.stderr)
         if console_mode:
             _pause_after_error()
         return DUPLICATE_EXIT_CODE
+    except MusicCoreSetupRequired as exc:
+        print(str(exc), file=sys.stderr)
+        if console_mode:
+            _pause_after_error()
+        return SETUP_REQUIRED_EXIT_CODE
     except SystemExit as exc:
         code = _exit_code(exc.code)
         if console_mode and code != 0:

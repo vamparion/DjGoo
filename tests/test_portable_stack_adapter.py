@@ -30,11 +30,13 @@ class FakeProcess:
         *,
         created: float = 100.0,
         listening_port: int | None = None,
+        cwd: Path | None = None,
     ) -> None:
         self.pid = pid
         self._command = command
         self._created = created
         self._listening_port = listening_port
+        self._cwd = cwd
         self.terminated = False
         self.killed = False
 
@@ -43,6 +45,11 @@ class FakeProcess:
 
     def create_time(self) -> float:
         return self._created
+
+    def cwd(self) -> str:
+        if self._cwd is None:
+            raise OSError("cwd unavailable")
+        return str(self._cwd)
 
     def net_connections(self, *, kind: str) -> list[FakeConnection]:
         assert kind == "tcp"
@@ -149,7 +156,7 @@ def test_spawn_supervisor_reenters_through_portable_adapter(tmp_path, monkeypatc
     assert calls[0]["cwd"] == str(tmp_path)
 
 
-def test_component_launch_errors_are_logged_instead_of_crashing(tmp_path) -> None:
+def test_component_launch_errors_are_logged_instead_of_crashing(tmp_path, monkeypatch) -> None:
     touch(tmp_path / "runtime" / "python" / "python.exe")
     touch(tmp_path / "runtime" / "python" / "pythonw.exe")
     touch(tmp_path / "runtime" / "java" / "bin" / "java.exe")
@@ -160,6 +167,7 @@ def test_component_launch_errors_are_logged_instead_of_crashing(tmp_path) -> Non
 
     core.start_component = failing_start
     configured = adapter.configure_core(core, tmp_path)
+    monkeypatch.setattr(adapter, "_processes_listening_on", lambda _port: [])
 
     spec = SimpleNamespace(name="lavalink", command=["java.exe"])
     assert configured.start_component(spec) is False
@@ -245,7 +253,7 @@ def test_initial_redbot_ready_event_gets_bounded_startup_grace(monkeypatch) -> N
     assert adapter._portable_redbot_ready(core) is False
 
 
-def test_supervisor_starts_lavalink_as_real_component(tmp_path) -> None:
+def test_supervisor_starts_lavalink_as_real_component(tmp_path, monkeypatch) -> None:
     touch(tmp_path / "runtime" / "python" / "python.exe")
     touch(tmp_path / "runtime" / "python" / "pythonw.exe")
     touch(tmp_path / "runtime" / "java" / "bin" / "java.exe")
@@ -258,6 +266,7 @@ def test_supervisor_starts_lavalink_as_real_component(tmp_path) -> None:
 
     core.start_component = record_start
     configured = adapter.configure_core(core, tmp_path)
+    monkeypatch.setattr(adapter, "_processes_listening_on", lambda _port: [])
     spec = SimpleNamespace(name="lavalink", command=["java.exe"])
 
     assert configured.start_component(spec) is True
@@ -265,3 +274,46 @@ def test_supervisor_starts_lavalink_as_real_component(tmp_path) -> None:
     assert configured.component_running(
         SimpleNamespace(name="lavalink", command_markers=("lavalink.jar", str(tmp_path)))
     ) is False
+
+
+def test_lavalink_start_adopts_existing_listener_before_spawning(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    root = tmp_path.resolve()
+    listener = FakeProcess(
+        2468,
+        ["java.exe", "-jar", str(root / "data" / "discordbot" / "cogs" / "Audio" / "Lavalink.jar")],
+        listening_port=adapter.LAVALINK_PORT,
+    )
+    monkeypatch.setattr(adapter.psutil, "process_iter", lambda: [listener])
+    core = make_fake_core()
+    started: list[str] = []
+    core.start_component = lambda spec, *, resume_playback=False: started.append(spec.name) or True
+    configured = adapter.configure_core(core, root)
+
+    assert configured.start_component(SimpleNamespace(name="lavalink", command=[])) is True
+    assert started == []
+    assert configured._records["lavalink"]["pid"] == listener.pid
+
+
+def test_lavalink_start_reports_foreign_port_owner_instead_of_spawning(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    root = tmp_path.resolve()
+    foreign = FakeProcess(
+        1357,
+        ["java.exe", "-jar", r"C:\OtherDjGoo\data\discordbot\cogs\Audio\Lavalink.jar"],
+        listening_port=adapter.LAVALINK_PORT,
+        cwd=Path(r"C:\OtherDjGoo\data\discordbot\cogs\Audio"),
+    )
+    monkeypatch.setattr(adapter.psutil, "process_iter", lambda: [foreign])
+    core = make_fake_core()
+    started: list[str] = []
+    core.start_component = lambda spec, *, resume_playback=False: started.append(spec.name) or True
+    configured = adapter.configure_core(core, root)
+
+    assert configured.start_component(SimpleNamespace(name="lavalink", command=[])) is False
+    assert started == []
+    assert configured.LOG.events[-1][0] == "component.port_in_use"

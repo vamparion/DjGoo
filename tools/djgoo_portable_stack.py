@@ -109,6 +109,19 @@ def _process_listens_on(process: Any, port: int) -> bool:
     return False
 
 
+def _processes_listening_on(port: int) -> list[Any]:
+    listeners: list[Any] = []
+    for process in psutil.process_iter():
+        try:
+            if int(process.pid) == os.getpid():
+                continue
+            if _process_listens_on(process, port):
+                listeners.append(process)
+        except (psutil.Error, OSError, TypeError, ValueError):
+            continue
+    return listeners
+
+
 def _lavalink_port_ready(timeout: float = 0.4) -> bool:
     try:
         with socket.create_connection((LAVALINK_HOST, LAVALINK_PORT), timeout=timeout):
@@ -214,6 +227,33 @@ def _adopt_lavalink_listener(core: Any, spec: Any) -> bool:
         )
         _terminate_process_tree(duplicate)
     return True
+
+
+def _guard_lavalink_start(core: Any, spec: Any) -> bool | None:
+    """Return True/False to handle Lavalink startup, or None to start normally."""
+
+    if _adopt_lavalink_listener(core, spec):
+        return True
+
+    listeners = _processes_listening_on(LAVALINK_PORT)
+    if not listeners:
+        return None
+
+    core.LOG.event(
+        "component.port_in_use",
+        component=spec.name,
+        port=LAVALINK_PORT,
+        owners=[
+            {
+                "pid": int(getattr(process, "pid", 0)),
+                "cmdline": " ".join(_process_cmdline(process)),
+                "cwd": str(_process_cwd(process) or ""),
+            }
+            for process in listeners
+        ],
+        reason="lavalink-port-owned-by-other-process",
+    )
+    return False
 
 
 def _portable_lavalink_ready(core: Any) -> bool:
@@ -399,6 +439,10 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
         if getattr(spec, "name", "") == "redbot":
             core.health_path("lavalink-client").unlink(missing_ok=True)
         try:
+            if getattr(spec, "name", "") == "lavalink":
+                guarded = _guard_lavalink_start(core, spec)
+                if guarded is not None:
+                    return guarded
             return bool(original_start_component(spec, resume_playback=resume_playback))
         except OSError as exc:
             core.LOG.event(
