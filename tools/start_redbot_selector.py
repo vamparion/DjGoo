@@ -96,6 +96,10 @@ def redbot_settings_path(project_root: Path = PROJECT_ROOT) -> Path:
     return project_root / "data" / INSTANCE_NAME / "core" / "settings.json"
 
 
+def redbot_latest_log_path(project_root: Path = PROJECT_ROOT) -> Path:
+    return project_root / "data" / INSTANCE_NAME / "core" / "logs" / "latest.log"
+
+
 def music_core_is_configured(project_root: Path = PROJECT_ROOT) -> bool:
     """Return True once Red has saved first-run bot settings.
 
@@ -126,8 +130,36 @@ def duplicate_instance_message(project_root: Path = PROJECT_ROOT) -> str:
         "Another DjGoo Redbot process is already using this package.\n"
         "Stop DjGoo before opening the bot console. Starting a second copy would "
         "conflict with Redbot's latest.log file.\n"
-        f"Current Redbot log: {project_root / 'data' / INSTANCE_NAME / 'core' / 'logs' / 'latest.log'}"
+        f"Current Redbot log: {redbot_latest_log_path(project_root)}"
     )
+
+
+def redbot_log_contains(project_root: Path, text: str) -> bool:
+    try:
+        tail = redbot_latest_log_path(project_root).read_text(
+            encoding="utf-8",
+            errors="replace",
+        )[-8000:]
+    except OSError:
+        return False
+    return text.lower() in tail.lower()
+
+
+def write_fatal_heartbeat(reason: str, message: str) -> None:
+    try:
+        write_heartbeat(
+            "redbot",
+            project_root=PROJECT_ROOT,
+            fields={
+                "ready": False,
+                "fatal": True,
+                "event": "redbot.fatal",
+                "reason": reason,
+                "message": message,
+            },
+        )
+    except OSError:
+        pass
 
 
 def _ipv6_socketpair(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0):
@@ -362,11 +394,36 @@ def main(argv: list[str] | None = None) -> int:
         return DUPLICATE_EXIT_CODE
     except MusicCoreSetupRequired as exc:
         print(str(exc), file=sys.stderr)
+        try:
+            write_heartbeat(
+                "redbot",
+                project_root=PROJECT_ROOT,
+                fields={
+                    "ready": False,
+                    "setup_required": True,
+                    "event": "redbot.setup_required",
+                    "reason": "music-core-setup-required",
+                    "message": setup_required_message(PROJECT_ROOT),
+                },
+            )
+        except OSError:
+            pass
         if console_mode:
             _pause_after_error()
         return SETUP_REQUIRED_EXIT_CODE
     except SystemExit as exc:
         code = _exit_code(exc.code)
+        if code != 0 and redbot_log_contains(
+            PROJECT_ROOT,
+            "token doesn't seem to be valid",
+        ):
+            write_fatal_heartbeat(
+                "invalid-discord-token",
+                (
+                    "Discord rejected DjGoo's bot token. "
+                    "Open Music Core setup and paste a fresh Discord bot token."
+                ),
+            )
         if console_mode and code != 0:
             _pause_after_error()
         return code

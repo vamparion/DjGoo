@@ -478,8 +478,19 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
     return core
 
 
+def install_supervisor_adapters(core: Any) -> None:
+    """Install behavior that must also exist inside the spawned supervisor."""
+
+    from tools.input_binding_adapter import install_input_binding
+    from tools.recovery_policy import install_recovery_policy
+
+    install_recovery_policy(core)
+    install_input_binding(core)
+
+
 def main() -> int:
     core = configure_core(load_core())
+    install_supervisor_adapters(core)
     return int(core.main())
 
 

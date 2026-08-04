@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -15,6 +16,7 @@ BACKOFF_SECONDS = (2.0, 5.0, 15.0, 30.0, 60.0)
 CIRCUIT_WINDOW_SECONDS = 10 * 60.0
 CIRCUIT_RESTART_LIMIT = 5
 CIRCUIT_OPEN_SECONDS = 5 * 60.0
+SETUP_REQUIRED_RECHECK_SECONDS = 24 * 60 * 60.0
 
 
 @dataclass
@@ -185,6 +187,54 @@ def install_recovery_policy(core: Any) -> RecoveryPolicy:
     original_update_component_status = core.update_component_status
     original_stop_stack = core.stop_stack
 
+    def music_core_configured() -> bool:
+        settings = core.PROJECT_ROOT / "data" / "discordbot" / "core" / "settings.json"
+        try:
+            payload = json.loads(settings.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        return isinstance(payload, dict) and bool(payload)
+
+    def setup_required_message(spec: Any) -> str:
+        if getattr(spec, "name", "") != "redbot":
+            return ""
+        heartbeat = core.read_json(core.health_path("redbot")) or {}
+        if music_core_configured():
+            return ""
+        if heartbeat.get("setup_required") is not True:
+            return ""
+        message = str(heartbeat.get("message") or "").strip()
+        return message or "Music Core setup is required"
+
+    def fatal_message(spec: Any) -> str:
+        if getattr(spec, "name", "") != "redbot":
+            return ""
+        heartbeat = core.read_json(core.health_path("redbot")) or {}
+        if heartbeat.get("fatal") is not True:
+            return ""
+        message = str(heartbeat.get("message") or "").strip()
+        reason = str(heartbeat.get("reason") or "fatal-startup-error").strip()
+        return message or reason
+
+    def attention_message(spec: Any) -> str:
+        return setup_required_message(spec) or fatal_message(spec)
+
+    def mark_needs_attention(spec: Any, message: str, specs: list[Any]) -> None:
+        state = policy.components[spec.name]
+        state.phase = "Needs attention"
+        state.reason = message
+        current = time.monotonic()
+        state.next_retry_at = current + SETUP_REQUIRED_RECHECK_SECONDS
+        state.circuit_open_until = state.next_retry_at
+        with core.STATE.lock:
+            core.STATE.last_error = message
+        core.LOG.event(
+            "component.needs_attention",
+            component=spec.name,
+            reason=message,
+        )
+        update_component_status(specs)
+
     def update_component_status(specs: list[Any]) -> None:
         original_update_component_status(specs)
         with core.STATE.lock:
@@ -228,6 +278,13 @@ def install_recovery_policy(core: Any) -> RecoveryPolicy:
             if ready:
                 policy.healthy(spec.name)
                 continue
+
+            message = attention_message(spec)
+            if message:
+                if running:
+                    core.terminate_component(spec, "component-needs-attention")
+                mark_needs_attention(spec, message, specs)
+                return
 
             was_recovery = bool(
                 running
@@ -279,6 +336,10 @@ def install_recovery_policy(core: Any) -> RecoveryPolicy:
                 spec,
                 resume_playback=recovery_resume,
             ):
+                message = attention_message(spec)
+                if message:
+                    mark_needs_attention(spec, message, specs)
+                    return
                 policy.record_restart(spec.name, "start failed")
                 with core.STATE.lock:
                     core.STATE.last_error = f"Could not start {spec.name}"
@@ -286,6 +347,12 @@ def install_recovery_policy(core: Any) -> RecoveryPolicy:
                 return
 
             if not core.wait_until_ready(spec):
+                message = attention_message(spec)
+                if message:
+                    if core.component_running(spec):
+                        core.terminate_component(spec, "component-needs-attention")
+                    mark_needs_attention(spec, message, specs)
+                    return
                 core.terminate_component(spec, "readiness-failed")
                 policy.record_restart(
                     spec.name,
