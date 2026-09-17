@@ -16,6 +16,25 @@ def _ready() -> bool:
     return True
 
 
+def test_atomic_state_write_retries_windows_sharing_violation(tmp_path, monkeypatch) -> None:
+    target = tmp_path / "state.json"
+    original_replace = Path.replace
+    attempts = 0
+
+    def flaky_replace(path: Path, destination: Path) -> Path:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise PermissionError("simulated Windows sharing violation")
+        return original_replace(path, destination)
+
+    monkeypatch.setattr(Path, "replace", flaky_replace)
+    stack.atomic_json_write(target, {"ready": True})
+
+    assert json.loads(target.read_text(encoding="utf-8")) == {"ready": True}
+    assert attempts == 3
+
+
 def test_process_record_requires_creation_time_and_command_markers(tmp_path: Path) -> None:
     marker = "djgoo-supervisor-test-marker"
     process = subprocess.Popen(

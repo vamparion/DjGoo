@@ -1,6 +1,30 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from voice import health
+
+
+def test_heartbeat_write_retries_windows_sharing_violation(tmp_path, monkeypatch) -> None:
+    original_replace = Path.replace
+    attempts = 0
+
+    def flaky_replace(path: Path, destination: Path) -> Path:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise PermissionError("simulated Windows sharing violation")
+        return original_replace(path, destination)
+
+    monkeypatch.setattr(Path, "replace", flaky_replace)
+    health._write_payload("redbot", project_root=tmp_path, fields={"ready": True})
+
+    payload = json.loads(
+        health.heartbeat_path("redbot", tmp_path).read_text(encoding="utf-8")
+    )
+    assert payload["ready"] is True
+    assert attempts == 3
 
 
 def test_redbot_lease_bridges_a_long_command() -> None:

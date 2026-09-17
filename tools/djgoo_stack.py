@@ -27,7 +27,7 @@ STATE_PATH = PROJECT_ROOT / "data" / "djgoo-supervisor-state.json"
 LOCK_PATH = PROJECT_ROOT / "data" / "djgoo-supervisor.lock"
 SUPERVISOR_PID_PATH = PID_DIR / "supervisor.json"
 CONTROL_HOST = "127.0.0.1"
-CONTROL_PORT = int(os.environ.get("DJGOO_CONTROL_PORT", "47631"))
+CONTROL_PORT = int(os.environ.get("DJGOO_CONTROL_PORT", "49177"))
 
 JAVA = Path(
     os.environ.get(
@@ -171,9 +171,24 @@ STATE = SupervisorState()
 
 def atomic_json_write(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    temp.replace(path)
+    temp = path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    )
+    try:
+        temp.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        for attempt in range(6):
+            try:
+                temp.replace(path)
+                return
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                time.sleep(0.02 * (attempt + 1))
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def read_json(path: Path) -> dict[str, Any] | None:

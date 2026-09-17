@@ -52,13 +52,25 @@ def _write_payload(
         "timestamp": time.time(),
         **dict(fields),
     }
-    temp = path.with_suffix(path.suffix + ".tmp")
+    temp = path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    )
     with _HEARTBEAT_LOCK:
-        temp.write_text(
-            json.dumps(payload, ensure_ascii=False, default=str) + "\n",
-            encoding="utf-8",
-        )
-        temp.replace(path)
+        try:
+            temp.write_text(
+                json.dumps(payload, ensure_ascii=False, default=str) + "\n",
+                encoding="utf-8",
+            )
+            for attempt in range(6):
+                try:
+                    temp.replace(path)
+                    return
+                except PermissionError:
+                    if attempt == 5:
+                        raise
+                    time.sleep(0.02 * (attempt + 1))
+        finally:
+            temp.unlink(missing_ok=True)
 
 
 def _lease_is_active(
