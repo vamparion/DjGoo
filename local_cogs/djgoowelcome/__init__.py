@@ -174,7 +174,11 @@ def _install_timed_chat_routing() -> None:
 
 def _install_native_play_routing(bot: Red, djgoo: DjGooWelcome) -> bool:
     play_command = bot.get_command("play")
-    if play_command is None or bool(getattr(play_command, "_djgoo_playlist_routing", False)):
+    if play_command is None:
+        log_event("native.play.routing_skipped", reason="play_command_missing")
+        return False
+    if bool(getattr(play_command, "_djgoo_playlist_routing", False)):
+        log_event("native.play.routing_skipped", reason="already_installed")
         return False
     original_callback = play_command.callback
 
@@ -209,6 +213,7 @@ def _install_native_play_routing(bot: Red, djgoo: DjGooWelcome) -> bool:
     play_command._djgoo_playlist_routing = True
     djgoo._djgoo_native_play_command = play_command
     djgoo._djgoo_native_play_callback = original_callback
+    log_event("native.play.routing_installed")
     return True
 
 
