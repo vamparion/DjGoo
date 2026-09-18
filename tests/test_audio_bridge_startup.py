@@ -622,21 +622,47 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         )
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
-    async def test_resolve_play_query_converts_real_youtube_playlist_to_playlist_url(self):
+    async def test_resolve_play_query_expands_real_youtube_playlist_to_individual_tracks(self):
         from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
 
         bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
 
-        async def watch(_video_id, _playlist_id):
-            return [{"videoId": "nVohJKUiK6o", "title": "Africa", "length": "4:55"}]
+        async def playlist(_playlist_id):
+            return [
+                {"videoId": "nVohJKUiK6o", "title": "Africa", "length": "4:55"},
+                {"videoId": "AAAAAAAAAAA", "title": "Rosanna", "length": "5:31"},
+                {"videoId": "BBBBBBBBBBB", "title": "Africa 10 Hour Loop", "duration_seconds": 36000},
+                {"videoId": "nVohJKUiK6o", "title": "Africa duplicate", "length": "4:55"},
+            ]
 
-        bridge._watch_playlist_tracks_for_url = watch
+        bridge._youtube_playlist_tracks = playlist
 
         url = "https://www.youtube.com/watch?v=nVohJKUiK6o&list=PLFfDTu7b6FEBXlDz18cghi4zCcBVUN4Um"
 
         self.assertEqual(
             await bridge._resolve_play_queries(url),
-            ["https://www.youtube.com/playlist?list=PLFfDTu7b6FEBXlDz18cghi4zCcBVUN4Um"],
+            [
+                "https://www.youtube.com/watch?v=nVohJKUiK6o",
+                "https://www.youtube.com/watch?v=AAAAAAAAAAA",
+            ],
+        )
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_resolve_pure_youtube_playlist_url_never_queues_opaque_playlist(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+
+        async def playlist(_playlist_id):
+            return []
+
+        bridge._youtube_playlist_tracks = playlist
+
+        self.assertEqual(
+            await bridge._resolve_play_queries(
+                "https://www.youtube.com/playlist?list=PLGQK9yb_7IyR4nhxGloR4YGKjhffi4RjR"
+            ),
+            [],
         )
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
@@ -645,10 +671,10 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
 
         bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
 
-        async def watch(_video_id, _playlist_id):
+        async def playlist(_playlist_id):
             return []
 
-        bridge._watch_playlist_tracks_for_url = watch
+        bridge._youtube_playlist_tracks = playlist
         url = "https://www.youtube.com/watch?v=ZF5ElG1eKz0&list=PLGQK9yb_7IyR4nhxGloR4YGKjhffi4RjR&index=1"
 
         self.assertEqual(
@@ -716,7 +742,7 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolver.queries, ["Darude - Sandstorm"])
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
-    async def test_resolve_play_query_prefers_playlist_for_full_album_video(self):
+    async def test_resolve_play_query_expands_playlist_found_for_full_album_video(self):
         from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
 
         class Resolver:
@@ -739,12 +765,22 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         async def playlist(title):
             return "https://www.youtube.com/playlist?list=PLcleanAlbumTracks"
 
+        async def playlist_tracks(playlist_id):
+            return [
+                {"videoId": "BBBBBBBBBBB", "title": "First Song", "length": "3:20"},
+                {"videoId": "CCCCCCCCCCC", "title": "Second Song", "length": "4:10"},
+            ]
+
         bridge._watch_playlist_tracks_for_url = watch
         bridge._resolve_dirty_youtube_playlist = playlist
+        bridge._youtube_playlist_tracks = playlist_tracks
 
         self.assertEqual(
             await bridge._resolve_play_queries("https://www.youtube.com/watch?v=AAAAAAAAAAA"),
-            ["https://www.youtube.com/playlist?list=PLcleanAlbumTracks"],
+            [
+                "https://www.youtube.com/watch?v=BBBBBBBBBBB",
+                "https://www.youtube.com/watch?v=CCCCCCCCCCC",
+            ],
         )
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")

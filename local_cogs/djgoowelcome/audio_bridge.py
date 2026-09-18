@@ -34,6 +34,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 MAX_TRACK_SECONDS = 10 * 60
 MAX_PLAY_EXPANSION_TRACKS = 25
+MAX_PLAYLIST_EXPANSION_TRACKS = 500
 
 RADIO_REJECT_TITLE_PHRASES = (
     "instrumental",
@@ -1312,21 +1313,29 @@ class DjGooAudioBridge:
         playlist_id = self._youtube_playlist_id(query)
         video_id = self._youtube_video_id(query)
         if playlist_id and self._is_real_youtube_playlist_id(playlist_id):
+            tracks = await self._youtube_playlist_tracks(playlist_id)
+            expanded = self._watch_tracks_to_queries(tracks, limit=MAX_PLAYLIST_EXPANSION_TRACKS)
+            if expanded:
+                log_event(
+                    "play.youtube.playlist.expanded",
+                    query=query,
+                    playlist_id=playlist_id,
+                    source_track_count=len(tracks),
+                    queued_track_count=len(expanded),
+                )
+                return expanded
             if video_id:
-                tracks = await self._watch_playlist_tracks_for_url(video_id, playlist_id)
-                if not tracks:
-                    video_url = f"https://www.youtube.com/watch?v={video_id}"
-                    log_event(
-                        "play.youtube.dead_playlist_parameter_removed",
-                        query=query,
-                        playlist_id=playlist_id,
-                        video_id=video_id,
-                        resolved_query=video_url,
-                    )
-                    return [video_url]
-            playlist_url = f"https://www.youtube.com/playlist?list={playlist_id}"
-            log_event("play.youtube.real_playlist", query=query, playlist_id=playlist_id, resolved_query=playlist_url)
-            return [playlist_url]
+                video_url = f"https://www.youtube.com/watch?v={video_id}"
+                log_event(
+                    "play.youtube.dead_playlist_parameter_removed",
+                    query=query,
+                    playlist_id=playlist_id,
+                    video_id=video_id,
+                    resolved_query=video_url,
+                )
+                return [video_url]
+            log_event("play.youtube.playlist.unavailable", query=query, playlist_id=playlist_id)
+            return []
         if not video_id:
             return [query]
         tracks = await self._watch_playlist_tracks_for_url(video_id, playlist_id)
@@ -1349,8 +1358,17 @@ class DjGooAudioBridge:
             if self._is_album_like_youtube_title(title):
                 playlist_url = await self._resolve_dirty_youtube_playlist(title)
                 if playlist_url:
-                    log_event("play.youtube.bad_video.playlist_resolved", query=query, video_id=video_id, title=title, resolved_query=playlist_url)
-                    return [playlist_url]
+                    expanded = await self._resolve_youtube_play_query(playlist_url)
+                    if expanded:
+                        log_event(
+                            "play.youtube.bad_video.playlist_resolved",
+                            query=query,
+                            video_id=video_id,
+                            title=title,
+                            resolved_query=playlist_url,
+                            queued_track_count=len(expanded),
+                        )
+                        return expanded
             resolved = await self._resolve_dirty_youtube_title(query, tracks)
             if resolved:
                 log_event("play.youtube.bad_video.cleaned", query=query, video_id=video_id, resolved_query=resolved, first_track=first)
@@ -1368,6 +1386,45 @@ class DjGooAudioBridge:
         except Exception:
             log.exception("DjGoo could not inspect YouTube URL before playback.")
             log_event("play.youtube.inspect_failed", video_id=video_id, playlist_id=playlist_id)
+            return []
+
+    async def _youtube_playlist_tracks(self, playlist_id: str):
+        normalized_id = playlist_id[2:] if playlist_id.startswith("VL") else playlist_id
+        try:
+            tracks = await asyncio.to_thread(self._ytmusic_playlist_tracks, normalized_id)
+            if tracks:
+                log_event(
+                    "play.youtube.playlist.inspected",
+                    playlist_id=normalized_id,
+                    extractor="ytmusicapi",
+                    track_count=len(tracks),
+                )
+                return tracks
+        except Exception as exc:
+            log.warning("YouTube Music could not inspect playlist %s: %s", normalized_id, type(exc).__name__)
+            log_event(
+                "play.youtube.playlist.inspect_failed",
+                playlist_id=normalized_id,
+                extractor="ytmusicapi",
+                error=type(exc).__name__,
+            )
+        try:
+            tracks = await asyncio.to_thread(self._ytdlp_playlist_tracks, normalized_id)
+            log_event(
+                "play.youtube.playlist.inspected",
+                playlist_id=normalized_id,
+                extractor="yt-dlp",
+                track_count=len(tracks),
+            )
+            return tracks
+        except Exception as exc:
+            log.warning("yt-dlp could not inspect playlist %s: %s", normalized_id, type(exc).__name__)
+            log_event(
+                "play.youtube.playlist.inspect_failed",
+                playlist_id=normalized_id,
+                extractor="yt-dlp",
+                error=type(exc).__name__,
+            )
             return []
 
     async def _resolve_dirty_youtube_title(self, original_query: str, tracks) -> Optional[str]:
@@ -1432,10 +1489,18 @@ class DjGooAudioBridge:
             if not video_id or not title or video_id in seen:
                 continue
             seen.add(video_id)
+            raw_duration = item.get(
+                "duration_seconds",
+                item.get("durationSeconds", item.get("duration", item.get("length", ""))),
+            )
+            if isinstance(raw_duration, (int, float)):
+                duration_seconds = int(raw_duration)
+            else:
+                duration_seconds = self._track_length_seconds(str(raw_duration or ""))
             data = {
                 "title": self._watch_track_display_title(item),
                 "uri": f"https://www.youtube.com/watch?v={video_id}",
-                "duration_seconds": str(self._track_length_seconds(str(item.get("length") or "")) or 0),
+                "duration_seconds": str(duration_seconds or 0),
             }
             if self._should_reject_playing_track(data):
                 log_event("play.youtube.expansion.rejected", reason="bad_title_or_duration", track=data)
@@ -1497,6 +1562,65 @@ class DjGooAudioBridge:
             limit=MAX_PLAY_EXPANSION_TRACKS,
             radio=radio,
         ).get("tracks", [])
+
+    def _ytmusic_playlist_tracks(self, playlist_id: str):
+        if self._ytmusic is None:
+            from ytmusicapi import YTMusic
+
+            self._ytmusic = YTMusic()
+        return self._ytmusic.get_playlist(playlist_id, limit=MAX_PLAYLIST_EXPANSION_TRACKS).get("tracks", [])
+
+    def _ytdlp_playlist_tracks(self, playlist_id: str):
+        import yt_dlp
+
+        class YtDlpLogger:
+            def debug(self, message):
+                log.debug("yt-dlp playlist: %s", message)
+
+            def info(self, message):
+                log.debug("yt-dlp playlist: %s", message)
+
+            def warning(self, message):
+                log.warning("yt-dlp playlist: %s", message)
+
+            def error(self, message):
+                log.warning("yt-dlp playlist: %s", message)
+
+        playlist_url = f"https://www.youtube.com/playlist?list={playlist_id}"
+        with yt_dlp.YoutubeDL(
+            {
+                "quiet": True,
+                "no_warnings": True,
+                "logger": YtDlpLogger(),
+                "extract_flat": "in_playlist",
+                "skip_download": True,
+                "ignoreerrors": True,
+                "socket_timeout": 12,
+                "retries": 1,
+                "extractor_retries": 1,
+                "playlistend": MAX_PLAYLIST_EXPANSION_TRACKS,
+            }
+        ) as extractor:
+            info = extractor.extract_info(playlist_url, download=False)
+        if not isinstance(info, dict):
+            return []
+        tracks = []
+        for item in info.get("entries") or []:
+            if not isinstance(item, dict):
+                continue
+            tracks.append(
+                {
+                    "videoId": item.get("id"),
+                    "title": item.get("title"),
+                    "duration_seconds": item.get("duration"),
+                    "artists": (
+                        [{"name": item.get("channel") or item.get("uploader")}]
+                        if item.get("channel") or item.get("uploader")
+                        else []
+                    ),
+                }
+            )
+        return tracks
 
     def _ytmusic_playlist_search(self, query: str):
         if self._ytmusic is None:
