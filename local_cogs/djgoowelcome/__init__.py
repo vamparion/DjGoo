@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import json
 from pathlib import Path
 
@@ -182,6 +183,7 @@ def _install_native_play_routing(bot: Red, djgoo: DjGooWelcome) -> bool:
         return False
     original_callback = play_command.callback
 
+    @functools.wraps(original_callback)
     async def routed_play(audio_cog, ctx, *, query: str):
         bridge = djgoo._audio_bridge
         youtube_url = bridge._youtube_url_from_query(str(query))

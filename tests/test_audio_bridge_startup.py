@@ -737,6 +737,28 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0][1]["intent"], "play")
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_native_play_routing_preserves_red_command_parameters(self):
+        import copy
+
+        from redbot.cogs.audio.core.commands.player import PlayerCommands
+
+        from local_cogs.djgoowelcome import _install_native_play_routing
+
+        class FakeBot:
+            def __init__(self):
+                self.command = copy.copy(PlayerCommands.command_play)
+
+            def get_command(self, name):
+                return self.command if name == "play" else None
+
+        class FakeDjGoo:
+            _audio_bridge = object()
+
+        bot = FakeBot()
+        self.assertTrue(_install_native_play_routing(bot, FakeDjGoo()))
+        self.assertEqual(list(bot.command.clean_params), ["query"])
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     async def test_resolve_play_query_removes_dead_playlist_parameter(self):
         from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
 
