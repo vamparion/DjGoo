@@ -23,7 +23,7 @@ Direction: In
 Profiles: Domain,Private
 Action: Allow
 Protocol: TCP
-LocalPort: 47632
+LocalPort: 49178
 """
     monkeypatch.setattr(
         windows_firewall.subprocess,
@@ -31,7 +31,7 @@ LocalPort: 47632
         lambda *args, **kwargs: _result(private_only),
     )
 
-    assert windows_firewall.firewall_rule_ready(47632) is False
+    assert windows_firewall.firewall_rule_ready(49178) is False
 
 
 def test_firewall_rule_accepts_all_profiles(monkeypatch) -> None:
@@ -43,7 +43,7 @@ Direction: In
 Profiles: Domain,Private,Public
 Action: Allow
 Protocol: TCP
-LocalPort: 47632
+LocalPort: 49178
 """
     monkeypatch.setattr(
         windows_firewall.subprocess,
@@ -51,7 +51,7 @@ LocalPort: 47632
         lambda *args, **kwargs: _result(all_profiles),
     )
 
-    assert windows_firewall.firewall_rule_ready(47632) is True
+    assert windows_firewall.firewall_rule_ready(49178) is True
 
 
 def test_discovery_rule_requires_udp(monkeypatch) -> None:
@@ -75,7 +75,7 @@ LocalPort: 47631
 
 
 def test_new_host_firewall_rules_target_every_profile() -> None:
-    assert "profile=any" in windows_firewall._netsh_arguments(47632)
+    assert "profile=any" in windows_firewall._netsh_arguments(49178)
     discovery = windows_firewall._discovery_netsh_arguments(47631)
     assert "profile=any" in discovery
     assert "dir=in" in discovery

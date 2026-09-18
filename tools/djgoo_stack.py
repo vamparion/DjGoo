@@ -569,11 +569,13 @@ class ControlHandler(socketserver.StreamRequestHandler):
         with STATE.lock:
             if action == "start":
                 STATE.desired_running = True
+                STATE.reset_requested = False
             elif action == "reset":
                 STATE.desired_running = True
                 STATE.reset_requested = True
             elif action == "stop":
                 STATE.desired_running = False
+                STATE.reset_requested = False
             elif action == "shutdown":
                 STATE.desired_running = False
                 STATE.shutdown_requested = True

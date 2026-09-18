@@ -61,7 +61,7 @@ class VoiceCommandGateway:
         tls_identity: TlsIdentity,
         *,
         host: str = "127.0.0.1",
-        port: int = 47632,
+        port: int = 49178,
     ) -> None:
         self.pairing_store = pairing_store
         self.remote_queue_path = remote_queue_path
@@ -89,14 +89,17 @@ class VoiceCommandGateway:
     async def start(self) -> None:
         if self._runner is not None:
             return
-        self._runner = web.AppRunner(self.application(), access_log=None)
+        self._runner = web.AppRunner(
+            self.application(),
+            access_log=None,
+            shutdown_timeout=5.0,
+        )
         await self._runner.setup()
         self._site = web.TCPSite(
             self._runner,
             host=self.host,
             port=self.port,
             ssl_context=self.tls_identity.server_context(),
-            shutdown_timeout=5.0,
         )
         await self._site.start()
 

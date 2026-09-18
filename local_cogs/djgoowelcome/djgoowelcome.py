@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Tuple
 
 import aiohttp
+import discord
 from redbot.core import commands
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -93,6 +94,7 @@ class DjGooWelcome(commands.Cog):
             PROJECT_ROOT / "data" / "djgoo-pairing-secret.bin",
         )
         self._gateway: VoiceCommandGateway | None = self._build_gateway()
+        self._gateway_ready = False
         self._gateway_task = (
             self.bot.loop.create_task(self._start_gateway()) if self._gateway is not None else None
         )
@@ -137,7 +139,7 @@ class DjGooWelcome(commands.Cog):
             self._authorize_remote,
             identity,
             host=str(settings.get("bind_host") or "0.0.0.0"),
-            port=int(settings.get("port") or 47632),
+            port=int(settings.get("port") or 49178),
         )
 
     async def _start_gateway(self) -> None:
@@ -148,9 +150,11 @@ class DjGooWelcome(commands.Cog):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            self._gateway_ready = False
             log.exception("DjGoo Voice Gateway failed to start")
             log_event("voice.gateway.start_failed", error=type(exc).__name__, detail=str(exc))
             return
+        self._gateway_ready = True
         log_event(
             "voice.gateway.ready",
             bind_host=self._gateway.host,
@@ -169,7 +173,7 @@ class DjGooWelcome(commands.Cog):
             address = "127.0.0.1"
         if not address or address.startswith("127."):
             address = "127.0.0.1"
-        port = self._gateway.port if self._gateway is not None else int(settings.get("port") or 47632)
+        port = self._gateway.port if self._gateway is not None else int(settings.get("port") or 49178)
         return f"https://{address}:{port}"
 
     async def _authorize_remote(self, identity: DeviceIdentity, intent: str) -> AuthorizationResult:
@@ -230,6 +234,9 @@ class DjGooWelcome(commands.Cog):
         return False
 
     async def _send_webhook_payload(self, payload: Dict[str, Any]) -> None:
+        if await self._send_bot_payload(payload):
+            return
+
         secrets = load_secrets(self._secrets_path())
         webhook_url = secrets.get("webhook_url", "")
         if not webhook_url:
@@ -254,6 +261,39 @@ class DjGooWelcome(commands.Cog):
         except (aiohttp.ClientError, asyncio.TimeoutError):
             log.exception("DjGoo webhook request failed.")
             log_event("discord.webhook.exception")
+
+    async def _send_bot_payload(self, payload: Dict[str, Any]) -> bool:
+        content = str(payload.get("content") or "").strip() or None
+        embeds = [
+            discord.Embed.from_dict(item)
+            for item in payload.get("embeds") or []
+            if isinstance(item, dict)
+        ]
+        if content is None and not embeds:
+            return True
+        for guild in self.bot.guilds:
+            channel = self._audio_bridge._best_text_channel(guild)
+            if channel is None:
+                continue
+            try:
+                await channel.send(content=content, embeds=embeds[:10])
+            except (discord.HTTPException, discord.Forbidden):
+                log.exception("DjGoo could not send a bot notification in #%s.", channel)
+                log_event(
+                    "discord.bot_notification.failed",
+                    guild_id=guild.id,
+                    channel_id=getattr(channel, "id", None),
+                )
+                continue
+            log_event(
+                "discord.bot_notification.sent",
+                guild_id=guild.id,
+                channel_id=channel.id,
+                embed_titles=[embed.title or "" for embed in embeds],
+                has_content=content is not None,
+            )
+            return True
+        return False
 
     async def _handle_queued_item(self, item: dict[str, Any]) -> None:
         log_event(
@@ -311,7 +351,7 @@ class DjGooWelcome(commands.Cog):
                         guild_count=len(self.bot.guilds),
                         audio_loaded=self.bot.get_cog("Audio") is not None,
                         discord_ready=self.bot.is_ready(),
-                        voice_gateway_ready=self._gateway is not None,
+                        voice_gateway_ready=self._gateway_ready,
                     )
                     next_heartbeat = now + 5.0
 

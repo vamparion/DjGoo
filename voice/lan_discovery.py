@@ -12,7 +12,7 @@ from collections.abc import Callable
 from voice.network_routes import local_ipv4_addresses
 
 
-DISCOVERY_PORT = 47631
+DISCOVERY_PORT = 49179
 DISCOVERY_MULTICAST_GROUP = "239.255.71.71"
 REQUEST_TYPE = "DJGOO-DISCOVER-1"
 RESPONSE_TYPE = "DJGOO-OFFER-1"

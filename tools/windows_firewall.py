@@ -302,7 +302,7 @@ def _recipient_gateway_spec(port: int, program: str) -> FirewallRuleSpec:
     )
 
 
-def firewall_rule_ready(port: int = 47632) -> bool:
+def firewall_rule_ready(port: int = 49178) -> bool:
     return _rule_ready(_host_gateway_spec(port))
 
 
@@ -313,7 +313,7 @@ def discovery_firewall_rule_ready(port: int = DISCOVERY_PORT) -> bool:
 def recipient_firewall_rules_ready(
     executable: Path,
     *,
-    gateway_port: int = 47632,
+    gateway_port: int = 49178,
     discovery_port: int = DISCOVERY_PORT,
 ) -> bool:
     program = str(executable.resolve())
@@ -483,7 +483,7 @@ def _ensure_rules(
 def ensure_gateway_firewall(
     project_root: Path,
     *,
-    port: int = 47632,
+    port: int = 49178,
     discovery_port: int = DISCOVERY_PORT,
 ) -> tuple[bool, str]:
     """Allow Host gateway TCP and pinned LAN discovery UDP on all profiles."""
@@ -515,7 +515,7 @@ def ensure_recipient_firewall(
     project_root: Path,
     executable: Path | None,
     *,
-    gateway_port: int = 47632,
+    gateway_port: int = 49178,
     discovery_port: int = DISCOVERY_PORT,
 ) -> tuple[bool, str]:
     """Allow only DjGoo Voice's outbound discovery and gateway traffic.

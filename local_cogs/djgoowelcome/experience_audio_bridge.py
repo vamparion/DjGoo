@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import time
 from pathlib import Path
@@ -28,6 +29,8 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         self.now_playing = NowPlayingState(
             project_root / "data" / "djgoo-now-playing.json"
         )
+        self._deck_locks: dict[int, asyncio.Lock] = {}
+        self._deck_render_state: dict[int, tuple[tuple[Any, ...], float]] = {}
 
     def _mode_for_track(self, guild_id: int, track: Any) -> str:
         active_request = self._active_radio_request.get(int(guild_id))
@@ -129,58 +132,87 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         content = (
             f"DjGoo • {mode} • {data.get('title', 'Unknown track')}"
         )[:2000]
-
-        record = self.deck_store.get(guild.id)
-        if record is not None:
-            target_channel = guild.get_channel(int(record.get("channel_id") or 0))
-            if target_channel is not None:
-                with contextlib.suppress(
-                    discord.HTTPException,
-                    discord.Forbidden,
-                    discord.NotFound,
-                ):
-                    message = await target_channel.fetch_message(
-                        int(record.get("message_id") or 0)
-                    )
-                    await message.edit(content=content, embed=embed, view=view)
+        fingerprint = (
+            self._track_key(track),
+            mode,
+            station.get("name", "") if station else "",
+            str(request.get("requester_name") or ""),
+            str(request.get("timing") or ""),
+            tuple(queue_preview),
+        )
+        lock = self._deck_locks.setdefault(int(guild.id), asyncio.Lock())
+        async with lock:
+            previous = self._deck_render_state.get(int(guild.id))
+            if previous is not None:
+                previous_fingerprint, rendered_at = previous
+                if previous_fingerprint == fingerprint and time.monotonic() - rendered_at < 10:
                     log_event(
-                        "discord.deck.updated",
+                        "discord.deck.skipped_duplicate",
                         guild_id=guild.id,
-                        channel_id=target_channel.id,
-                        message_id=message.id,
                         mode=mode,
                         track=data,
                     )
                     return
-            self.deck_store.clear(guild.id)
 
-        try:
-            message = await channel.send(
-                content=content,
-                embed=embed,
-                view=view,
+            record = self.deck_store.get(guild.id)
+            if record is not None:
+                target_channel = guild.get_channel(int(record.get("channel_id") or 0))
+                if target_channel is not None:
+                    with contextlib.suppress(
+                        discord.HTTPException,
+                        discord.Forbidden,
+                        discord.NotFound,
+                    ):
+                        message = await target_channel.fetch_message(
+                            int(record.get("message_id") or 0)
+                        )
+                        await message.edit(content=content, embed=embed, view=view)
+                        self._deck_render_state[int(guild.id)] = (
+                            fingerprint,
+                            time.monotonic(),
+                        )
+                        log_event(
+                            "discord.deck.updated",
+                            guild_id=guild.id,
+                            channel_id=target_channel.id,
+                            message_id=message.id,
+                            mode=mode,
+                            track=data,
+                        )
+                        return
+                self.deck_store.clear(guild.id)
+
+            try:
+                message = await channel.send(
+                    content=content,
+                    embed=embed,
+                    view=view,
+                )
+            except (discord.HTTPException, discord.Forbidden):
+                log_event(
+                    "discord.deck.failed",
+                    guild_id=guild.id,
+                    channel_id=getattr(channel, "id", None),
+                    track=data,
+                )
+                return
+            self.deck_store.set(
+                guild.id,
+                channel_id=channel.id,
+                message_id=message.id,
             )
-        except (discord.HTTPException, discord.Forbidden):
+            self._deck_render_state[int(guild.id)] = (
+                fingerprint,
+                time.monotonic(),
+            )
             log_event(
-                "discord.deck.failed",
+                "discord.deck.created",
                 guild_id=guild.id,
-                channel_id=getattr(channel, "id", None),
+                channel_id=channel.id,
+                message_id=message.id,
+                mode=mode,
                 track=data,
             )
-            return
-        self.deck_store.set(
-            guild.id,
-            channel_id=channel.id,
-            message_id=message.id,
-        )
-        log_event(
-            "discord.deck.created",
-            guild_id=guild.id,
-            channel_id=channel.id,
-            message_id=message.id,
-            mode=mode,
-            track=data,
-        )
 
     def _publish_now_playing(
         self,

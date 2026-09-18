@@ -627,11 +627,33 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
 
         bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
 
+        async def watch(_video_id, _playlist_id):
+            return [{"videoId": "nVohJKUiK6o", "title": "Africa", "length": "4:55"}]
+
+        bridge._watch_playlist_tracks_for_url = watch
+
         url = "https://www.youtube.com/watch?v=nVohJKUiK6o&list=PLFfDTu7b6FEBXlDz18cghi4zCcBVUN4Um"
 
         self.assertEqual(
             await bridge._resolve_play_queries(url),
             ["https://www.youtube.com/playlist?list=PLFfDTu7b6FEBXlDz18cghi4zCcBVUN4Um"],
+        )
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_resolve_play_query_removes_dead_playlist_parameter(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+
+        async def watch(_video_id, _playlist_id):
+            return []
+
+        bridge._watch_playlist_tracks_for_url = watch
+        url = "https://www.youtube.com/watch?v=ZF5ElG1eKz0&list=PLGQK9yb_7IyR4nhxGloR4YGKjhffi4RjR&index=1"
+
+        self.assertEqual(
+            await bridge._resolve_play_queries(url),
+            ["https://www.youtube.com/watch?v=ZF5ElG1eKz0"],
         )
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")

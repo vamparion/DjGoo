@@ -192,7 +192,7 @@ class DjGooHostControlCenter(DjGooControlCenter):
 
     def _firewall_worker(self) -> None:
         try:
-            success, detail = ensure_gateway_firewall(self.layout.root, port=47632)
+            success, detail = ensure_gateway_firewall(self.layout.root, port=49178)
         except Exception as exc:
             success, detail = False, f"{type(exc).__name__}: {exc}"
         self.root.after(

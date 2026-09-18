@@ -110,6 +110,18 @@ class DjGooWelcomeHelperTests(unittest.TestCase):
 
         self.assertEqual(secrets["voice"]["queue_path"], "C:/DjGoo/queue.jsonl")
 
+    def test_load_secrets_preserves_voice_gateway_settings(self):
+        helpers = load_helpers()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            secrets_path = Path(temp_dir) / "secrets.json"
+            secrets_path.write_text(
+                '{"voice_gateway": {"enabled": true, "port": 49178}}',
+                encoding="utf-8",
+            )
+            secrets = helpers.load_secrets(secrets_path)
+
+        self.assertEqual(secrets["voice_gateway"], {"enabled": True, "port": 49178})
+
     def test_build_voice_command_payload_summarizes_command(self):
         helpers = load_helpers()
 

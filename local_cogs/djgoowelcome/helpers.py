@@ -48,7 +48,7 @@ def parse_djgoo_chat_command(content: str) -> Optional[str]:
 
 def load_secrets(path: Path) -> Dict[str, Any]:
     if not path.exists():
-        return {"webhook_url": "", "voice": {}}
+        return {"webhook_url": "", "voice": {}, "voice_gateway": {}}
 
     with path.open(encoding="utf-8-sig") as fp:
         data = json.load(fp)
@@ -59,7 +59,14 @@ def load_secrets(path: Path) -> Dict[str, Any]:
     voice = data.get("voice", {})
     if not isinstance(voice, dict):
         voice = {}
-    return {"webhook_url": webhook_url, "voice": voice}
+    voice_gateway = data.get("voice_gateway", {})
+    if not isinstance(voice_gateway, dict):
+        voice_gateway = {}
+    return {
+        "webhook_url": webhook_url,
+        "voice": voice,
+        "voice_gateway": voice_gateway,
+    }
 
 
 def build_welcome_payload(display_name: str, voice_channel_name: str) -> Dict[str, Any]:

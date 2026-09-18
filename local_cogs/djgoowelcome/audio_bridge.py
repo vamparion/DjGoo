@@ -1312,6 +1312,18 @@ class DjGooAudioBridge:
         playlist_id = self._youtube_playlist_id(query)
         video_id = self._youtube_video_id(query)
         if playlist_id and self._is_real_youtube_playlist_id(playlist_id):
+            if video_id:
+                tracks = await self._watch_playlist_tracks_for_url(video_id, playlist_id)
+                if not tracks:
+                    video_url = f"https://www.youtube.com/watch?v={video_id}"
+                    log_event(
+                        "play.youtube.dead_playlist_parameter_removed",
+                        query=query,
+                        playlist_id=playlist_id,
+                        video_id=video_id,
+                        resolved_query=video_url,
+                    )
+                    return [video_url]
             playlist_url = f"https://www.youtube.com/playlist?list={playlist_id}"
             log_event("play.youtube.real_playlist", query=query, playlist_id=playlist_id, resolved_query=playlist_url)
             return [playlist_url]
