@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import asyncio
+from contextvars import ContextVar
 import json
 import logging
 import os
@@ -31,6 +32,10 @@ from .helpers import (
 
 log = logging.getLogger("red.djgoowelcome.audio_bridge")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_COMMAND_CONTEXT: ContextVar[Optional["DjGooAudioContext"]] = ContextVar(
+    "djgoo_audio_command_context",
+    default=None,
+)
 
 MAX_TRACK_SECONDS = 10 * 60
 MAX_PLAY_EXPANSION_TRACKS = 25
@@ -116,6 +121,15 @@ class _FakeMessage:
 
     async def edit(self, **kwargs):
         return self
+
+
+class _VoiceAuthorProxy:
+    def __init__(self, member, voice_channel):
+        self._member = member
+        self.voice = type("VoiceState", (), {"channel": voice_channel})()
+
+    def __getattr__(self, name):
+        return getattr(self._member, name)
 
 
 class DjGooAudioContext:
@@ -374,7 +388,32 @@ class DjGooAudioBridge:
             )
             raise
 
+    async def handle_from_discord_context(self, item: Dict[str, Any], ctx, voice_channel=None) -> str:
+        author = ctx.author
+        author_voice_channel = getattr(getattr(author, "voice", None), "channel", None)
+        if author_voice_channel is None and voice_channel is not None:
+            author = _VoiceAuthorProxy(author, voice_channel)
+        command_context = self._context_for(ctx.guild, author, ctx.channel)
+        token = _COMMAND_CONTEXT.set(command_context)
+        try:
+            return await self.handle(item)
+        finally:
+            _COMMAND_CONTEXT.reset(token)
+
     def _context(self) -> Optional[DjGooAudioContext]:
+        command_context = _COMMAND_CONTEXT.get()
+        if command_context is not None:
+            log_event(
+                "bridge.context.command.selected",
+                guild_id=getattr(command_context.guild, "id", None),
+                member_id=getattr(command_context.author, "id", None),
+                voice_channel_id=getattr(
+                    getattr(getattr(command_context.author, "voice", None), "channel", None),
+                    "id",
+                    None,
+                ),
+            )
+            return command_context
         guild, author = self._active_voice_member()
         if guild is None or author is None:
             return None

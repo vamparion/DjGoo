@@ -190,22 +190,50 @@ def _install_native_play_routing(bot: Red, djgoo: DjGooWelcome) -> bool:
         playlist_id = bridge._youtube_playlist_id(youtube_url)
         if playlist_id and bridge._is_real_youtube_playlist_id(playlist_id):
             author_voice = getattr(getattr(ctx, "author", None), "voice", None)
+            voice_channel = getattr(author_voice, "channel", None)
+            voice_channel_reason = "author"
+            if voice_channel is None:
+                candidates = [ctx.channel, bridge._configured_controls_channel(ctx.guild)]
+                candidates.extend(
+                    sorted(
+                        getattr(ctx.guild, "voice_channels", []),
+                        key=lambda channel: (
+                            str(getattr(channel, "name", "")).strip().lower() != "gaming",
+                            int(getattr(channel, "position", 0) or 0),
+                        ),
+                    )
+                )
+                voice_channel = next(
+                    (
+                        channel
+                        for channel in candidates
+                        if channel is not None
+                        and callable(getattr(channel, "connect", None))
+                        and hasattr(channel, "members")
+                    ),
+                    None,
+                )
+                voice_channel_reason = "configured_or_command_channel" if voice_channel is not None else "missing"
             log_event(
                 "native.play.playlist_routed",
                 guild_id=getattr(getattr(ctx, "guild", None), "id", None),
                 channel_id=getattr(getattr(ctx, "channel", None), "id", None),
                 author_id=getattr(getattr(ctx, "author", None), "id", None),
                 author_voice_channel_id=getattr(getattr(author_voice, "channel", None), "id", None),
+                target_voice_channel_id=getattr(voice_channel, "id", None),
+                target_voice_channel_reason=voice_channel_reason,
                 playlist_id=playlist_id,
             )
-            result = await bridge.handle(
+            result = await bridge.handle_from_discord_context(
                 {
                     "type": "command",
                     "intent": "play",
                     "query": youtube_url,
                     "raw": str(query),
                     "source": "chat",
-                }
+                },
+                ctx,
+                voice_channel=voice_channel,
             )
             log_event("native.play.playlist_result", playlist_id=playlist_id, result=result)
             return result

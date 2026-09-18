@@ -709,18 +709,35 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
             _youtube_url_from_query = staticmethod(lambda query: query)
             _youtube_playlist_id = staticmethod(lambda query: "PLplaylist" if "playlist" in query else "")
             _is_real_youtube_playlist_id = staticmethod(lambda playlist_id: playlist_id.startswith("PL"))
+            _configured_controls_channel = staticmethod(lambda guild: guild.voice_channels[0])
 
-            async def handle(self, item):
-                calls.append(("bridge", item))
+            async def handle_from_discord_context(self, item, ctx, voice_channel=None):
+                calls.append(("bridge", item, ctx, voice_channel))
                 return "queued"
 
         class FakeDjGoo:
             _audio_bridge = FakeBridge()
 
+        class VoiceChannel:
+            id = 456
+            position = 0
+            name = "Gaming"
+            members = []
+
+            async def connect(self):
+                return None
+
+        class Guild:
+            voice_channels = [VoiceChannel()]
+
+        class Author:
+            id = 789
+            voice = None
+
         class FakeContext:
-            guild = None
-            channel = None
-            author = None
+            guild = Guild()
+            channel = object()
+            author = Author()
 
         bot = FakeBot()
         djgoo = FakeDjGoo()
@@ -735,6 +752,33 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "queued")
         self.assertEqual(calls[0][0], "bridge")
         self.assertEqual(calls[0][1]["intent"], "play")
+        self.assertEqual(calls[0][3].id, 456)
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_discord_command_context_supplies_configured_voice_channel(self):
+        from types import SimpleNamespace
+
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        voice_channel = SimpleNamespace(id=456)
+        author = SimpleNamespace(id=789, voice=None)
+        discord_ctx = SimpleNamespace(guild=SimpleNamespace(id=123), author=author, channel=object())
+        bridge._context_for = lambda guild, member, channel: SimpleNamespace(
+            guild=guild,
+            author=member,
+            channel=channel,
+        )
+
+        async def handle(_item):
+            return bridge._context()
+
+        bridge.handle = handle
+        result = await bridge.handle_from_discord_context({}, discord_ctx, voice_channel=voice_channel)
+
+        self.assertEqual(result.guild.id, 123)
+        self.assertEqual(result.author.id, 789)
+        self.assertIs(result.author.voice.channel, voice_channel)
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     async def test_native_play_routing_preserves_red_command_parameters(self):
