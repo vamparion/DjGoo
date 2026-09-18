@@ -1310,6 +1310,7 @@ class DjGooAudioBridge:
     async def _resolve_youtube_play_query(self, query: str) -> Optional[List[str]]:
         if not self._is_youtube_url(query):
             return None
+        query = self._youtube_url_from_query(query)
         playlist_id = self._youtube_playlist_id(query)
         video_id = self._youtube_video_id(query)
         if playlist_id and self._is_real_youtube_playlist_id(playlist_id):
@@ -1692,6 +1693,25 @@ class DjGooAudioBridge:
     def _youtube_video_id(self, uri: str) -> str:
         match = re.search(r"(?:v=|youtu\.be/|embed/|shorts/)([A-Za-z0-9_-]{11})", uri)
         return match.group(1) if match else ""
+
+    def _youtube_url_from_query(self, query: str) -> str:
+        markdown_link = re.search(
+            r"\((https?://(?:www\.|music\.)?youtube\.com/[^)\s]+)\)",
+            query,
+            re.IGNORECASE,
+        )
+        plain_link = re.search(
+            r"https?://(?:(?:www\.|music\.)?youtube\.com|youtu\.be)/[^\s<>\]]+",
+            query,
+            re.IGNORECASE,
+        )
+        if markdown_link:
+            url = markdown_link.group(1)
+        elif plain_link:
+            url = plain_link.group(0)
+        else:
+            url = query
+        return url.replace("\\_", "_").rstrip(".,;>)")
 
     def _youtube_playlist_id(self, uri: str) -> str:
         try:

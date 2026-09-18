@@ -101,6 +101,12 @@ class DjGooWelcome(commands.Cog):
         self._queue_task = self.bot.loop.create_task(self._command_queue_loop())
 
     def cog_unload(self):
+        native_play_command = getattr(self, "_djgoo_native_play_command", None)
+        native_play_callback = getattr(self, "_djgoo_native_play_callback", None)
+        if native_play_command is not None and native_play_callback is not None:
+            native_play_command.callback = native_play_callback
+            with contextlib.suppress(AttributeError):
+                del native_play_command._djgoo_playlist_routing
         self._queue_task.cancel()
         if self._gateway_task is not None:
             self._gateway_task.cancel()

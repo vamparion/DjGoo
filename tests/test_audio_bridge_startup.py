@@ -666,6 +666,77 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         )
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_resolve_markdown_youtube_playlist_uses_link_target(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+
+        async def playlist(playlist_id):
+            self.assertEqual(playlist_id, "PLreal_playlist")
+            return [{"videoId": "AAAAAAAAAAA", "title": "Song", "length": "3:30"}]
+
+        bridge._youtube_playlist_tracks = playlist
+        query = (
+            "[https://www.youtube.com/playlist?list=PLwrong\\_playlist]"
+            "(https://www.youtube.com/playlist?list=PLreal_playlist)"
+        )
+
+        self.assertEqual(
+            await bridge._resolve_play_queries(query),
+            ["https://www.youtube.com/watch?v=AAAAAAAAAAA"],
+        )
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_native_play_playlist_routes_through_djgoo_bridge(self):
+        from local_cogs.djgoowelcome import _install_native_play_routing
+
+        calls = []
+
+        async def original(_audio, _ctx, *, query):
+            calls.append(("original", query))
+
+        class FakeCommand:
+            callback = original
+
+        class FakeBot:
+            def __init__(self):
+                self.command = FakeCommand()
+
+            def get_command(self, name):
+                return self.command if name == "play" else None
+
+        class FakeBridge:
+            _youtube_url_from_query = staticmethod(lambda query: query)
+            _youtube_playlist_id = staticmethod(lambda query: "PLplaylist" if "playlist" in query else "")
+            _is_real_youtube_playlist_id = staticmethod(lambda playlist_id: playlist_id.startswith("PL"))
+
+            async def handle(self, item):
+                calls.append(("bridge", item))
+                return "queued"
+
+        class FakeDjGoo:
+            _audio_bridge = FakeBridge()
+
+        class FakeContext:
+            guild = None
+            channel = None
+            author = None
+
+        bot = FakeBot()
+        djgoo = FakeDjGoo()
+        self.assertTrue(_install_native_play_routing(bot, djgoo))
+
+        result = await bot.command.callback(
+            object(),
+            FakeContext(),
+            query="https://www.youtube.com/playlist?list=PLplaylist",
+        )
+
+        self.assertEqual(result, "queued")
+        self.assertEqual(calls[0][0], "bridge")
+        self.assertEqual(calls[0][1]["intent"], "play")
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     async def test_resolve_play_query_removes_dead_playlist_parameter(self):
         from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
 

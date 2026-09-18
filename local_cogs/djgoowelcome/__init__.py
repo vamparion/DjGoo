@@ -172,6 +172,46 @@ def _install_timed_chat_routing() -> None:
     DjGooWelcome._djgoo_timed_chat_routing = True
 
 
+def _install_native_play_routing(bot: Red, djgoo: DjGooWelcome) -> bool:
+    play_command = bot.get_command("play")
+    if play_command is None or bool(getattr(play_command, "_djgoo_playlist_routing", False)):
+        return False
+    original_callback = play_command.callback
+
+    async def routed_play(audio_cog, ctx, *, query: str):
+        bridge = djgoo._audio_bridge
+        youtube_url = bridge._youtube_url_from_query(str(query))
+        playlist_id = bridge._youtube_playlist_id(youtube_url)
+        if playlist_id and bridge._is_real_youtube_playlist_id(playlist_id):
+            author_voice = getattr(getattr(ctx, "author", None), "voice", None)
+            log_event(
+                "native.play.playlist_routed",
+                guild_id=getattr(getattr(ctx, "guild", None), "id", None),
+                channel_id=getattr(getattr(ctx, "channel", None), "id", None),
+                author_id=getattr(getattr(ctx, "author", None), "id", None),
+                author_voice_channel_id=getattr(getattr(author_voice, "channel", None), "id", None),
+                playlist_id=playlist_id,
+            )
+            result = await bridge.handle(
+                {
+                    "type": "command",
+                    "intent": "play",
+                    "query": youtube_url,
+                    "raw": str(query),
+                    "source": "chat",
+                }
+            )
+            log_event("native.play.playlist_result", playlist_id=playlist_id, result=result)
+            return result
+        return await original_callback(audio_cog, ctx, query=query)
+
+    play_command.callback = routed_play
+    play_command._djgoo_playlist_routing = True
+    djgoo._djgoo_native_play_command = play_command
+    djgoo._djgoo_native_play_callback = original_callback
+    return True
+
+
 install_route_safe_pairing_codes()
 _install_complete_gateway_settings()
 _install_gateway_firewall_repair()
@@ -181,5 +221,6 @@ _install_timed_chat_routing()
 async def setup(bot: Red) -> None:
     djgoo = DjGooWelcome(bot)
     await bot.add_cog(djgoo)
+    _install_native_play_routing(bot, djgoo)
     await bot.add_cog(DjGooGuide())
     await bot.add_cog(DjGooRelay(bot, djgoo, PROJECT_ROOT))
