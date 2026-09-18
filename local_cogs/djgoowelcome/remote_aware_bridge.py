@@ -19,9 +19,17 @@ class RemoteAwareDjGooAudioBridge(ProfileDjGooAudioBridge):
 
     async def handle(self, item: Dict[str, Any]) -> str:
         token = _CURRENT_COMMAND.set(item)
+        is_mini = str(item.get("source") or "") == "mini_player"
+        if is_mini:
+            self._mini_command_depth = int(getattr(self, "_mini_command_depth", 0)) + 1
         try:
             return await super().handle(item)
         finally:
+            if is_mini:
+                self._mini_command_depth = max(
+                    0,
+                    int(getattr(self, "_mini_command_depth", 1)) - 1,
+                )
             _CURRENT_COMMAND.reset(token)
 
     def _context(self):

@@ -107,6 +107,25 @@ class RequestLedger:
         with self._lock:
             return len(self._read().get(str(int(guild_id)), []))
 
+    def replace_entries(
+        self,
+        guild_id: int,
+        entries: list[dict[str, Any]],
+    ) -> None:
+        with self._lock:
+            guilds = self._read()
+            cleaned = [
+                dict(entry)
+                for entry in entries
+                if isinstance(entry, dict)
+                and str(entry.get("track_key") or "")
+            ][-200:]
+            if cleaned:
+                guilds[str(int(guild_id))] = cleaned
+            else:
+                guilds.pop(str(int(guild_id)), None)
+            self._write(guilds)
+
     def _write(self, guilds: dict[str, list[dict[str, Any]]]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temp = self.path.with_suffix(self.path.suffix + ".tmp")

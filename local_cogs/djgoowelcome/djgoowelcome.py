@@ -21,6 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from voice.command_gateway import AuthorizationResult, VoiceCommandGateway
 from voice.command_parser import parse_command
 from voice.command_queue import command_to_queue_item, drain_queue
+from voice.mini_player_protocol import CommandReceiptStore
 from voice.operational_log import log_event
 from voice.pairing_store import DeviceIdentity, PairingStore
 from voice.tls_identity import ensure_tls_identity
@@ -85,6 +86,9 @@ class DjGooWelcome(commands.Cog):
             bot=self.bot,
             project_root=PROJECT_ROOT,
             send_payload=self._send_webhook_payload,
+        )
+        self._mini_receipts = CommandReceiptStore(
+            PROJECT_ROOT / "data" / "mini-player-acks"
         )
         with contextlib.suppress(Exception):
             self.bot.add_view(PlaybackControlsView(self._audio_bridge, 0))
@@ -315,12 +319,34 @@ class DjGooWelcome(commands.Cog):
             device_id=item.get("device_id"),
             command_id=item.get("command_id"),
         )
-        if item.get("intent") not in FAST_CONTROL_INTENTS:
-            await self._send_webhook_payload(build_voice_command_payload(item))
-        else:
-            await self._send_webhook_payload(build_fast_control_payload(item))
-            log_event("voice.command.fast_notification_sent", intent=item.get("intent"))
-        result = await self._audio_bridge.handle(item)
+        source = str(item.get("source") or "")
+        command_id = str(item.get("command_id") or "")
+        if source != "mini_player":
+            if item.get("intent") not in FAST_CONTROL_INTENTS:
+                await self._send_webhook_payload(build_voice_command_payload(item))
+            else:
+                await self._send_webhook_payload(build_fast_control_payload(item))
+                log_event("voice.command.fast_notification_sent", intent=item.get("intent"))
+        try:
+            result = await self._audio_bridge.handle(item)
+        except Exception as exc:
+            if command_id:
+                self._mini_receipts.write(
+                    command_id,
+                    intent=str(item.get("intent") or ""),
+                    success=False,
+                    result={
+                        "status": "failed",
+                        "message": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+            raise
+        if command_id and source == "mini_player":
+            self._mini_receipts.write(
+                command_id,
+                intent=str(item.get("intent") or ""),
+                result=result,
+            )
         log.info(
             "DjGoo handled %s command from %s: %s",
             item.get("intent") or item.get("action") or item.get("type"),
@@ -359,6 +385,14 @@ class DjGooWelcome(commands.Cog):
                         discord_ready=self.bot.is_ready(),
                         voice_gateway_ready=self._gateway_ready,
                     )
+                    publish_state = getattr(
+                        self._audio_bridge,
+                        "_publish_now_playing",
+                        None,
+                    )
+                    if callable(publish_state):
+                        for guild in self.bot.guilds:
+                            publish_state(guild.id)
                     next_heartbeat = now + 5.0
 
                 for queue_path in queue_paths:
@@ -366,7 +400,20 @@ class DjGooWelcome(commands.Cog):
                     if items:
                         log_event("voice.queue.drained", count=len(items), queue_path=str(queue_path))
                     for item in items:
-                        await self._handle_queued_item(item)
+                        try:
+                            await self._handle_queued_item(item)
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            log.exception(
+                                "DjGoo failed one queued command; later commands will continue."
+                            )
+                            log_event(
+                                "voice.queue.item.exception",
+                                source=item.get("source"),
+                                intent=item.get("intent"),
+                                command_id=item.get("command_id"),
+                            )
             except asyncio.CancelledError:
                 raise
             except Exception:

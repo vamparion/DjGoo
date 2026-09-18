@@ -4,3 +4,5 @@ aiohttp>=3.9,<4
 cryptography>=42,<47
 psutil>=5.9,<8
 ytmusicapi>=1.8,<2
+yt-dlp==2026.8.19
+Pillow>=10,<13

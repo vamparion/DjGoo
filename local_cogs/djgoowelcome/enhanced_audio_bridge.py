@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import math
 import random
 import re
 from pathlib import Path
@@ -15,6 +16,7 @@ from voice.media_policy import (
     candidates_from_ytmusic,
     pick_best_search_candidate,
     pick_radio_candidate,
+    score_search_candidate,
     title_is_rejected,
     track_identity,
 )
@@ -187,6 +189,68 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
         )
         return selected.uri if selected else None
 
+    async def search_candidates(self, query: str, *, limit: int = 4) -> List[Dict[str, Any]]:
+        cleaned_query = re.sub(r"\s+", " ", str(query).strip())
+        if not cleaned_query:
+            return []
+        if self._ytmusic is None:
+            from ytmusicapi import YTMusic
+
+            self._ytmusic = YTMusic()
+        try:
+            items = await asyncio.to_thread(
+                self._ytmusic.search,
+                cleaned_query,
+                filter="songs",
+                limit=max(10, int(limit) * 3),
+            )
+        except Exception as exc:
+            log_event(
+                "ytmusic.mini_search.failed",
+                query=cleaned_query,
+                error=type(exc).__name__,
+                detail=str(exc),
+            )
+            return []
+        candidates = candidates_from_ytmusic(items or [])
+        ranked = sorted(
+            (
+                (score_search_candidate(candidate, None), candidate)
+                for candidate in candidates
+            ),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+        results: List[Dict[str, Any]] = []
+        for score, candidate in ranked:
+            if not math.isfinite(score):
+                continue
+            video_id = self._youtube_video_id(candidate.uri)
+            results.append(
+                {
+                    "id": video_id or candidate.uri,
+                    "title": candidate.title,
+                    "artist": ", ".join(candidate.artists),
+                    "duration_seconds": candidate.duration_seconds,
+                    "uri": candidate.uri,
+                    "source": "YouTube Music",
+                    "artwork_url": (
+                        f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg"
+                        if video_id
+                        else ""
+                    ),
+                }
+            )
+            if len(results) >= max(1, int(limit)):
+                break
+        log_event(
+            "ytmusic.mini_search.result",
+            query=cleaned_query,
+            candidate_count=len(candidates),
+            returned_count=len(results),
+        )
+        return results
+
     def _repair_voice_play_query(self, query: str) -> str:
         # Phrase corrections now come from data/voice-corrections.json.
         return re.sub(r"\s+", " ", query).strip()
@@ -249,7 +313,9 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
         return query
 
     def _pick_recommended_track(self, station: Dict[str, Any], tracks) -> Optional[Dict[str, str]]:
-        mode, _actual_seed = self._split_radio_mode(str(station.get("seed", "")))
+        mode = str(station.get("mode") or "").strip().lower()
+        if mode not in RADIO_MODES:
+            mode, _actual_seed = self._split_radio_mode(str(station.get("seed", "")))
         source_tracks = [track for track in (tracks or []) if isinstance(track, dict)]
         if mode == "throwbacks":
             dated = []
@@ -296,7 +362,9 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
         return result
 
     def _station_reason(self, station: Dict[str, Any]) -> str:
-        mode, _actual_seed = self._split_radio_mode(str(station.get("seed", "")))
+        mode = str(station.get("mode") or "").strip().lower()
+        if mode not in RADIO_MODES:
+            mode, _actual_seed = self._split_radio_mode(str(station.get("seed", "")))
         if station.get("liked"):
             return f"{mode.title()} mode, steered by liked tracks"
         if station.get("more_like"):

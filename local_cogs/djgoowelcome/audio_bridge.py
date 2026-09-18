@@ -805,6 +805,11 @@ class DjGooAudioBridge:
         if not seed:
             await self._notice("Tell me what to seed the station with, like `DjGoo radio Sandstorm`.")
             return "Missing radio seed"
+        station_seed = seed
+        station_mode = "balanced"
+        split_mode = getattr(self, "_split_radio_mode", None)
+        if callable(split_mode):
+            station_mode, station_seed = split_mode(seed)
         play_query = await self._resolve_radio_seed_query(seed)
         log_event("radio.start.play_seed", guild_id=ctx.guild.id, seed=seed, play_query=play_query)
         if not await self._play_query_when_ready(audio, ctx, play_query):
@@ -813,7 +818,10 @@ class DjGooAudioBridge:
                 "so it will not pretend music is playing."
             )
             return "Radio startup failed"
-        station = self.stations.set_active(ctx.guild.id, seed)
+        station = self.stations.set_active(ctx.guild.id, station_seed)
+        set_mode = getattr(self.stations, "set_mode", None)
+        if callable(set_mode):
+            station = set_mode(station_seed, station_mode)
         log_event("radio.start.active", guild_id=ctx.guild.id, station=station["name"], seed=seed)
         await self._notice(f"Started `{station['name']}`. I will keep this station's taste separate.")
         await self._send_controls_for_player(ctx)
@@ -959,6 +967,18 @@ class DjGooAudioBridge:
             "title": getattr(track, "title", "") or info.get("title", ""),
             "uri": getattr(track, "uri", "") or info.get("uri", ""),
         }
+        artwork = (
+            getattr(track, "artwork_url", "")
+            or info.get("artworkUrl", "")
+            or info.get("artwork_url", "")
+            or info.get("thumbnail", "")
+        )
+        if artwork:
+            data["artwork_url"] = str(artwork).strip()
+        elif data["uri"]:
+            video_id = self._youtube_video_id(str(data["uri"]))
+            if video_id:
+                data["artwork_url"] = f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg"
         duration = self._track_duration_seconds(track)
         if duration:
             data["duration_seconds"] = str(duration)

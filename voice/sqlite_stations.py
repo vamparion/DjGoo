@@ -15,6 +15,7 @@ from voice.djgoo_stations import display_station_name, normalize_station_seed, s
 RECENT_LIMIT = 50
 PLAYED_LIMIT = 2_000
 FEEDBACK_BUCKETS = {"liked", "banned", "more_like", "less_like", "skipped"}
+RADIO_MODES = {"bangers", "balanced", "discovery", "throwbacks"}
 
 
 class SqliteDjGooStations:
@@ -140,6 +141,7 @@ class SqliteDjGooStations:
                     "id": identifier,
                     "name": display_station_name(seed),
                     "seed": self._clean_seed(seed),
+                    "mode": "balanced",
                     "created_at": now,
                     "updated_at": now,
                     "played": [],
@@ -152,6 +154,19 @@ class SqliteDjGooStations:
                     "last_track": None,
                 }
                 self._save_station(connection, station)
+            return station
+
+    def set_mode(self, seed: str, mode: str) -> Dict[str, Any]:
+        normalized_mode = str(mode).strip().lower()
+        if normalized_mode not in RADIO_MODES:
+            raise ValueError(f"Unknown radio mode: {mode}")
+        identifier = self.get_or_create(seed)["id"]
+        with self._transaction() as connection:
+            station = self._load_station(connection, identifier)
+            if station is None:
+                raise RuntimeError(f"Station disappeared during update: {identifier}")
+            station["mode"] = normalized_mode
+            self._save_station(connection, station)
             return station
 
     def get_station(self, seed: str) -> Optional[Dict[str, Any]]:
