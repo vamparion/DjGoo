@@ -222,6 +222,54 @@ async def test_restore_starts_current_before_appending_saved_queue() -> None:
     assert calls == ["next", "later"]
 
 
+@pytest.mark.asyncio
+async def test_playlist_enqueue_always_skips_duplicates(
+    monkeypatch,
+) -> None:
+    from local_cogs.djgoowelcome import audio_bridge as module
+
+    bridge = module.DjGooAudioBridge.__new__(module.DjGooAudioBridge)
+    bridge.playlists = SimpleNamespace(
+        get_tracks=lambda _name: [
+            {"title": "Already Playing", "uri": "https://youtu.be/AAAAAAAAAAA"},
+            {"title": "New Song", "uri": "https://youtu.be/BBBBBBBBBBB"},
+        ]
+    )
+    player = SimpleNamespace(
+        current=SimpleNamespace(
+            title="Already Playing",
+            uri="https://www.youtube.com/watch?v=AAAAAAAAAAA",
+            info={},
+        ),
+        queue=[],
+    )
+    monkeypatch.setattr(module.lavalink, "get_player", lambda _guild_id: player)
+    queued: list[str] = []
+    notices: list[str] = []
+
+    async def invoke(_command, _ctx, *, query: str) -> None:
+        queued.append(query)
+        player.queue.append(SimpleNamespace(title="Queued", uri=query, info={}))
+
+    async def notice(message: str) -> None:
+        notices.append(message)
+
+    bridge._invoke = invoke
+    bridge._notice = notice
+    audio = SimpleNamespace(command_play=object())
+    ctx = SimpleNamespace(guild=SimpleNamespace(id=42))
+
+    first = await bridge._play_playlist(audio, ctx, "KnockOut", shuffle=False)
+    second = await bridge._play_playlist(audio, ctx, "KnockOut", shuffle=False)
+
+    assert queued == [
+        "https://youtu.be/BBBBBBBBBBB",
+    ]
+    assert "Skipped 1" in first
+    assert "already playing or queued" in second
+    assert notices == [first, second]
+
+
 async def _async_result(value):
     return value
 

@@ -724,12 +724,57 @@ class DjGooAudioBridge:
         if shuffle:
             tracks = list(tracks)
             random.shuffle(tracks)
+
+        guild_id = int(ctx.guild.id)
+        existing = self._player_track_identities(guild_id)
+        queued_tracks = []
+        skipped = 0
         for track in tracks:
+            identity = self._track_identity(track)
+            if identity and identity in existing:
+                skipped += 1
+                continue
+            queued_tracks.append(track)
+            if identity:
+                existing.add(identity)
+
+        for track in queued_tracks:
             query = track.get("uri") or track.get("title")
             if query:
                 await self._invoke(audio.command_play, ctx, query=str(query))
-        await self._notice(f"Queued {len(tracks)} track(s) from `{playlist_name}`.")
-        return f"Queued playlist {playlist_name}"
+        if not queued_tracks:
+            message = f"All {skipped} track(s) from `{playlist_name}` are already playing or queued."
+        else:
+            message = f"Queued {len(queued_tracks)} track(s) from `{playlist_name}`."
+            if skipped:
+                message += f" Skipped {skipped} already playing or queued."
+        await self._notice(message)
+        return message
+
+    def _player_track_identities(self, guild_id: int) -> set[str]:
+        try:
+            player = lavalink.get_player(guild_id)
+        except (NodeNotFound, PlayerNotFound):
+            return set()
+        tracks = [getattr(player, "current", None), *list(getattr(player, "queue", []))]
+        return {
+            identity
+            for track in tracks
+            if track is not None
+            if (identity := self._track_identity(track))
+        }
+
+    def _track_identity(self, track: Any) -> str:
+        data = dict(track) if isinstance(track, dict) else self._track_data(track)
+        uri = str(data.get("uri") or "").strip()
+        video_id = self._youtube_video_id(uri)
+        if video_id:
+            return f"youtube:{video_id.lower()}"
+        if uri:
+            return f"uri:{uri.lower()}"
+        title = re.sub(r"\s+", " ", str(data.get("title") or "").strip().lower())
+        artist = re.sub(r"\s+", " ", str(data.get("artist") or "").strip().lower())
+        return f"title:{title}|{artist}" if title else ""
 
     async def _resolve_play_query(self, query: str) -> str:
         resolved = await self._resolve_play_queries(query)
