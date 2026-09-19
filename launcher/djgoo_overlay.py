@@ -225,6 +225,7 @@ class DjGooMiniPlayer:
         self._preferred_playlist = ""
         self._search_results: list[dict[str, Any]] = []
         self._expanded_history: list[dict[str, Any]] = []
+        self._history_items: list[dict[str, Any]] = []
         self._pending: dict[str, dict[str, Any]] = {}
         self._pending_keys: set[str] = set()
         self._queued_search_query = ""
@@ -1044,7 +1045,7 @@ class DjGooMiniPlayer:
             ("title", "artist", "played", "mode", "uri"),
             ("Track", "Artist", "Played", "Mode", ""),
             (235, 125, 90, 70, 0),
-            selectmode="browse",
+            selectmode="extended",
             hidden=("uri",),
         )
         actions = Frame(self.history_tab, bg=PANEL, pady=7)
@@ -1061,6 +1062,20 @@ class DjGooMiniPlayer:
             lambda: self._play_history("now"),
             variant="danger",
         ).pack(side=LEFT, padx=5)
+        self.history_playlist_combo = ttk.Combobox(
+            actions,
+            textvariable=self.playlist_name,
+            state="readonly",
+            width=17,
+            style="DjGoo.TCombobox",
+        )
+        self.history_playlist_combo.pack(side=RIGHT, padx=(5, 0))
+        self._button(
+            actions,
+            "Add to Playlist",
+            self._add_history_to_playlist,
+            variant="warn",
+        ).pack(side=RIGHT)
 
     def _build_playlists_tab(self) -> None:
         top = Frame(self.playlists_tab, bg=PANEL, pady=6)
@@ -1375,6 +1390,35 @@ class DjGooMiniPlayer:
             return
         uri = str(self.history_tree.item(selected[0], "values")[-1])
         self.play_request(timing, query=uri)
+
+    def _add_history_to_playlist(self) -> None:
+        selected = self.history_tree.selection()
+        playlist = self.playlist_name.get().strip()
+        if not selected or not playlist:
+            self._set_status(
+                "Select history tracks and a playlist first.",
+                WARN,
+            )
+            return
+        history_ids = []
+        for item_id in selected:
+            try:
+                index = int(str(item_id).removeprefix("history-"))
+                history_id = str(self._history_items[index].get("id") or "")
+            except (IndexError, ValueError):
+                continue
+            if history_id:
+                history_ids.append(history_id)
+        if not history_ids:
+            self._set_status("Those history songs are no longer available.", WARN)
+            return
+        self.send(
+            "mini_playlist_add_history",
+            playlist=playlist,
+            payload={"history_ids": history_ids},
+            pending_key="history:add_playlist",
+            status=f"Adding {len(history_ids)} history song(s) to {playlist}...",
+        )
 
     def _play_expanded_recent(self) -> None:
         selection = self.expanded_recent.curselection()
@@ -1787,6 +1831,7 @@ class DjGooMiniPlayer:
         if fingerprint == self._history_fingerprint:
             return
         self._history_fingerprint = fingerprint
+        self._history_items = items
         self._expanded_history = items[:5]
         self.expanded_recent.delete(0, END)
         for item in self._expanded_history:
@@ -1831,6 +1876,7 @@ class DjGooMiniPlayer:
         self._preferred_playlist = ""
         names = [str(item.get("name") or "") for item in items]
         self.queue_playlist_combo.configure(values=names)
+        self.history_playlist_combo.configure(values=names)
         if names and self.playlist_name.get() not in names:
             self.playlist_name.set(names[0])
         self.playlist_list.delete(0, END)

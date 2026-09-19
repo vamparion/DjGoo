@@ -63,6 +63,7 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             "mini_queue_clear",
             "mini_queue_undo",
             "mini_playlist_add",
+            "mini_playlist_add_history",
             "mini_playlist_add_current",
             "mini_playlist_create",
             "mini_radio_mode",
@@ -76,6 +77,7 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         if intent in {
             "mini_playlist_create",
             "mini_playlist_add",
+            "mini_playlist_add_history",
             "mini_playlist_add_current",
         }:
             for guild in getattr(self.bot, "guilds", []):
@@ -268,11 +270,14 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                 created=created,
             )
 
-        if intent in {"mini_playlist_add_current", "mini_playlist_add"}:
+        if intent in {
+            "mini_playlist_add_current",
+            "mini_playlist_add",
+            "mini_playlist_add_history",
+        }:
             playlist = str(item.get("playlist") or "").strip()
             if not playlist:
                 return {"status": "failed", "message": "Choose or create a playlist first."}
-            _guild_id, player = self._mini_player_target()
             selected_ids = {
                 str(value)
                 for value in payload.get("track_ids", [])
@@ -280,24 +285,39 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             }
             tracks: list[Any] = []
             if intent == "mini_playlist_add_current":
+                _guild_id, player = self._mini_player_target()
                 current = getattr(player, "current", None) if player is not None else None
                 tracks = [current] if current is not None else self._state_track(current=True)
-            elif player is not None:
+            elif intent == "mini_playlist_add":
+                _guild_id, player = self._mini_player_target()
+                if player is not None:
+                    tracks = [
+                        track
+                        for track in list(getattr(player, "queue", []))
+                        if self._stable_track_id(track) in selected_ids
+                    ]
+                if not tracks:
+                    tracks = self._state_track(current=False, track_ids=selected_ids)
+            else:
+                history_ids = {
+                    str(value)
+                    for value in payload.get("history_ids", [])
+                    if str(value).strip()
+                }
                 tracks = [
                     track
-                    for track in list(getattr(player, "queue", []))
-                    if self._stable_track_id(track) in selected_ids
+                    for track in self.mini_history.entries()
+                    if str(track.get("id") or "") in history_ids
                 ]
-            if intent == "mini_playlist_add" and not tracks:
-                tracks = self._state_track(current=False, track_ids=selected_ids)
             if not tracks:
+                unavailable = {
+                    "mini_playlist_add_current": "There is no current song to add.",
+                    "mini_playlist_add": "Those queued songs are no longer available.",
+                    "mini_playlist_add_history": "Those history songs are no longer available.",
+                }
                 return {
                     "status": "failed",
-                    "message": (
-                        "There is no current song to add."
-                        if intent == "mini_playlist_add_current"
-                        else "Those queued songs are no longer available."
-                    ),
+                    "message": unavailable[intent],
                 }
             added = 0
             duplicates = 0

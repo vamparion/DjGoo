@@ -236,6 +236,7 @@ async def test_playlist_management_does_not_require_a_voice_member(
     monkeypatch,
 ) -> None:
     from local_cogs.djgoowelcome import experience_audio_bridge as module
+    from voice.mini_player_protocol import MiniPlayerHistory
     from voice.now_playing_state import NowPlayingState
 
     guild_id = 42
@@ -244,6 +245,7 @@ async def test_playlist_management_does_not_require_a_voice_member(
     )
     bridge.bot = SimpleNamespace(guilds=[SimpleNamespace(id=guild_id)])
     bridge.playlists = DjGooPlaylists(tmp_path / "playlists.json")
+    bridge.mini_history = MiniPlayerHistory(tmp_path / "history.json")
     bridge.now_playing = NowPlayingState(tmp_path / "now-playing.json")
     bridge._queue_item_ids = {}
     bridge.now_playing.publish(
@@ -267,6 +269,16 @@ async def test_playlist_management_does_not_require_a_voice_member(
             ],
         },
     )
+    bridge.mini_history.add(
+        {
+            "id": "history-1",
+            "title": "History Song",
+            "artist": "History Artist",
+            "uri": "https://example.test/history",
+            "duration_seconds": 180,
+        },
+        mode="REQUEST",
+    )
 
     def no_live_player(_guild_id):
         raise module.PlayerNotFound
@@ -286,12 +298,20 @@ async def test_playlist_management_does_not_require_a_voice_member(
             "payload": {"track_ids": ["queued-1"]},
         }
     )
+    added_history = await bridge._handle_mini_intent(
+        {
+            "intent": "mini_playlist_add_history",
+            "playlist": "KnockOut",
+            "payload": {"history_ids": ["history-1"]},
+        }
+    )
 
     assert created["status"] == "completed"
     assert created["playlist"] == "knockout"
     assert added_current["added"] == 1
     assert added_queue["added"] == 1
+    assert added_history["added"] == 1
     assert [
         track["title"] for track in bridge.playlists.get_tracks("KnockOut")
-    ] == ["Current Song", "Queued Song"]
-    assert added_queue["playlists"][0]["track_count"] == 2
+    ] == ["Current Song", "Queued Song", "History Song"]
+    assert added_history["playlists"][0]["track_count"] == 3
