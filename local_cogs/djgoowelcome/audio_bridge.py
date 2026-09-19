@@ -574,14 +574,7 @@ class DjGooAudioBridge:
             guild_state = state.get(str(guild.id))
             if not isinstance(guild_state, dict):
                 continue
-            if self._lavalink_survived_saved_state(guild_state):
-                log_event(
-                    "playback.resume.skipped_guild",
-                    guild_id=guild.id,
-                    reason="lavalink_session_survived",
-                )
-                continue
-            if self._player_has_music(guild.id):
+            if await self._wait_for_existing_player_music(guild.id):
                 log_event("playback.resume.skipped_guild", guild_id=guild.id, reason="music_already_present")
                 continue
             author = self._active_voice_member_for_guild(guild)
@@ -614,20 +607,21 @@ class DjGooAudioBridge:
         if not resumed_any:
             await self.resume_active_radio_stations()
 
-    def _lavalink_survived_saved_state(self, guild_state: Dict[str, Any]) -> bool:
-        """Avoid restoring tracks over a Lavalink process that kept its session."""
+    async def _wait_for_existing_player_music(
+        self,
+        guild_id: int,
+        *,
+        timeout_seconds: float = 4.0,
+    ) -> bool:
+        """Give Red's Audio cog time to reconstruct a resumed player."""
 
-        saved_at = float(guild_state.get("saved_at") or 0)
-        if saved_at <= 0:
-            return False
-        root = Path(getattr(self, "project_root", Path.cwd()))
-        pid_path = root / "data" / "pids" / "lavalink.json"
-        try:
-            payload = json.loads(pid_path.read_text(encoding="utf-8"))
-            create_time = float(payload.get("create_time") or 0)
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            return False
-        return 0 < create_time <= saved_at
+        deadline = time.monotonic() + max(0.0, timeout_seconds)
+        while True:
+            if self._player_has_music(guild_id):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.25)
 
     def _read_playback_state(self) -> Dict[str, Any]:
         path = self._playback_state_path()

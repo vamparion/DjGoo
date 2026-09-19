@@ -180,22 +180,22 @@ def test_mini_player_lock_prevents_competing_windows(tmp_path: Path) -> None:
         replacement.close()
 
 
-def test_resume_detects_lavalink_process_that_survived_saved_state(
-    tmp_path: Path,
+@pytest.mark.asyncio
+async def test_resume_waits_for_audio_to_reconstruct_existing_player(
+    monkeypatch,
 ) -> None:
     from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
 
     bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
-    bridge.project_root = tmp_path
-    pid_path = tmp_path / "data" / "pids" / "lavalink.json"
-    pid_path.parent.mkdir(parents=True)
-    pid_path.write_text(
-        json.dumps({"pid": 42, "create_time": 100.0}),
-        encoding="utf-8",
-    )
+    checks = iter((False, False, True))
+    bridge._player_has_music = lambda _guild_id: next(checks)
 
-    assert bridge._lavalink_survived_saved_state({"saved_at": 120.0}) is True
-    assert bridge._lavalink_survived_saved_state({"saved_at": 90.0}) is False
+    async def no_wait(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("local_cogs.djgoowelcome.audio_bridge.asyncio.sleep", no_wait)
+
+    assert await bridge._wait_for_existing_player_music(42) is True
 
 
 @pytest.mark.asyncio
