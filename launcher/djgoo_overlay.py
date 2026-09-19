@@ -913,9 +913,9 @@ class DjGooMiniPlayer:
         tools.pack(side=RIGHT)
         for label, action, tip in (
             (
-                "Shuffle Requests",
-                self._shuffle_requests,
-                "Shuffle requests while preserving the radio lane",
+                "Shuffle Queue",
+                self._shuffle_queue,
+                "Shuffle every track in the visible queue",
             ),
             (
                 "Undo",
@@ -1315,9 +1315,9 @@ class DjGooMiniPlayer:
             pending_key="queue:add_playlist",
         )
 
-    def _shuffle_requests(self) -> None:
+    def _shuffle_queue(self) -> None:
         self.send(
-            "mini_queue_shuffle_requests",
+            "mini_queue_shuffle",
             pending_key="queue:shuffle",
         )
 

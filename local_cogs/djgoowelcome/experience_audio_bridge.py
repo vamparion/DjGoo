@@ -59,6 +59,7 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             "mini_queue_play_now",
             "mini_queue_reorder",
             "mini_queue_remove_many",
+            "mini_queue_shuffle",
             "mini_queue_shuffle_requests",
             "mini_queue_clear",
             "mini_queue_undo",
@@ -407,20 +408,16 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             self._persist_player_state(guild_id, reason="mini_queue_clear")
             return {"status": "completed", "message": f"Cleared {count} queued track(s)."}
 
-        if intent == "mini_queue_shuffle_requests":
+        if intent in {"mini_queue_shuffle", "mini_queue_shuffle_requests"}:
             queue = list(player.queue)
-            ledger = getattr(self, "request_ledger", None)
-            request_keys = ledger.pending_keys(guild_id) if ledger is not None else set()
-            requests = [track for track in queue if self._track_key(track) in request_keys]
-            automatic = [track for track in queue if self._track_key(track) not in request_keys]
-            if len(requests) < 2:
-                return {"status": "failed", "message": "There are fewer than two requested tracks to shuffle."}
+            if len(queue) < 2:
+                return {"status": "failed", "message": "There are fewer than two queued tracks to shuffle."}
             self._remember_queue(guild_id, player)
-            random.shuffle(requests)
+            random.shuffle(queue)
             player.queue.clear()
-            player.queue.extend([*requests, *automatic])
-            self._persist_player_state(guild_id, reason="mini_shuffle_requests")
-            return {"status": "completed", "message": f"Shuffled {len(requests)} requested tracks."}
+            player.queue.extend(queue)
+            self._persist_player_state(guild_id, reason="mini_shuffle_queue")
+            return {"status": "completed", "message": f"Shuffled {len(queue)} queued tracks."}
 
         if intent == "mini_queue_reorder":
             ordered_ids = [str(value) for value in payload.get("track_ids", [])]

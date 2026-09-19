@@ -231,6 +231,44 @@ async def test_queue_reorder_and_remove_use_stable_track_ids(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
+async def test_queue_shuffle_includes_playlist_and_automatic_tracks(monkeypatch) -> None:
+    from local_cogs.djgoowelcome import experience_audio_bridge as module
+
+    bridge = module.ExperienceDjGooAudioBridge.__new__(
+        module.ExperienceDjGooAudioBridge
+    )
+    audio = object()
+    bridge.bot = SimpleNamespace(
+        get_cog=lambda name: audio if name == "Audio" else None
+    )
+    bridge._context = lambda: SimpleNamespace(guild=SimpleNamespace(id=42))
+    bridge._queue_undo = {}
+    bridge.request_ledger = SimpleNamespace(entries=lambda _guild_id: [])
+    bridge._persist_player_state = lambda *_args, **_kwargs: None
+    tracks = [
+        SimpleNamespace(title="Playlist One"),
+        SimpleNamespace(title="Playlist Two"),
+        SimpleNamespace(title="Automatic Radio"),
+    ]
+    player = SimpleNamespace(queue=list(tracks), current=None)
+    monkeypatch.setattr(module.lavalink, "get_player", lambda _guild_id: player)
+    monkeypatch.setattr(module.random, "shuffle", lambda values: values.reverse())
+
+    result = await bridge._handle_mini_intent({"intent": "mini_queue_shuffle"})
+
+    assert result == {
+        "status": "completed",
+        "message": "Shuffled 3 queued tracks.",
+    }
+    assert [track.title for track in player.queue] == [
+        "Automatic Radio",
+        "Playlist Two",
+        "Playlist One",
+    ]
+    assert bridge._queue_undo[42]["queue"] == tracks
+
+
+@pytest.mark.asyncio
 async def test_playlist_management_does_not_require_a_voice_member(
     tmp_path: Path,
     monkeypatch,
