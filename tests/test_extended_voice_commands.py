@@ -14,6 +14,12 @@ def test_queue_management_commands() -> None:
 
 
 def test_radio_and_library_commands() -> None:
+    start = parse_command("radio 80s", require_wake=False)
+    stop = parse_command("radio off", require_wake=False)
+
+    assert start.intent == "start_radio"
+    assert start.query == "80s"
+    assert stop.intent == "stop_radio"
     assert parse_command("don't like this", require_wake=False).intent == "station_less_like_current"
     assert parse_command("undo last ban", require_wake=False).intent == "undo_station_ban"
     assert parse_command("add to favorites", require_wake=False).intent == "favorite_current"

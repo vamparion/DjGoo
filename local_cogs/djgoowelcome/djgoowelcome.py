@@ -426,6 +426,42 @@ class DjGooWelcome(commands.Cog):
         """Manage DjGoo Voice Remote pairing."""
         await ctx.send("Use `djgoo pair`, `djgoo devices`, or `djgoo revoke <device-id>`. ")
 
+    @commands.command(name="radio")
+    @commands.guild_only()
+    async def radio_command(
+        self,
+        ctx: commands.Context,
+        *,
+        seed: str = "",
+    ) -> None:
+        """Start or stop a persistent, station-specific DjGoo radio."""
+        seed = seed.strip()
+        if not seed:
+            await ctx.send("Choose a station seed, for example `!radio 80s`.")
+            return
+        parsed = parse_command(f"radio {seed}", require_wake=False)
+        item = command_to_queue_item(
+            parsed,
+            transcript=f"!radio {seed}",
+            source="chat",
+        )
+        log_event(
+            "chat.radio.command.received",
+            guild_id=ctx.guild.id,
+            channel_id=ctx.channel.id,
+            author_id=ctx.author.id,
+            seed=seed,
+            intent=parsed.intent,
+        )
+        result = await self._audio_bridge.handle_from_discord_context(item, ctx)
+        log_event(
+            "chat.radio.command.handled",
+            guild_id=ctx.guild.id,
+            seed=seed,
+            intent=parsed.intent,
+            result=result,
+        )
+
     @djgoo_group.command(name="pair")
     @commands.guild_only()
     async def djgoo_pair(self, ctx: commands.Context) -> None:
