@@ -407,9 +407,12 @@ class DjGooMiniPlayer:
             highlightthickness=0,
         )
         button._djgoo_normal_bg = normal_bg  # type: ignore[attr-defined]
+        button._djgoo_hover_bg = hover_bg  # type: ignore[attr-defined]
         button.bind(
             "<Enter>",
-            lambda _event: button.configure(bg=hover_bg)
+            lambda _event: button.configure(
+                bg=getattr(button, "_djgoo_hover_bg", hover_bg)
+            )
             if str(button.cget("state")) != "disabled"
             else None,
             add="+",
@@ -653,13 +656,12 @@ class DjGooMiniPlayer:
         self.stop_radio_button = self._button(
             self.radio_row,
             "Stop Radio",
-            lambda: self.send("mini_stop_radio", pending_key="radio:stop"),
+            self._toggle_radio,
             width=8,
             variant="danger",
             tooltip="Stop radio additions but preserve requested songs",
         )
         self.stop_radio_button.pack(side=RIGHT)
-        self._radio_controls.append(self.stop_radio_button)
 
         request_row = Frame(self.compact, bg=BG, padx=10)
         request_row.pack(fill=X)
@@ -1393,6 +1395,25 @@ class DjGooMiniPlayer:
             status=f"Changing radio to {mode.title()}...",
         )
 
+    def _toggle_radio(self) -> None:
+        station = self._payload.get("station_details")
+        if isinstance(station, dict):
+            self.send("mini_stop_radio", pending_key="radio:stop")
+            return
+        seed = self.request.get().strip()
+        if not seed:
+            self._set_status("Type a song, artist, or genre to seed the radio.", WARN)
+            self.request_entry.focus_set()
+            return
+        self.request.set("")
+        self._remember_search(seed)
+        self.send(
+            "start_radio",
+            query=seed,
+            pending_key=f"radio:start:{seed.lower()}",
+            status=f"Starting {seed} radio...",
+        )
+
     def _set_volume(self, _event=None) -> None:
         target = round(float(self.volume_value.get()))
         self.send(
@@ -1995,6 +2016,15 @@ class DjGooMiniPlayer:
             mode = str(station.get("mode") or "balanced").title()
             if self.station_mode.get() != mode:
                 self.station_mode.set(mode)
+        self.stop_radio_button.configure(
+            text="Stop Radio" if active else "Start Radio",
+            bg=DANGER if active else ACCENT,
+            activebackground=DANGER_HOVER if active else ACCENT_HOVER,
+        )
+        self.stop_radio_button._djgoo_normal_bg = DANGER if active else ACCENT
+        self.stop_radio_button._djgoo_hover_bg = (
+            DANGER_HOVER if active else ACCENT_HOVER
+        )
         for control in self._radio_controls:
             with contextlib.suppress(Exception):
                 control.configure(

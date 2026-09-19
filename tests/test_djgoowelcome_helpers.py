@@ -78,6 +78,7 @@ class DjGooWelcomeHelperTests(unittest.TestCase):
         self.assertIn("DjGoo play <song or URL>", description)
         self.assertIn("DjGoo, skip", description)
         self.assertIn("DjGoo stop", description)
+        self.assertIn("!radio <song, artist, or genre>", description)
         self.assertIn("Type these in chat", description)
         self.assertIn("Vera", description)
         self.assertNotIn("listening", description.lower())

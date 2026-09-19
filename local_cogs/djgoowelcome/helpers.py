@@ -81,6 +81,7 @@ def build_welcome_payload(display_name: str, voice_channel_name: str) -> Dict[st
             "`DjGoo stop`",
             "`DjGoo queue`",
             "`DjGoo now`",
+            "`!radio <song, artist, or genre>` / `!radio off`",
             "`DjGoo volume 50`",
             "`DjGoo disconnect`",
             "",
