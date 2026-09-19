@@ -435,14 +435,23 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         track_id = str(payload.get("track_id") or item.get("value") or "")
         if track_id and track_id not in selected_ids:
             selected_ids.append(track_id)
-        selected = [track for track in list(player.queue) if self._stable_track_id(track) in selected_ids]
+        selected_id_set = set(selected_ids)
+        selected = [
+            track
+            for track in list(player.queue)
+            if self._stable_track_id(track) in selected_id_set
+        ]
         if not selected:
             return {"status": "failed", "message": "That track is no longer in the queue."}
 
         self._remember_queue(guild_id, player)
         queue = list(player.queue)
         if intent in {"mini_queue_remove", "mini_queue_remove_many"}:
-            queue = [track for track in queue if track not in selected]
+            queue = [
+                track
+                for track in queue
+                if self._stable_track_id(track) not in selected_id_set
+            ]
             ledger = getattr(self, "request_ledger", None)
             if ledger is not None:
                 for track in selected:
@@ -450,12 +459,22 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             message = f"Removed {len(selected)} queued track(s)."
         elif intent == "mini_queue_move_next":
             selected_track = selected[0]
-            queue.remove(selected_track)
+            selected_id = self._stable_track_id(selected_track)
+            queue = [
+                track
+                for track in queue
+                if self._stable_track_id(track) != selected_id
+            ]
             queue.insert(0, selected_track)
             message = f"Moved {getattr(selected_track, 'title', 'track')} next."
         elif intent == "mini_queue_play_now":
             selected_track = selected[0]
-            queue.remove(selected_track)
+            selected_id = self._stable_track_id(selected_track)
+            queue = [
+                track
+                for track in queue
+                if self._stable_track_id(track) != selected_id
+            ]
             queue.insert(0, selected_track)
             message = f"Playing {getattr(selected_track, 'title', 'track')} now."
         else:

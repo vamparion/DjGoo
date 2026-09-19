@@ -574,6 +574,13 @@ class DjGooAudioBridge:
             guild_state = state.get(str(guild.id))
             if not isinstance(guild_state, dict):
                 continue
+            if self._lavalink_survived_saved_state(guild_state):
+                log_event(
+                    "playback.resume.skipped_guild",
+                    guild_id=guild.id,
+                    reason="lavalink_session_survived",
+                )
+                continue
             if self._player_has_music(guild.id):
                 log_event("playback.resume.skipped_guild", guild_id=guild.id, reason="music_already_present")
                 continue
@@ -606,6 +613,21 @@ class DjGooAudioBridge:
                     resumed_any = True
         if not resumed_any:
             await self.resume_active_radio_stations()
+
+    def _lavalink_survived_saved_state(self, guild_state: Dict[str, Any]) -> bool:
+        """Avoid restoring tracks over a Lavalink process that kept its session."""
+
+        saved_at = float(guild_state.get("saved_at") or 0)
+        if saved_at <= 0:
+            return False
+        root = Path(getattr(self, "project_root", Path.cwd()))
+        pid_path = root / "data" / "pids" / "lavalink.json"
+        try:
+            payload = json.loads(pid_path.read_text(encoding="utf-8"))
+            create_time = float(payload.get("create_time") or 0)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return False
+        return 0 < create_time <= saved_at
 
     def _read_playback_state(self) -> Dict[str, Any]:
         path = self._playback_state_path()

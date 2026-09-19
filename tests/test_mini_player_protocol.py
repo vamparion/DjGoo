@@ -180,6 +180,24 @@ def test_mini_player_lock_prevents_competing_windows(tmp_path: Path) -> None:
         replacement.close()
 
 
+def test_resume_detects_lavalink_process_that_survived_saved_state(
+    tmp_path: Path,
+) -> None:
+    from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+    bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+    bridge.project_root = tmp_path
+    pid_path = tmp_path / "data" / "pids" / "lavalink.json"
+    pid_path.parent.mkdir(parents=True)
+    pid_path.write_text(
+        json.dumps({"pid": 42, "create_time": 100.0}),
+        encoding="utf-8",
+    )
+
+    assert bridge._lavalink_survived_saved_state({"saved_at": 120.0}) is True
+    assert bridge._lavalink_survived_saved_state({"saved_at": 90.0}) is False
+
+
 @pytest.mark.asyncio
 async def test_queue_reorder_and_remove_use_stable_track_ids(monkeypatch) -> None:
     from local_cogs.djgoowelcome import experience_audio_bridge as module
@@ -228,6 +246,48 @@ async def test_queue_reorder_and_remove_use_stable_track_ids(monkeypatch) -> Non
         "status": "completed",
         "message": "Removed 1 queued track(s).",
     }
+
+
+@pytest.mark.asyncio
+async def test_queue_remove_uses_row_id_when_tracks_compare_equal(monkeypatch) -> None:
+    from local_cogs.djgoowelcome import experience_audio_bridge as module
+
+    class EqualTrack:
+        def __init__(self, title: str, uri: str) -> None:
+            self.title = title
+            self.uri = uri
+
+        def __eq__(self, other: object) -> bool:
+            return isinstance(other, EqualTrack) and self.uri == other.uri
+
+    bridge = module.ExperienceDjGooAudioBridge.__new__(
+        module.ExperienceDjGooAudioBridge
+    )
+    bridge.bot = SimpleNamespace(get_cog=lambda _name: object())
+    bridge._context = lambda: SimpleNamespace(guild=SimpleNamespace(id=42))
+    bridge._queue_item_ids = {}
+    bridge._queue_undo = {}
+    bridge.request_ledger = SimpleNamespace(
+        entries=lambda _guild_id: [],
+        consume=lambda _guild_id, _track_key: None,
+    )
+    bridge._track_key = lambda track: track.uri
+    bridge._persist_player_state = lambda *_args, **_kwargs: None
+    first = EqualTrack("First copy", "track:same")
+    second = EqualTrack("Second copy", "track:same")
+    player = SimpleNamespace(queue=[first, second], current=None)
+    monkeypatch.setattr(module.lavalink, "get_player", lambda _guild_id: player)
+    second_id = bridge._stable_track_id(second)
+
+    result = await bridge._handle_mini_intent(
+        {
+            "intent": "mini_queue_remove_many",
+            "payload": {"track_ids": [second_id]},
+        }
+    )
+
+    assert result["status"] == "completed"
+    assert player.queue == [first]
 
 
 @pytest.mark.asyncio
