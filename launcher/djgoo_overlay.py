@@ -1141,8 +1141,8 @@ class DjGooMiniPlayer:
             self._create_playlist,
             variant="primary",
         ).pack(side=LEFT, padx=(5, 0))
-        manage = Frame(self.playlists_tab, bg=PANEL, pady=(0, 6))
-        manage.pack(fill=X)
+        manage = Frame(self.playlists_tab, bg=PANEL)
+        manage.pack(fill=X, pady=(0, 6))
         Label(
             manage,
             text="FILTER",
@@ -2045,7 +2045,7 @@ class DjGooMiniPlayer:
                 "",
                 END,
                 iid="__empty__queue",
-                values=("Queue is empty", "", "Add a song or playlist", ""),
+                values=("Queue is empty - add a song or playlist", "", "", ""),
             )
         for item in queue:
             track_id = str(item.get("id") or "")
