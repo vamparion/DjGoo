@@ -199,6 +199,34 @@ async def test_resume_waits_for_audio_to_reconstruct_existing_player(
 
 
 @pytest.mark.asyncio
+async def test_restore_starts_current_before_appending_saved_queue() -> None:
+    from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+    bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+    calls: list[str] = []
+    audio = SimpleNamespace(command_play=object())
+    bridge._play_query_when_ready = lambda *_args: _async_result(True)
+
+    async def invoke(_command, _ctx, *, query: str) -> None:
+        calls.append(query)
+
+    bridge._invoke_silently = invoke
+
+    result = await bridge._restore_playback_queries(
+        audio,
+        object(),
+        ["current", "next", "later"],
+    )
+
+    assert result is True
+    assert calls == ["next", "later"]
+
+
+async def _async_result(value):
+    return value
+
+
+@pytest.mark.asyncio
 async def test_queue_reorder_and_remove_use_stable_track_ids(monkeypatch) -> None:
     from local_cogs.djgoowelcome import experience_audio_bridge as module
 

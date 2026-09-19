@@ -592,7 +592,7 @@ class DjGooAudioBridge:
                     mode=guild_state.get("mode"),
                     current=(guild_state.get("current") or {}).get("title"),
                 )
-                if await self._play_queries_when_ready(audio, ctx, tracks):
+                if await self._restore_playback_queries(audio, ctx, tracks):
                     resumed_any = True
                     station = self.stations.get_active(guild.id)
                     if station is not None:
@@ -845,6 +845,23 @@ class DjGooAudioBridge:
 
     async def _play_query_when_ready(self, audio, ctx, query: str) -> bool:
         return await self._play_queries_when_ready(audio, ctx, [query])
+
+    async def _restore_playback_queries(
+        self,
+        audio: Any,
+        ctx: Any,
+        queries: List[str],
+    ) -> bool:
+        """Start the saved current track before appending its saved queue."""
+
+        queries = [query for query in queries if str(query).strip()]
+        if not queries:
+            return False
+        if not await self._play_query_when_ready(audio, ctx, queries[0]):
+            return False
+        for query in queries[1:]:
+            await self._invoke_silently(audio.command_play, ctx, query=query)
+        return True
 
     async def _play_queries_when_ready(self, audio, ctx, queries: List[str]) -> bool:
         queries = [query for query in queries if str(query).strip()]
