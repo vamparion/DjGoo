@@ -8,5 +8,6 @@ data/
 .worktrees/
 control_panel_ui/node_modules/
 control_panel_ui/dist/
+build/
 __pycache__/
 *.pyc

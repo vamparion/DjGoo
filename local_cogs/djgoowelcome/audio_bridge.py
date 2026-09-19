@@ -741,7 +741,14 @@ class DjGooAudioBridge:
         for track in queued_tracks:
             query = track.get("uri") or track.get("title")
             if query:
+                previous_ids = self._player_object_ids(guild_id)
                 await self._invoke(audio.command_play, ctx, query=str(query))
+                self._remember_new_queue_origin(
+                    guild_id,
+                    previous_ids,
+                    source="playlist",
+                    label=playlist_name,
+                )
         if not queued_tracks:
             message = f"All {skipped} track(s) from `{playlist_name}` are already playing or queued."
         else:
@@ -763,6 +770,32 @@ class DjGooAudioBridge:
             if track is not None
             if (identity := self._track_identity(track))
         }
+
+    def _player_object_ids(self, guild_id: int) -> set[int]:
+        try:
+            player = lavalink.get_player(guild_id)
+        except (NodeNotFound, PlayerNotFound):
+            return set()
+        return {id(track) for track in list(getattr(player, "queue", []))}
+
+    def _remember_new_queue_origin(
+        self,
+        guild_id: int,
+        previous_ids: set[int],
+        *,
+        source: str,
+        label: str = "",
+    ) -> None:
+        ledger = getattr(self, "queue_origins", None)
+        if ledger is None:
+            return
+        try:
+            player = lavalink.get_player(guild_id)
+        except (NodeNotFound, PlayerNotFound):
+            return
+        added = [track for track in list(player.queue) if id(track) not in previous_ids]
+        if added:
+            ledger.add(guild_id, track_key=self._track_key(added[-1]), source=source, label=label)
 
     def _track_identity(self, track: Any) -> str:
         data = dict(track) if isinstance(track, dict) else self._track_data(track)

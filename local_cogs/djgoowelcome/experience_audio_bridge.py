@@ -19,6 +19,7 @@ from voice.deck_store import DeckStore
 from voice.now_playing_state import NowPlayingState
 from voice.mini_player_protocol import MiniPlayerHistory
 from voice.operational_log import log_event
+from voice.queue_origin_ledger import QueueOriginLedger
 
 from .audio_bridge import PlaybackControlsView
 from .helpers import build_playback_control_embed
@@ -43,6 +44,9 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         self.mini_history = MiniPlayerHistory(
             project_root / "data" / "djgoo-mini-history.json"
         )
+        self.queue_origins = QueueOriginLedger(
+            project_root / "data" / "djgoo-queue-origins.json"
+        )
 
     async def _notice(self, description: str) -> None:
         if self._mini_command_depth > 0:
@@ -65,8 +69,13 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             "mini_queue_undo",
             "mini_playlist_add",
             "mini_playlist_add_history",
+            "mini_playlist_add_search",
             "mini_playlist_add_current",
             "mini_playlist_create",
+            "mini_playlist_delete",
+            "mini_playlist_remove_tracks",
+            "mini_playlist_rename",
+            "mini_playlist_reorder",
             "mini_radio_mode",
             "mini_stop_radio",
             "mini_mute",
@@ -79,7 +88,12 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             "mini_playlist_create",
             "mini_playlist_add",
             "mini_playlist_add_history",
+            "mini_playlist_add_search",
             "mini_playlist_add_current",
+            "mini_playlist_delete",
+            "mini_playlist_remove_tracks",
+            "mini_playlist_rename",
+            "mini_playlist_reorder",
         }:
             for guild in getattr(self.bot, "guilds", []):
                 self._publish_now_playing(int(guild.id))
@@ -128,20 +142,40 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         by_key: dict[str, list[dict[str, Any]]] = {}
         for entry in entries:
             by_key.setdefault(str(entry.get("track_key") or ""), []).append(entry)
+        origins_by_key: dict[str, list[dict[str, Any]]] = {}
+        origin_ledger = getattr(self, "queue_origins", None)
+        origin_entries = origin_ledger.entries(guild_id) if origin_ledger is not None else []
+        for entry in origin_entries:
+            origins_by_key.setdefault(str(entry.get("track_key") or ""), []).append(entry)
         station_active = self.stations.get_active(guild_id) is not None
+        identity_counts: dict[str, int] = {}
+        for track in [getattr(player, "current", None), *list(player.queue)]:
+            if track is not None:
+                identity = self._track_identity(track)
+                identity_counts[identity] = identity_counts.get(identity, 0) + 1
         snapshot = []
         live_ids = set()
         for position, track in enumerate(list(player.queue), start=1):
             live_ids.add(id(track))
             requests = by_key.get(self._track_key(track), [])
             request = requests.pop(0) if requests else None
-            request_type = "request" if request is not None else "radio" if station_active else "automatic"
+            origins = origins_by_key.get(self._track_key(track), [])
+            origin = origins.pop(0) if origins else None
+            if request is not None:
+                request_type = "manual"
+            elif origin and origin.get("source") == "playlist":
+                request_type = f"playlist: {origin.get('label') or 'saved'}"
+            elif station_active:
+                request_type = "radio"
+            else:
+                request_type = str((origin or {}).get("source") or "automatic")
             item = self._track_snapshot(
                 track,
                 request=request,
                 request_type=request_type,
             )
             item["position"] = position
+            item["duplicate"] = identity_counts.get(self._track_identity(track), 0) > 1
             snapshot.append(item)
         current = getattr(player, "current", None)
         if current is not None:
@@ -271,10 +305,70 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                 created=created,
             )
 
+        if intent == "mini_playlist_rename":
+            try:
+                old_name, name = self.playlists.rename(
+                    str(item.get("playlist") or ""),
+                    str(
+                        item.get("value")
+                        or payload.get("new_name")
+                        or payload.get("name")
+                        or ""
+                    ),
+                )
+            except ValueError as exc:
+                return {"status": "failed", "message": str(exc)}
+            return self._playlist_payload(
+                status="completed",
+                message=f"Renamed {old_name} to {name}.",
+                playlist=name,
+            )
+
+        if intent == "mini_playlist_delete":
+            try:
+                name = self.playlists.delete(str(item.get("playlist") or ""))
+            except ValueError as exc:
+                return {"status": "failed", "message": str(exc)}
+            return self._playlist_payload(
+                status="completed",
+                message=f"Deleted {name}.",
+                playlist="",
+            )
+
+        if intent == "mini_playlist_remove_tracks":
+            try:
+                name, removed = self.playlists.remove_tracks(
+                    str(item.get("playlist") or ""),
+                    [str(value) for value in payload.get("track_ids", [])],
+                )
+            except ValueError as exc:
+                return {"status": "failed", "message": str(exc)}
+            return self._playlist_payload(
+                status="completed",
+                message=f"Removed {removed} track(s) from {name}.",
+                playlist=name,
+                removed=removed,
+            )
+
+        if intent == "mini_playlist_reorder":
+            try:
+                name = self.playlists.reorder_tracks(
+                    str(item.get("playlist") or ""),
+                    [str(value) for value in payload.get("track_ids", [])],
+                )
+            except ValueError as exc:
+                return {"status": "failed", "message": str(exc)}
+            return self._playlist_payload(
+                status="completed",
+                message=f"Saved the order of {name}.",
+                playlist=name,
+            )
+
         if intent in {
             "mini_playlist_add_current",
             "mini_playlist_add",
             "mini_playlist_add_history",
+            "mini_playlist_add_search",
         }:
             playlist = str(item.get("playlist") or "").strip()
             if not playlist:
@@ -299,7 +393,7 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                     ]
                 if not tracks:
                     tracks = self._state_track(current=False, track_ids=selected_ids)
-            else:
+            elif intent == "mini_playlist_add_history":
                 history_ids = {
                     str(value)
                     for value in payload.get("history_ids", [])
@@ -310,11 +404,19 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                     for track in self.mini_history.entries()
                     if str(track.get("id") or "") in history_ids
                 ]
+            else:
+                tracks = [
+                    dict(track)
+                    for track in payload.get("tracks", [])
+                    if isinstance(track, dict)
+                    and str(track.get("uri") or track.get("title") or "").strip()
+                ]
             if not tracks:
                 unavailable = {
                     "mini_playlist_add_current": "There is no current song to add.",
                     "mini_playlist_add": "Those queued songs are no longer available.",
                     "mini_playlist_add_history": "Those history songs are no longer available.",
+                    "mini_playlist_add_search": "Those search results are no longer available.",
                 }
                 return {
                     "status": "failed",
@@ -824,6 +926,9 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         )
 
     async def handle_track_start(self, guild, track) -> None:
+        origin_ledger = getattr(self, "queue_origins", None)
+        if origin_ledger is not None:
+            origin_ledger.consume(int(guild.id), self._track_key(track))
         await super().handle_track_start(guild, track)
         # The lower bridge classifies a track as REQUEST during its station-start
         # hook, which runs after the first deck update. Refresh once more so the

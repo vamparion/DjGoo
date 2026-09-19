@@ -29,6 +29,29 @@ class DjGooPlaylistsTests(unittest.TestCase):
 
             self.assertEqual(store.get_tracks("edm"), [])
 
+    def test_playlist_crud_uses_stable_track_ids(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DjGooPlaylists(Path(temp_dir) / "playlists.json")
+            store.add_track("gym", {"title": "One", "uri": "track:one"})
+            store.add_track("gym", {"title": "Two", "uri": "track:two"})
+            tracks = store.get_tracks("gym")
+
+            old_name, new_name = store.rename("gym", "workout")
+            store.reorder_tracks(
+                "workout",
+                [tracks[1]["id"], tracks[0]["id"]],
+            )
+            matched, removed = store.remove_tracks(
+                "workout",
+                [tracks[0]["id"]],
+            )
+
+            self.assertEqual((old_name, new_name), ("gym", "workout"))
+            self.assertEqual((matched, removed), ("workout", 1))
+            self.assertEqual(store.get_tracks("workout")[0]["title"], "Two")
+            self.assertEqual(store.delete("workout"), "workout")
+            self.assertEqual(store.summaries(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

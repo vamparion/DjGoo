@@ -132,7 +132,7 @@ def test_queue_snapshot_uses_stable_ids_and_separates_request_lane(monkeypatch) 
     first = bridge._queue_snapshot(123)
     second = bridge._queue_snapshot(123)
 
-    assert first[0]["request_type"] == "request"
+    assert first[0]["request_type"] == "manual"
     assert first[0]["requester"] == "Player"
     assert first[1]["request_type"] == "radio"
     assert first[0]["id"] == second[0]["id"]
@@ -489,3 +489,60 @@ async def test_playlist_management_does_not_require_a_voice_member(
         track["title"] for track in bridge.playlists.get_tracks("KnockOut")
     ] == ["Current Song", "Queued Song", "History Song"]
     assert added_history["playlists"][0]["track_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_playlist_management_intents_are_fully_wired(tmp_path: Path) -> None:
+    from local_cogs.djgoowelcome import experience_audio_bridge as module
+
+    bridge = module.ExperienceDjGooAudioBridge.__new__(
+        module.ExperienceDjGooAudioBridge
+    )
+    bridge.playlists = DjGooPlaylists(tmp_path / "playlists.json")
+
+    await bridge._handle_mini_intent(
+        {"intent": "mini_playlist_create", "playlist": "Game Night"}
+    )
+    added = await bridge._handle_mini_intent(
+        {
+            "intent": "mini_playlist_add_search",
+            "playlist": "Game Night",
+            "payload": {
+                "tracks": [
+                    {"title": "One", "artist": "Artist", "uri": "track:one"},
+                    {"title": "Two", "artist": "Artist", "uri": "track:two"},
+                ]
+            },
+        }
+    )
+    tracks = bridge.playlists.get_tracks("Game Night")
+    renamed = await bridge._handle_mini_intent(
+        {
+            "intent": "mini_playlist_rename",
+            "playlist": "Game Night",
+            "payload": {"new_name": "Ranked"},
+        }
+    )
+    reordered = await bridge._handle_mini_intent(
+        {
+            "intent": "mini_playlist_reorder",
+            "playlist": "Ranked",
+            "payload": {"track_ids": [tracks[1]["id"], tracks[0]["id"]]},
+        }
+    )
+    removed = await bridge._handle_mini_intent(
+        {
+            "intent": "mini_playlist_remove_tracks",
+            "playlist": "Ranked",
+            "payload": {"track_ids": [tracks[0]["id"]]},
+        }
+    )
+    deleted = await bridge._handle_mini_intent(
+        {"intent": "mini_playlist_delete", "playlist": "Ranked"}
+    )
+
+    assert added["added"] == 2
+    assert renamed["playlist"] == "ranked"
+    assert reordered["status"] == "completed"
+    assert removed["removed"] == 1
+    assert deleted["playlists"] == []

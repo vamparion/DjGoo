@@ -61,8 +61,8 @@ ENTRY_BG = "#0c1216"
 DISABLED = "#526168"
 COMPACT_WIDTH = 540
 COMPACT_HEIGHT = 238
-EXPANDED_WIDTH = 1040
-EXPANDED_HEIGHT = 560
+EXPANDED_WIDTH = 1120
+EXPANDED_HEIGHT = 620
 
 
 try:
@@ -210,6 +210,8 @@ class DjGooMiniPlayer:
         self.station_mode = StringVar(value="Balanced")
         self.playlist_name = StringVar()
         self.new_playlist_name = StringVar()
+        self.playlist_filter = StringVar()
+        self.playlist_edit_name = StringVar()
         self.expanded_station = StringVar(value="No active station")
         self.expanded_next = StringVar(value="Nothing queued")
         self.expanded_health = StringVar(value="Waiting for component health")
@@ -230,9 +232,13 @@ class DjGooMiniPlayer:
         self._pending_keys: set[str] = set()
         self._queued_search_query = ""
         self._search_after: str | None = None
-        self._drawer_open = False
+        self._drawer_open = bool(self.settings.get("drawer_open", False))
         self._drag_item = ""
         self._drag_changed = False
+        self._playlist_drag_item = ""
+        self._playlist_drag_changed = False
+        self._playlist_items: list[dict[str, Any]] = []
+        self._delete_playlist_armed_until = 0.0
         self._last_artwork_url = ""
         self._artwork_photo = None
         self._tree_artwork: dict[str, Any] = {}
@@ -245,9 +251,15 @@ class DjGooMiniPlayer:
         self._configure_styles()
         self._build()
         self._restore_position()
+        self._restore_workspace()
         self._set_topmost()
         self.root.protocol("WM_DELETE_WINDOW", self._close)
         self.root.bind("<Configure>", self._remember_position, add="+")
+        self.root.bind("<Control-f>", self._focus_request, add="+")
+        self.root.bind("<Control-z>", lambda _event: self.send(
+            "mini_queue_undo", pending_key="queue:undo"
+        ), add="+")
+        self.root.bind("<Escape>", self._close_drawer, add="+")
         self._poll()
 
     def _configure_styles(self) -> None:
@@ -479,6 +491,13 @@ class DjGooMiniPlayer:
         )
         self.health_canvas.pack(side=RIGHT, padx=(7, 0))
         Tooltip(self.health_canvas, "Discord / Music Core / Voice health")
+        Label(
+            header,
+            text="D  M  V",
+            font=("Segoe UI Semibold", 7),
+            bg=BG,
+            fg=MUTED,
+        ).pack(side=RIGHT, pady=(2, 0))
         Checkbutton(
             header,
             text="Top",
@@ -853,6 +872,7 @@ class DjGooMiniPlayer:
         self.tabs.add(self.search_tab, text="Search Results")
         self.tabs.add(self.history_tab, text="History")
         self.tabs.add(self.playlists_tab, text="Playlists")
+        self.tabs.bind("<<NotebookTabChanged>>", self._remember_tab, add="+")
         self._build_queue_tab()
         self._build_search_tab()
         self._build_history_tab()
@@ -1012,7 +1032,7 @@ class DjGooMiniPlayer:
             ("title", "artist", "duration", "source", "index"),
             ("Track", "Artist", "Time", "Source", ""),
             (220, 125, 55, 90, 0),
-            selectmode="browse",
+            selectmode="extended",
             hidden=("index",),
         )
         self.search_tree.bind(
@@ -1036,6 +1056,20 @@ class DjGooMiniPlayer:
                     "later": "neutral",
                 }[timing],
             ).pack(side=LEFT, padx=(0, 5))
+        self.search_playlist_combo = ttk.Combobox(
+            actions,
+            textvariable=self.playlist_name,
+            state="readonly",
+            width=17,
+            style="DjGoo.TCombobox",
+        )
+        self.search_playlist_combo.pack(side=RIGHT, padx=(5, 0))
+        self._button(
+            actions,
+            "Add to Playlist",
+            self._add_search_to_playlist,
+            variant="warn",
+        ).pack(side=RIGHT)
 
     def _build_history_tab(self) -> None:
         body = Frame(self.history_tab, bg=PANEL, pady=6)
@@ -1080,6 +1114,13 @@ class DjGooMiniPlayer:
     def _build_playlists_tab(self) -> None:
         top = Frame(self.playlists_tab, bg=PANEL, pady=6)
         top.pack(fill=X)
+        Label(
+            top,
+            text="NEW",
+            bg=PANEL,
+            fg=MUTED,
+            font=("Segoe UI Semibold", 8),
+        ).pack(side=LEFT, padx=(0, 6))
         create = Entry(
             top,
             textvariable=self.new_playlist_name,
@@ -1099,6 +1140,60 @@ class DjGooMiniPlayer:
             "Create",
             self._create_playlist,
             variant="primary",
+        ).pack(side=LEFT, padx=(5, 0))
+        manage = Frame(self.playlists_tab, bg=PANEL, pady=(0, 6))
+        manage.pack(fill=X)
+        Label(
+            manage,
+            text="FILTER",
+            bg=PANEL,
+            fg=MUTED,
+            font=("Segoe UI Semibold", 8),
+        ).pack(side=LEFT, padx=(0, 6))
+        filter_entry = Entry(
+            manage,
+            textvariable=self.playlist_filter,
+            bg=ENTRY_BG,
+            fg=TEXT,
+            insertbackground=TEXT,
+            relief="flat",
+            bd=1,
+            highlightthickness=1,
+            highlightbackground=BORDER,
+            highlightcolor=ACCENT,
+        )
+        filter_entry.pack(side=LEFT, fill=X, expand=True, ipady=4)
+        self.playlist_filter.trace_add("write", lambda *_args: self._render_playlists())
+        Label(
+            manage,
+            text="RENAME TO",
+            bg=PANEL,
+            fg=MUTED,
+            font=("Segoe UI Semibold", 8),
+        ).pack(side=LEFT, padx=(10, 6))
+        rename = Entry(
+            manage,
+            textvariable=self.playlist_edit_name,
+            bg=ENTRY_BG,
+            fg=TEXT,
+            insertbackground=TEXT,
+            relief="flat",
+            bd=1,
+            highlightthickness=1,
+            highlightbackground=BORDER,
+            highlightcolor=ACCENT,
+            width=20,
+        )
+        rename.pack(side=LEFT, padx=(6, 0), ipady=4)
+        rename.bind("<Return>", lambda _event: self._rename_playlist())
+        self._button(manage, "Rename", self._rename_playlist).pack(
+            side=LEFT, padx=(5, 0)
+        )
+        self._button(
+            manage,
+            "Delete",
+            self._delete_playlist,
+            variant="danger",
         ).pack(side=LEFT, padx=(5, 0))
         body = Frame(self.playlists_tab, bg=PANEL)
         body.pack(fill=BOTH, expand=True)
@@ -1126,7 +1221,19 @@ class DjGooMiniPlayer:
             ("title", "artist", "duration"),
             ("Track", "Artist", "Time"),
             (235, 125, 55),
-            selectmode="browse",
+            selectmode="extended",
+        )
+        self.playlist_tree.bind(
+            "<ButtonPress-1>", self._playlist_drag_start, add="+"
+        )
+        self.playlist_tree.bind(
+            "<B1-Motion>", self._playlist_drag_motion, add="+"
+        )
+        self.playlist_tree.bind(
+            "<ButtonRelease-1>", self._playlist_drag_end, add="+"
+        )
+        self.playlist_tree.bind(
+            "<Delete>", lambda _event: self._remove_playlist_tracks(), add="+"
         )
         actions = Frame(self.playlists_tab, bg=PANEL, pady=7)
         actions.pack(fill=X)
@@ -1143,6 +1250,12 @@ class DjGooMiniPlayer:
         ).pack(side=LEFT, padx=5)
         self._button(
             actions,
+            "Remove Selected",
+            self._remove_playlist_tracks,
+            variant="danger",
+        ).pack(side=LEFT)
+        self._button(
+            actions,
             "Add Current",
             self._add_current_to_playlist,
             variant="warn",
@@ -1154,8 +1267,11 @@ class DjGooMiniPlayer:
         if self._drawer_open:
             self.compact.configure(width=COMPACT_WIDTH, height=EXPANDED_HEIGHT)
             self.drawer.pack(side=RIGHT, fill=BOTH, expand=True)
+            width = max(EXPANDED_WIDTH, int(self.settings.get("expanded_width", 0) or 0))
+            height = max(EXPANDED_HEIGHT, int(self.settings.get("expanded_height", 0) or 0))
+            self.root.minsize(920, 520)
             self.root.geometry(
-                f"{EXPANDED_WIDTH}x{EXPANDED_HEIGHT}+{x}+{y}"
+                f"{width}x{height}+{x}+{y}"
             )
         else:
             self.drawer.pack_forget()
@@ -1163,6 +1279,9 @@ class DjGooMiniPlayer:
             self.root.geometry(
                 f"{COMPACT_WIDTH}x{COMPACT_HEIGHT}+{x}+{y}"
             )
+            self.root.minsize(500, COMPACT_HEIGHT)
+        self.settings["drawer_open"] = self._drawer_open
+        self._save_settings()
 
     def send(
         self,
@@ -1284,7 +1403,11 @@ class DjGooMiniPlayer:
         )
 
     def _selected_queue_ids(self) -> list[str]:
-        return [str(item_id) for item_id in self.queue_tree.selection()]
+        return [
+            str(item_id)
+            for item_id in self.queue_tree.selection()
+            if not str(item_id).startswith("__empty__")
+        ]
 
     def _queue_action(self, intent: str) -> None:
         selected = self._selected_queue_ids()
@@ -1383,9 +1506,33 @@ class DjGooMiniPlayer:
                 query=str(self._search_results[index].get("uri") or ""),
             )
 
+    def _add_search_to_playlist(self) -> None:
+        playlist = self.playlist_name.get().strip()
+        selected = self.search_tree.selection()
+        if not playlist or not selected:
+            self._set_status("Select search results and a playlist first.", WARN)
+            return
+        tracks = []
+        for item_id in selected:
+            values = self.search_tree.item(item_id, "values")
+            try:
+                tracks.append(self._search_results[int(values[-1])])
+            except (IndexError, TypeError, ValueError):
+                continue
+        if not tracks:
+            self._set_status("Those search results are no longer available.", WARN)
+            return
+        self.send(
+            "mini_playlist_add_search",
+            playlist=playlist,
+            payload={"tracks": tracks},
+            pending_key="search:add_playlist",
+            status=f"Adding {len(tracks)} search result(s) to {playlist}...",
+        )
+
     def _play_history(self, timing: str) -> None:
         selected = self.history_tree.selection()
-        if not selected:
+        if not selected or str(selected[0]).startswith("__empty__"):
             self._set_status("Select a history track first.", WARN)
             return
         uri = str(self.history_tree.item(selected[0], "values")[-1])
@@ -1451,27 +1598,139 @@ class DjGooMiniPlayer:
 
     def _playlist_selected(self, _event=None) -> None:
         name = self._selected_playlist_name()
-        playlists = (
-            self._payload.get("playlists")
-            if isinstance(self._payload.get("playlists"), list)
-            else []
-        )
+        playlists = self._playlist_items
         selected = next(
             (item for item in playlists if str(item.get("name")) == name),
             None,
         )
+        if name:
+            self.playlist_edit_name.set(name)
         self.playlist_tree.delete(*self.playlist_tree.get_children())
-        for index, track in enumerate((selected or {}).get("tracks", [])):
+        tracks = (selected or {}).get("tracks", [])
+        for index, track in enumerate(tracks):
             self.playlist_tree.insert(
                 "",
                 END,
-                iid=f"playlist-track-{index}",
+                iid=str(track.get("id") or f"playlist-track-{index}"),
                 values=(
                     str(track.get("title") or "Unknown"),
                     str(track.get("artist") or ""),
                     format_time(int(track.get("duration_seconds") or 0)),
                 ),
             )
+        if not tracks:
+            self.playlist_tree.insert(
+                "",
+                END,
+                iid="__empty__playlist",
+                values=("This playlist is empty", "Add a song from search or history", ""),
+            )
+
+    def _rename_playlist(self) -> None:
+        name = self._selected_playlist_name()
+        new_name = self.playlist_edit_name.get().strip()
+        if not name or not new_name:
+            self._set_status("Select a playlist and enter its new name.", WARN)
+            return
+        self.send(
+            "mini_playlist_rename",
+            playlist=name,
+            payload={"new_name": new_name},
+            pending_key=f"playlist:rename:{name.lower()}",
+            status=f"Renaming {name}...",
+        )
+
+    def _delete_playlist(self) -> None:
+        name = self._selected_playlist_name()
+        if not name:
+            self._set_status("Select a playlist first.", WARN)
+            return
+        now = time.monotonic()
+        if now > self._delete_playlist_armed_until:
+            self._delete_playlist_armed_until = now + 5
+            self._set_status(f"Click Delete again within 5 seconds to remove {name}.", WARN)
+            return
+        self._delete_playlist_armed_until = 0
+        self.send(
+            "mini_playlist_delete",
+            playlist=name,
+            pending_key=f"playlist:delete:{name.lower()}",
+            status=f"Deleting {name}...",
+        )
+
+    def _remove_playlist_tracks(self) -> None:
+        name = self._selected_playlist_name()
+        track_ids = [
+            str(item_id)
+            for item_id in self.playlist_tree.selection()
+            if not str(item_id).startswith("__empty__")
+        ]
+        if not name or not track_ids:
+            self._set_status("Select playlist tracks to remove.", WARN)
+            return
+        self.send(
+            "mini_playlist_remove_tracks",
+            playlist=name,
+            payload={"track_ids": track_ids},
+            pending_key=f"playlist:remove:{name.lower()}",
+            status=f"Removing {len(track_ids)} song(s) from {name}...",
+        )
+
+    def _playlist_drag_start(self, event) -> None:
+        item = self.playlist_tree.identify_row(event.y)
+        self._playlist_drag_item = "" if item.startswith("__empty__") else item
+        self._playlist_drag_changed = False
+
+    def _playlist_drag_motion(self, event) -> None:
+        target = self.playlist_tree.identify_row(event.y)
+        if not self._playlist_drag_item:
+            return
+        outside = (
+            event.x < 0
+            or event.y < 0
+            or event.x >= self.playlist_tree.winfo_width()
+            or event.y >= self.playlist_tree.winfo_height()
+        )
+        if outside:
+            self._set_status("Release to remove this song from the playlist.", DANGER)
+            return
+        if not target or target.startswith("__empty__") or target == self._playlist_drag_item:
+            return
+        self.playlist_tree.move(
+            self._playlist_drag_item, "", self.playlist_tree.index(target)
+        )
+        self._playlist_drag_changed = True
+
+    def _playlist_drag_end(self, event) -> None:
+        name = self._selected_playlist_name()
+        outside = (
+            event.x < 0
+            or event.y < 0
+            or event.x >= self.playlist_tree.winfo_width()
+            or event.y >= self.playlist_tree.winfo_height()
+        )
+        if self._playlist_drag_item and outside:
+            self.send(
+                "mini_playlist_remove_tracks",
+                playlist=name,
+                payload={"track_ids": [self._playlist_drag_item]},
+                pending_key=f"playlist:drag_remove:{name.lower()}",
+                status=f"Removing song from {name}...",
+            )
+        elif self._playlist_drag_changed:
+            self.send(
+                "mini_playlist_reorder",
+                playlist=name,
+                payload={"track_ids": [
+                    str(item_id)
+                    for item_id in self.playlist_tree.get_children()
+                    if not str(item_id).startswith("__empty__")
+                ]},
+                pending_key=f"playlist:reorder:{name.lower()}",
+                status=f"Saving the new {name} order...",
+            )
+        self._playlist_drag_item = ""
+        self._playlist_drag_changed = False
 
     def _playlist_action(self, shuffle: bool) -> None:
         name = self._selected_playlist_name()
@@ -1566,6 +1825,8 @@ class DjGooMiniPlayer:
                 query = self._queued_search_query
                 self._queued_search_query = ""
                 self._request_search(query)
+        if completed and isinstance(self._payload, dict):
+            self._update_health(self._payload)
 
     def _apply_playlist_result(
         self,
@@ -1592,6 +1853,9 @@ class DjGooMiniPlayer:
             requested = str(pending.get("playlist") or "").strip()
             if entered.lower() == requested.lower():
                 self.new_playlist_name.set("")
+        if pending.get("intent") == "mini_playlist_delete":
+            self._preferred_playlist = ""
+            self.playlist_edit_name.set("")
 
     def _apply_state(self, payload: dict[str, Any]) -> None:
         self._payload = payload
@@ -1709,11 +1973,12 @@ class DjGooMiniPlayer:
             )
         )
         for button in self._core_buttons:
+            available = core_ready
             button.configure(
-                state="normal" if core_ready else "disabled",
+                state="normal" if available else "disabled",
                 bg=(
                     getattr(button, "_djgoo_normal_bg", PANEL_3)
-                    if core_ready
+                    if available
                     else PANEL_2
                 ),
             )
@@ -1769,11 +2034,19 @@ class DjGooMiniPlayer:
             f"{len(queue)} tracks  |  {format_time(total)}"
             + (f"  |  Next: {next_title}" if next_title else "")
         )
+        self.tabs.tab(self.queue_tab, text=f"Queue  {len(queue)}")
         if fingerprint == self._queue_fingerprint or self._drag_item:
             return
         self._queue_fingerprint = fingerprint
         selection = set(self.queue_tree.selection())
         self.queue_tree.delete(*self.queue_tree.get_children())
+        if not queue:
+            self.queue_tree.insert(
+                "",
+                END,
+                iid="__empty__queue",
+                values=("Queue is empty", "", "Add a song or playlist", ""),
+            )
         for item in queue:
             track_id = str(item.get("id") or "")
             self.queue_tree.insert(
@@ -1784,7 +2057,7 @@ class DjGooMiniPlayer:
                     str(item.get("title") or "Unknown"),
                     format_time(int(item.get("duration_seconds") or 0)),
                     str(item.get("requester") or ""),
-                    str(item.get("request_type") or "automatic").title(),
+                    self._queue_lane(item),
                 ),
             )
             self._request_tree_artwork(
@@ -1805,6 +2078,17 @@ class DjGooMiniPlayer:
             else []
         )
         self.search_tree.delete(*self.search_tree.get_children())
+        self.tabs.tab(
+            self.search_tab,
+            text=f"Search  {len(self._search_results)}",
+        )
+        if not self._search_results:
+            self.search_tree.insert(
+                "",
+                END,
+                iid="__empty__search",
+                values=("No clean matches", "Try a title and artist", "", "", -1),
+            )
         for index, item in enumerate(self._search_results):
             self.search_tree.insert(
                 "",
@@ -1832,6 +2116,7 @@ class DjGooMiniPlayer:
             return
         self._history_fingerprint = fingerprint
         self._history_items = items
+        self.tabs.tab(self.history_tab, text=f"History  {len(items)}")
         self._expanded_history = items[:5]
         self.expanded_recent.delete(0, END)
         for item in self._expanded_history:
@@ -1842,6 +2127,13 @@ class DjGooMiniPlayer:
                 + (f"  -  {artist}" if artist else ""),
             )
         self.history_tree.delete(*self.history_tree.get_children())
+        if not items:
+            self.history_tree.insert(
+                "",
+                END,
+                iid="__empty__history",
+                values=("No listening history yet", "", "", "", ""),
+            )
         for index, item in enumerate(items):
             played_at = float(item.get("played_at") or 0)
             played = (
@@ -1872,15 +2164,29 @@ class DjGooMiniPlayer:
         if fingerprint == self._playlist_fingerprint:
             return
         self._playlist_fingerprint = fingerprint
+        self._playlist_items = items
         current = self._preferred_playlist or self._selected_playlist_name()
         self._preferred_playlist = ""
         names = [str(item.get("name") or "") for item in items]
         self.queue_playlist_combo.configure(values=names)
         self.history_playlist_combo.configure(values=names)
+        self.search_playlist_combo.configure(values=names)
+        self.tabs.tab(self.playlists_tab, text=f"Playlists  {len(items)}")
         if names and self.playlist_name.get() not in names:
             self.playlist_name.set(names[0])
+        self._render_playlists(current)
+
+    def _render_playlists(self, preferred: str = "") -> None:
+        current = preferred or self._selected_playlist_name()
+        query = self.playlist_filter.get().strip().lower()
+        visible = [
+            item
+            for item in self._playlist_items
+            if query in str(item.get("name") or "").lower()
+        ]
+        names = [str(item.get("name") or "") for item in visible]
         self.playlist_list.delete(0, END)
-        for item in items:
+        for item in visible:
             self.playlist_list.insert(
                 END,
                 f"{item.get('name', '')}  ({int(item.get('track_count') or 0)})",
@@ -1890,6 +2196,18 @@ class DjGooMiniPlayer:
         elif names:
             self.playlist_list.selection_set(0)
         self._playlist_selected()
+
+    @staticmethod
+    def _queue_lane(item: dict[str, Any]) -> str:
+        lane = str(item.get("request_type") or "automatic")
+        if lane.startswith("playlist:"):
+            label = lane.split(":", 1)[1].strip()
+            return f"Playlist: {label}" if label else "Playlist"
+        if lane == "manual":
+            return "Manual repeat" if item.get("duplicate") else "Manual"
+        if lane == "radio":
+            return "Radio"
+        return lane.replace("_", " ").title()
 
     def _request_tree_artwork(
         self,
@@ -2015,6 +2333,45 @@ class DjGooMiniPlayer:
             return
         self.root.geometry(f"{COMPACT_WIDTH}x{COMPACT_HEIGHT}+{x}+{y}")
 
+    def _restore_workspace(self) -> None:
+        wanted_open = self._drawer_open
+        self._drawer_open = False
+        if wanted_open:
+            self.toggle_drawer()
+        tab_name = str(self.settings.get("selected_tab") or "")
+        tabs = {
+            "queue": self.queue_tab,
+            "search": self.search_tab,
+            "history": self.history_tab,
+            "playlists": self.playlists_tab,
+        }
+        if tab_name in tabs:
+            self.tabs.select(tabs[tab_name])
+
+    def _remember_tab(self, _event=None) -> None:
+        if not hasattr(self, "tabs"):
+            return
+        selected = self.tabs.select()
+        names = {
+            str(self.queue_tab): "queue",
+            str(self.search_tab): "search",
+            str(self.history_tab): "history",
+            str(self.playlists_tab): "playlists",
+        }
+        self.settings["selected_tab"] = names.get(selected, "queue")
+        self._save_settings()
+
+    def _focus_request(self, _event=None) -> str:
+        self.request_entry.focus_set()
+        self.request_entry.selection_range(0, END)
+        return "break"
+
+    def _close_drawer(self, _event=None) -> str | None:
+        if self._drawer_open:
+            self.toggle_drawer()
+            return "break"
+        return None
+
     def _remember_position(self, _event=None) -> None:
         if (
             self._closing
@@ -2024,6 +2381,9 @@ class DjGooMiniPlayer:
         self._last_position_save = time.monotonic()
         self.settings["x"] = int(self.root.winfo_x())
         self.settings["y"] = int(self.root.winfo_y())
+        if self._drawer_open:
+            self.settings["expanded_width"] = int(self.root.winfo_width())
+            self.settings["expanded_height"] = int(self.root.winfo_height())
         self._save_settings()
 
     def _save_settings(self) -> None:
@@ -2034,6 +2394,10 @@ class DjGooMiniPlayer:
         self._closing = True
         self.settings["x"] = int(self.root.winfo_x())
         self.settings["y"] = int(self.root.winfo_y())
+        self.settings["drawer_open"] = self._drawer_open
+        if self._drawer_open:
+            self.settings["expanded_width"] = int(self.root.winfo_width())
+            self.settings["expanded_height"] = int(self.root.winfo_height())
         self._save_settings()
         self.root.destroy()
 

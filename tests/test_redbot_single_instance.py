@@ -113,7 +113,7 @@ def test_run_redbot_rejects_duplicate_before_touching_red_config(
 def test_console_duplicate_error_stays_visible(monkeypatch) -> None:
     prompts: list[str] = []
 
-    def duplicate(_root: Path) -> None:
+    def duplicate(_root: Path, **_kwargs) -> None:
         raise RedbotAlreadyRunning("already running")
 
     monkeypatch.setattr(start_redbot_selector, "run_redbot", duplicate)
@@ -279,6 +279,6 @@ def test_run_redbot_preserves_supervisor_owned_lavalink(
         lambda *_args, **_kwargs: calls.append("red"),
     )
 
-    start_redbot_selector.run_redbot(tmp_path)
+    start_redbot_selector.run_redbot(tmp_path, allow_interactive_setup=True)
 
     assert calls == ["ensure", "bind", "patch", "red"]
