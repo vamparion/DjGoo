@@ -228,3 +228,70 @@ async def test_queue_reorder_and_remove_use_stable_track_ids(monkeypatch) -> Non
         "status": "completed",
         "message": "Removed 1 queued track(s).",
     }
+
+
+@pytest.mark.asyncio
+async def test_playlist_management_does_not_require_a_voice_member(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from local_cogs.djgoowelcome import experience_audio_bridge as module
+    from voice.now_playing_state import NowPlayingState
+
+    guild_id = 42
+    bridge = module.ExperienceDjGooAudioBridge.__new__(
+        module.ExperienceDjGooAudioBridge
+    )
+    bridge.bot = SimpleNamespace(guilds=[SimpleNamespace(id=guild_id)])
+    bridge.playlists = DjGooPlaylists(tmp_path / "playlists.json")
+    bridge.now_playing = NowPlayingState(tmp_path / "now-playing.json")
+    bridge._queue_item_ids = {}
+    bridge.now_playing.publish(
+        guild_id,
+        {
+            "current": {
+                "id": "current-1",
+                "title": "Current Song",
+                "artist": "Current Artist",
+                "uri": "https://example.test/current",
+                "duration_seconds": 200,
+            },
+            "queue": [
+                {
+                    "id": "queued-1",
+                    "title": "Queued Song",
+                    "artist": "Queued Artist",
+                    "uri": "https://example.test/queued",
+                    "duration_seconds": 240,
+                }
+            ],
+        },
+    )
+
+    def no_live_player(_guild_id):
+        raise module.PlayerNotFound
+
+    monkeypatch.setattr(module.lavalink, "get_player", no_live_player)
+
+    created = await bridge._handle_mini_intent(
+        {"intent": "mini_playlist_create", "playlist": "KnockOut"}
+    )
+    added_current = await bridge._handle_mini_intent(
+        {"intent": "mini_playlist_add_current", "playlist": "KnockOut"}
+    )
+    added_queue = await bridge._handle_mini_intent(
+        {
+            "intent": "mini_playlist_add",
+            "playlist": "KnockOut",
+            "payload": {"track_ids": ["queued-1"]},
+        }
+    )
+
+    assert created["status"] == "completed"
+    assert created["playlist"] == "knockout"
+    assert added_current["added"] == 1
+    assert added_queue["added"] == 1
+    assert [
+        track["title"] for track in bridge.playlists.get_tracks("KnockOut")
+    ] == ["Current Song", "Queued Song"]
+    assert added_queue["playlists"][0]["track_count"] == 2

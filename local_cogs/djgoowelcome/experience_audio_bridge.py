@@ -73,9 +73,17 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             result = await self._handle_mini_intent(item)
         else:
             result = await super().handle(item)
-        ctx = self._context()
-        if ctx is not None and intent not in {"stop", "stop_radio"}:
-            self._publish_now_playing(ctx.guild.id)
+        if intent in {
+            "mini_playlist_create",
+            "mini_playlist_add",
+            "mini_playlist_add_current",
+        }:
+            for guild in getattr(self.bot, "guilds", []):
+                self._publish_now_playing(int(guild.id))
+        else:
+            ctx = self._context()
+            if ctx is not None and intent not in {"stop", "stop_radio"}:
+                self._publish_now_playing(ctx.guild.id)
         return result
 
     def _stable_track_id(self, track: Any) -> str:
@@ -187,6 +195,53 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             "requests": ledger.entries(guild_id) if ledger is not None else [],
         }
 
+    def _mini_player_target(self) -> tuple[int, Any | None]:
+        """Find DjGoo's player without requiring a human voice member."""
+
+        latest = self.now_playing.latest() or {}
+        guild_ids = []
+        with contextlib.suppress(TypeError, ValueError):
+            guild_ids.append(int(latest.get("guild_id") or 0))
+        guild_ids.extend(
+            int(guild.id)
+            for guild in getattr(self.bot, "guilds", [])
+            if int(getattr(guild, "id", 0) or 0)
+        )
+        seen = set()
+        fallback: tuple[int, Any | None] = (0, None)
+        for guild_id in guild_ids:
+            if guild_id <= 0 or guild_id in seen:
+                continue
+            seen.add(guild_id)
+            try:
+                player = lavalink.get_player(guild_id)
+            except (NodeNotFound, PlayerNotFound):
+                player = None
+            if fallback == (0, None):
+                fallback = (guild_id, player)
+            if player is not None and (
+                getattr(player, "current", None) is not None
+                or bool(getattr(player, "queue", []))
+            ):
+                return guild_id, player
+        return fallback
+
+    def _playlist_payload(self, **values: Any) -> dict[str, Any]:
+        return {**values, "playlists": self.playlists.summaries()}
+
+    def _state_track(self, *, current: bool, track_ids: set[str] | None = None) -> list[dict[str, Any]]:
+        latest = self.now_playing.latest() or {}
+        if current:
+            track = latest.get("current")
+            return [dict(track)] if isinstance(track, dict) else []
+        queue = latest.get("queue") if isinstance(latest.get("queue"), list) else []
+        selected = track_ids or set()
+        return [
+            dict(track)
+            for track in queue
+            if isinstance(track, dict) and str(track.get("id") or "") in selected
+        ]
+
     async def _handle_mini_intent(self, item: dict[str, Any]) -> Any:
         intent = str(item.get("intent") or "")
         if intent == "mini_search":
@@ -199,21 +254,80 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                 "results": results,
             }
 
-        audio = self.bot.get_cog("Audio")
-        ctx = self._context()
-        if audio is None or ctx is None:
-            return {"status": "failed", "message": "Join a voice channel and wait for DjGoo to become ready."}
-        guild_id = int(ctx.guild.id)
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
 
         if intent == "mini_playlist_create":
-            name, created = self.playlists.create(str(item.get("playlist") or ""))
-            return {
-                "status": "completed",
-                "message": f"Created {name}." if created else f"{name} already exists.",
-                "playlist": name,
-                "created": created,
+            try:
+                name, created = self.playlists.create(str(item.get("playlist") or ""))
+            except ValueError as exc:
+                return {"status": "failed", "message": str(exc)}
+            return self._playlist_payload(
+                status="completed",
+                message=f"Created {name}." if created else f"{name} already exists.",
+                playlist=name,
+                created=created,
+            )
+
+        if intent in {"mini_playlist_add_current", "mini_playlist_add"}:
+            playlist = str(item.get("playlist") or "").strip()
+            if not playlist:
+                return {"status": "failed", "message": "Choose or create a playlist first."}
+            _guild_id, player = self._mini_player_target()
+            selected_ids = {
+                str(value)
+                for value in payload.get("track_ids", [])
+                if str(value).strip()
             }
+            tracks: list[Any] = []
+            if intent == "mini_playlist_add_current":
+                current = getattr(player, "current", None) if player is not None else None
+                tracks = [current] if current is not None else self._state_track(current=True)
+            elif player is not None:
+                tracks = [
+                    track
+                    for track in list(getattr(player, "queue", []))
+                    if self._stable_track_id(track) in selected_ids
+                ]
+            if intent == "mini_playlist_add" and not tracks:
+                tracks = self._state_track(current=False, track_ids=selected_ids)
+            if not tracks:
+                return {
+                    "status": "failed",
+                    "message": (
+                        "There is no current song to add."
+                        if intent == "mini_playlist_add_current"
+                        else "Those queued songs are no longer available."
+                    ),
+                }
+            added = 0
+            duplicates = 0
+            resolved_name = playlist
+            for track in tracks:
+                track_data = dict(track) if isinstance(track, dict) else self._track_data(track)
+                result = self.playlists.add_track(playlist, track_data)
+                resolved_name = result.playlist_name
+                added += int(result.added)
+                duplicates += int(not result.added)
+            message = (
+                f"Added {added} song(s) to {resolved_name}."
+                if added
+                else f"Already in {resolved_name}."
+            )
+            if added and duplicates:
+                message += f" {duplicates} already there."
+            return self._playlist_payload(
+                status="completed",
+                message=message,
+                playlist=resolved_name,
+                added=added,
+                duplicates=duplicates,
+            )
+
+        audio = self.bot.get_cog("Audio")
+        ctx = self._context()
+        if audio is None or ctx is None:
+            return {"status": "failed", "message": "Join a voice channel before using playback controls."}
+        guild_id = int(ctx.guild.id)
 
         if intent == "mini_radio_mode":
             station = self.stations.get_active(guild_id)
@@ -234,23 +348,6 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             player = lavalink.get_player(guild_id)
         except (NodeNotFound, PlayerNotFound):
             return {"status": "failed", "message": "The player is not connected yet."}
-
-        if intent == "mini_playlist_add_current":
-            playlist = str(item.get("playlist") or "").strip()
-            current = getattr(player, "current", None)
-            if not playlist or current is None:
-                return {"status": "failed", "message": "Choose a playlist while a song is playing."}
-            result = self.playlists.add_track(playlist, self._track_data(current))
-            return {
-                "status": "completed",
-                "message": (
-                    f"Added the current song to {result.playlist_name}."
-                    if result.added
-                    else f"Already in {result.playlist_name}."
-                ),
-                "added": result.added,
-                "playlist": result.playlist_name,
-            }
 
         if intent == "mini_mute":
             if int(getattr(player, "volume", 0) or 0) > 0:
@@ -324,23 +421,6 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         selected = [track for track in list(player.queue) if self._stable_track_id(track) in selected_ids]
         if not selected:
             return {"status": "failed", "message": "That track is no longer in the queue."}
-
-        if intent == "mini_playlist_add":
-            playlist = str(item.get("playlist") or "").strip()
-            if not playlist:
-                return {"status": "failed", "message": "Choose or create a playlist first."}
-            added = 0
-            duplicates = 0
-            for track in selected:
-                result = self.playlists.add_track(playlist, self._track_data(track))
-                added += int(result.added)
-                duplicates += int(not result.added)
-            return {
-                "status": "completed",
-                "message": f"Added {added} track(s) to {playlist}." + (f" {duplicates} already present." if duplicates else ""),
-                "added": added,
-                "duplicates": duplicates,
-            }
 
         self._remember_queue(guild_id, player)
         queue = list(player.queue)

@@ -222,6 +222,7 @@ class DjGooMiniPlayer:
         self._queue_fingerprint = ""
         self._history_fingerprint = ""
         self._playlist_fingerprint = ""
+        self._preferred_playlist = ""
         self._search_results: list[dict[str, Any]] = []
         self._expanded_history: list[dict[str, Any]] = []
         self._pending: dict[str, dict[str, Any]] = {}
@@ -1181,6 +1182,7 @@ class DjGooMiniPlayer:
             "key": key,
             "intent": intent,
             "query": query,
+            "playlist": playlist,
         }
         self._pending_keys.add(key)
         self._set_status(status, ACCENT)
@@ -1390,11 +1392,11 @@ class DjGooMiniPlayer:
         if not name:
             self._set_status("Enter a short playlist name.", WARN)
             return
-        self.new_playlist_name.set("")
         self.send(
             "mini_playlist_create",
             playlist=name,
             pending_key=f"playlist:create:{name.lower()}",
+            status=f"Creating {name}...",
         )
 
     def _selected_playlist_name(self) -> str:
@@ -1496,6 +1498,14 @@ class DjGooMiniPlayer:
                     )
                     if pending.get("intent") == "mini_search":
                         self._apply_search_results(result.get("results", []))
+                    if str(pending.get("intent") or "").startswith(
+                        "mini_playlist_"
+                    ):
+                        self._apply_playlist_result(
+                            result,
+                            pending=pending,
+                            success=success,
+                        )
                 else:
                     message = str(result or "Completed")
                 self._set_status(message, GOOD if success else DANGER)
@@ -1512,6 +1522,32 @@ class DjGooMiniPlayer:
                 query = self._queued_search_query
                 self._queued_search_query = ""
                 self._request_search(query)
+
+    def _apply_playlist_result(
+        self,
+        result: dict[str, Any],
+        *,
+        pending: dict[str, Any],
+        success: bool,
+    ) -> None:
+        if not success:
+            return
+        playlist = str(
+            result.get("playlist") or pending.get("playlist") or ""
+        ).strip()
+        playlists = result.get("playlists")
+        if playlist:
+            self._preferred_playlist = playlist
+            self.playlist_name.set(playlist)
+        if isinstance(playlists, list):
+            self._payload["playlists"] = playlists
+            self._playlist_fingerprint = ""
+            self._update_playlists(playlists)
+        if pending.get("intent") == "mini_playlist_create":
+            entered = self.new_playlist_name.get().strip()
+            requested = str(pending.get("playlist") or "").strip()
+            if entered.lower() == requested.lower():
+                self.new_playlist_name.set("")
 
     def _apply_state(self, payload: dict[str, Any]) -> None:
         self._payload = payload
@@ -1791,7 +1827,8 @@ class DjGooMiniPlayer:
         if fingerprint == self._playlist_fingerprint:
             return
         self._playlist_fingerprint = fingerprint
-        current = self._selected_playlist_name()
+        current = self._preferred_playlist or self._selected_playlist_name()
+        self._preferred_playlist = ""
         names = [str(item.get("name") or "") for item in items]
         self.queue_playlist_combo.configure(values=names)
         if names and self.playlist_name.get() not in names:
