@@ -42,16 +42,23 @@ from voice.mini_player_protocol import CommandReceiptStore, mini_player_command
 from voice.now_playing_state import NowPlayingState
 
 
-BG = "#0f1218"
-PANEL = "#171c25"
-PANEL_2 = "#1d2430"
-TEXT = "#f2f5fa"
-MUTED = "#9aa7ba"
-ACCENT = "#728cff"
-GOOD = "#4ed6a8"
-DANGER = "#e96f7d"
-WARN = "#e8b55b"
-BORDER = "#2a3342"
+BG = "#090d10"
+PANEL = "#11181d"
+PANEL_2 = "#182229"
+PANEL_3 = "#202c34"
+TEXT = "#edf7f4"
+MUTED = "#8b9ca1"
+ACCENT = "#35d2bd"
+ACCENT_HOVER = "#52e1ce"
+BLUE = "#6591ff"
+BLUE_HOVER = "#7ca2ff"
+GOOD = "#7bd88f"
+DANGER = "#ff667b"
+DANGER_HOVER = "#ff7b8d"
+WARN = "#f0c45c"
+BORDER = "#27343a"
+ENTRY_BG = "#0c1216"
+DISABLED = "#526168"
 COMPACT_WIDTH = 540
 COMPACT_HEIGHT = 238
 EXPANDED_WIDTH = 1040
@@ -201,39 +208,70 @@ class DjGooMiniPlayer:
             background=PANEL,
             fieldbackground=PANEL,
             foreground=TEXT,
-            rowheight=34,
-            borderwidth=0,
+            rowheight=36,
+            borderwidth=1,
+            relief="flat",
+            bordercolor=BORDER,
+            lightcolor=BORDER,
+            darkcolor=BORDER,
+            font=("Segoe UI", 9),
         )
         style.configure(
             "DjGoo.Treeview.Heading",
-            background=PANEL_2,
-            foreground=MUTED,
+            background=PANEL_3,
+            foreground="#b9c7c9",
             relief="flat",
-            font=("Segoe UI", 8, "bold"),
+            borderwidth=0,
+            font=("Segoe UI Semibold", 8),
+            padding=(7, 6),
         )
         style.map(
             "DjGoo.Treeview",
-            background=[("selected", "#34436d")],
+            background=[("selected", "#1f5e5a")],
             foreground=[("selected", TEXT)],
         )
-        style.configure("DjGoo.TNotebook", background=BG, borderwidth=0)
+        style.configure(
+            "DjGoo.TNotebook",
+            background=PANEL,
+            borderwidth=0,
+            bordercolor=BORDER,
+            lightcolor=BORDER,
+            darkcolor=BORDER,
+            tabmargins=(0, 0, 0, 0),
+        )
         style.configure(
             "DjGoo.TNotebook.Tab",
-            background=PANEL,
+            background="#0e1519",
             foreground=MUTED,
-            padding=(12, 7),
+            padding=(14, 8),
             borderwidth=0,
+            bordercolor=BORDER,
+            lightcolor=BORDER,
+            darkcolor=BORDER,
+            relief="flat",
+            font=("Segoe UI Semibold", 9),
         )
         style.map(
             "DjGoo.TNotebook.Tab",
-            background=[("selected", PANEL_2)],
-            foreground=[("selected", TEXT)],
+            background=[("selected", PANEL_3), ("active", PANEL_2)],
+            foreground=[("selected", ACCENT), ("active", TEXT)],
         )
         style.configure(
             "DjGoo.Horizontal.TProgressbar",
-            troughcolor="#0b0e13",
+            troughcolor=ENTRY_BG,
             background=ACCENT,
             borderwidth=0,
+            lightcolor=ACCENT,
+            darkcolor=ACCENT,
+        )
+        style.configure(
+            "DjGoo.Horizontal.TScale",
+            background=BG,
+            troughcolor=ENTRY_BG,
+            bordercolor=BORDER,
+            lightcolor=ACCENT,
+            darkcolor=ACCENT,
+            sliderrelief="flat",
         )
         style.configure(
             "DjGoo.TCombobox",
@@ -241,6 +279,24 @@ class DjGooMiniPlayer:
             background=PANEL_2,
             foreground=TEXT,
             arrowcolor=TEXT,
+            bordercolor=BORDER,
+            lightcolor=BORDER,
+            darkcolor=BORDER,
+            padding=3,
+        )
+        style.map(
+            "DjGoo.TCombobox",
+            fieldbackground=[("readonly", PANEL_2), ("disabled", PANEL)],
+            foreground=[("readonly", TEXT), ("disabled", DISABLED)],
+            arrowcolor=[("readonly", ACCENT), ("disabled", DISABLED)],
+        )
+        style.configure(
+            "DjGoo.Vertical.TScrollbar",
+            background=PANEL_3,
+            troughcolor=ENTRY_BG,
+            bordercolor=ENTRY_BG,
+            arrowcolor=MUTED,
+            relief="flat",
         )
 
     def _button(
@@ -251,26 +307,58 @@ class DjGooMiniPlayer:
         *,
         danger: bool = False,
         accent: bool = False,
+        variant: str = "neutral",
         width: int | None = None,
         tooltip: str = "",
         core: bool = True,
     ) -> Button:
+        if danger:
+            variant = "danger"
+        elif accent:
+            variant = "primary"
+        palette = {
+            "neutral": (PANEL_3, "#2d3c45", TEXT),
+            "primary": (ACCENT, ACCENT_HOVER, "#07110f"),
+            "blue": (BLUE, BLUE_HOVER, "#081025"),
+            "good": (GOOD, "#92e5a2", "#08130b"),
+            "danger": (DANGER, DANGER_HOVER, "#19080b"),
+            "warn": (WARN, "#f6d477", "#171104"),
+        }
+        normal_bg, hover_bg, foreground = palette.get(variant, palette["neutral"])
         button = Button(
             parent,
             text=text,
             command=command,
-            bg=DANGER if danger else ACCENT if accent else "#242c3a",
-            fg=TEXT,
-            disabledforeground="#667085",
-            activebackground="#8da2ff" if accent else "#344056",
-            activeforeground=TEXT,
+            bg=normal_bg,
+            fg=foreground,
+            disabledforeground=DISABLED,
+            activebackground=hover_bg,
+            activeforeground=foreground,
             relief="flat",
             bd=0,
-            padx=7,
+            padx=8,
             pady=4,
             width=width or 0,
             cursor="hand2",
-            font=("Segoe UI", 8, "bold"),
+            font=("Segoe UI Semibold", 8),
+            highlightthickness=0,
+        )
+        button._djgoo_normal_bg = normal_bg  # type: ignore[attr-defined]
+        button.bind(
+            "<Enter>",
+            lambda _event: button.configure(bg=hover_bg)
+            if str(button.cget("state")) != "disabled"
+            else None,
+            add="+",
+        )
+        button.bind(
+            "<Leave>",
+            lambda _event: button.configure(
+                bg=normal_bg
+                if str(button.cget("state")) != "disabled"
+                else PANEL_2
+            ),
+            add="+",
         )
         if core:
             self._core_buttons.append(button)
@@ -293,15 +381,44 @@ class DjGooMiniPlayer:
         self.compact.pack(side=LEFT, fill=BOTH, expand=True)
         self.compact.pack_propagate(False)
 
-        header = Frame(self.compact, bg=BG, padx=10, pady=6)
+        header = Frame(self.compact, bg=BG, padx=10, pady=5)
         header.pack(fill=X)
+        brand_mark = Canvas(
+            header,
+            width=22,
+            height=18,
+            bg=BG,
+            highlightthickness=0,
+        )
+        brand_mark.pack(side=LEFT, padx=(0, 6))
+        for x, height, color in (
+            (2, 7, BLUE),
+            (7, 13, ACCENT),
+            (12, 17, WARN),
+            (17, 10, DANGER),
+        ):
+            brand_mark.create_rectangle(
+                x,
+                18 - height,
+                x + 3,
+                18,
+                fill=color,
+                outline="",
+            )
         Label(
             header,
             text="DJGOO",
-            font=("Segoe UI", 9, "bold"),
+            font=("Segoe UI Semibold", 11),
+            bg=BG,
+            fg=TEXT,
+        ).pack(side=LEFT)
+        Label(
+            header,
+            text="  MINI PLAYER",
+            font=("Segoe UI Semibold", 7),
             bg=BG,
             fg=ACCENT,
-        ).pack(side=LEFT)
+        ).pack(side=LEFT, pady=(3, 0))
         self.health_canvas = Canvas(
             header,
             width=57,
@@ -322,17 +439,22 @@ class DjGooMiniPlayer:
             activeforeground=TEXT,
             selectcolor=PANEL,
             font=("Segoe UI", 8),
+            bd=0,
+            highlightthickness=0,
         ).pack(side=RIGHT)
 
-        now = Frame(self.compact, bg=PANEL, height=58)
-        now.pack(fill=X, padx=10)
+        now_shell = Frame(self.compact, bg=BORDER, height=60)
+        now_shell.pack(fill=X, padx=10)
+        now_shell.pack_propagate(False)
+        now = Frame(now_shell, bg=PANEL, height=58)
+        now.pack(fill=BOTH, expand=True, padx=1, pady=1)
         now.pack_propagate(False)
         self.artwork = Label(
             now,
-            bg="#0b0e13",
-            fg=MUTED,
+            bg=ENTRY_BG,
+            fg=ACCENT,
             text="DG",
-            font=("Segoe UI", 13, "bold"),
+            font=("Segoe UI Semibold", 13),
             width=7,
         )
         self.artwork.pack(side=LEFT, fill=Y)
@@ -341,7 +463,7 @@ class DjGooMiniPlayer:
         Label(
             now_text,
             textvariable=self.title,
-            font=("Segoe UI", 11, "bold"),
+            font=("Segoe UI Semibold", 11),
             bg=PANEL,
             fg=TEXT,
             anchor="w",
@@ -358,7 +480,7 @@ class DjGooMiniPlayer:
             now,
             "Queue 0",
             self.toggle_drawer,
-            accent=True,
+            variant="blue",
             width=8,
             tooltip="Open the queue and library drawer",
             core=False,
@@ -390,17 +512,18 @@ class DjGooMiniPlayer:
             "Pause",
             self._toggle_pause,
             width=6,
+            variant="primary",
             tooltip="Pause or resume playback",
         )
         self.pause_button.pack(side=LEFT, padx=(0, 4))
-        for label, intent, tip in (
-            ("Replay", "replay", "Restart the current track"),
-            ("Skip", "skip", "Skip to the next track"),
-            ("Stop", "stop", "Stop playback and radio"),
-            ("Vol -", "volume_down", "Lower volume"),
-            ("Vol +", "volume_up", "Raise volume"),
-            ("Mute", "mini_mute", "Mute or restore volume"),
-            ("Fav", "favorite_current", "Add the current song to Favorites"),
+        for label, intent, tip, variant in (
+            ("Replay", "replay", "Restart the current track", "neutral"),
+            ("Skip", "skip", "Skip to the next track", "blue"),
+            ("Stop", "stop", "Stop playback and radio", "danger"),
+            ("Vol -", "volume_down", "Lower volume", "neutral"),
+            ("Vol +", "volume_up", "Raise volume", "neutral"),
+            ("Mute", "mini_mute", "Mute or restore volume", "neutral"),
+            ("Fav", "favorite_current", "Add the current song to Favorites", "warn"),
         ):
             self._button(
                 controls,
@@ -409,7 +532,7 @@ class DjGooMiniPlayer:
                     value,
                     pending_key=f"control:{key}",
                 ),
-                danger=label == "Stop",
+                variant=variant,
                 width=5,
                 tooltip=tip,
             ).pack(side=LEFT, padx=(0, 4))
@@ -426,12 +549,12 @@ class DjGooMiniPlayer:
             width=15,
         )
         self.radio_label.pack(side=LEFT)
-        for label, intent, tip in (
-            ("Like", "station_like_current", "Like this song for this station"),
-            ("More", "station_more_like_current", "Play more songs like this"),
-            ("Less", "station_less_like_current", "Play fewer songs like this"),
-            ("Ban", "station_ban_current", "Never play this song on this station"),
-            ("Undo", "undo_station_ban", "Undo the most recent station ban"),
+        for label, intent, tip, variant in (
+            ("Like", "station_like_current", "Like this song for this station", "good"),
+            ("More", "station_more_like_current", "Play more songs like this", "primary"),
+            ("Less", "station_less_like_current", "Play fewer songs like this", "warn"),
+            ("Ban", "station_ban_current", "Never play this song on this station", "danger"),
+            ("Undo", "undo_station_ban", "Undo the most recent station ban", "neutral"),
         ):
             button = self._button(
                 self.radio_row,
@@ -440,7 +563,7 @@ class DjGooMiniPlayer:
                     value,
                     pending_key=f"radio:{value}",
                 ),
-                danger=label == "Ban",
+                variant=variant,
                 width=4,
                 tooltip=tip,
             )
@@ -462,6 +585,7 @@ class DjGooMiniPlayer:
             "Stop Radio",
             lambda: self.send("mini_stop_radio", pending_key="radio:stop"),
             width=8,
+            variant="danger",
             tooltip="Stop radio additions but preserve requested songs",
         )
         self.stop_radio_button.pack(side=RIGHT)
@@ -469,34 +593,67 @@ class DjGooMiniPlayer:
 
         request_row = Frame(self.compact, bg=BG, padx=10)
         request_row.pack(fill=X)
+        request_shell = Frame(request_row, bg=BORDER)
+        request_shell.pack(side=LEFT, fill=X, expand=True)
         self.request_entry = Entry(
-            request_row,
+            request_shell,
             textvariable=self.request,
-            bg="#0b0e13",
+            bg=ENTRY_BG,
             fg=TEXT,
             insertbackground=TEXT,
             relief="flat",
             font=("Segoe UI", 9),
+            bd=0,
+            highlightthickness=0,
         )
-        self.request_entry.pack(side=LEFT, fill=X, expand=True, ipady=5)
+        self.request_entry.pack(fill=X, expand=True, padx=1, pady=1, ipady=4)
         self.request_entry.bind(
             "<Return>",
             lambda _event: self.play_request("next"),
         )
         self.request_entry.bind("<KeyRelease>", self._schedule_search)
-        for label, timing in (("Later", "later"), ("Next", "next"), ("Now", "now")):
+        self.request_entry.bind(
+            "<FocusIn>",
+            lambda _event: request_shell.configure(bg=ACCENT),
+            add="+",
+        )
+        self.request_entry.bind(
+            "<FocusOut>",
+            lambda _event: request_shell.configure(bg=BORDER),
+            add="+",
+        )
+        for label, timing, variant in (
+            ("Later", "later", "neutral"),
+            ("Next", "next", "primary"),
+            ("Now", "now", "danger"),
+        ):
             self._button(
                 request_row,
                 label,
                 lambda value=timing: self.play_request(value),
-                accent=timing == "next",
-                danger=timing == "now",
+                variant=variant,
                 width=4,
                 tooltip=f"Play {timing}",
             ).pack(side=RIGHT, padx=(5, 0))
 
         status_row = Frame(self.compact, bg=BG, padx=10, pady=3)
         status_row.pack(fill=X)
+        self.status_canvas = Canvas(
+            status_row,
+            width=11,
+            height=11,
+            bg=BG,
+            highlightthickness=0,
+        )
+        self.status_canvas.pack(side=LEFT, padx=(0, 5))
+        self.status_dot = self.status_canvas.create_oval(
+            2,
+            2,
+            9,
+            9,
+            fill=MUTED,
+            outline="",
+        )
         self.status_label = Label(
             status_row,
             textvariable=self.status,
@@ -505,7 +662,7 @@ class DjGooMiniPlayer:
             font=("Segoe UI", 8),
             anchor="w",
         )
-        self.status_label.pack(fill=X)
+        self.status_label.pack(side=LEFT, fill=X, expand=True)
 
         self._build_expanded_session()
 
@@ -520,7 +677,7 @@ class DjGooMiniPlayer:
             text="SESSION",
             bg=BG,
             fg=ACCENT,
-            font=("Segoe UI", 9, "bold"),
+            font=("Segoe UI Semibold", 9),
             anchor="w",
         ).pack(fill=X)
         Label(
@@ -528,7 +685,7 @@ class DjGooMiniPlayer:
             textvariable=self.expanded_station,
             bg=BG,
             fg=TEXT,
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI Semibold", 10),
             anchor="w",
             wraplength=500,
         ).pack(fill=X, pady=(8, 2))
@@ -566,6 +723,7 @@ class DjGooMiniPlayer:
             from_=0,
             to=150,
             variable=self.volume_value,
+            style="DjGoo.Horizontal.TScale",
         )
         self.volume_scale.pack(side=LEFT, fill=X, expand=True)
         self.volume_scale.bind("<ButtonRelease-1>", self._set_volume)
@@ -574,7 +732,7 @@ class DjGooMiniPlayer:
             text="100",
             bg=BG,
             fg=TEXT,
-            font=("Segoe UI", 8, "bold"),
+            font=("Segoe UI Semibold", 8),
             width=4,
             anchor="e",
         )
@@ -592,15 +750,19 @@ class DjGooMiniPlayer:
             text="RECENTLY PLAYED",
             bg=BG,
             fg=ACCENT,
-            font=("Segoe UI", 9, "bold"),
+            font=("Segoe UI Semibold", 9),
         ).pack(side=LEFT)
         self.expanded_recent = Listbox(
             panel,
             bg=PANEL,
             fg=TEXT,
-            selectbackground="#34436d",
+            selectbackground="#1f5e5a",
             selectforeground=TEXT,
             relief="flat",
+            bd=1,
+            highlightthickness=1,
+            highlightbackground=BORDER,
+            highlightcolor=ACCENT,
             height=5,
             exportselection=False,
             font=("Segoe UI", 9),
@@ -618,14 +780,15 @@ class DjGooMiniPlayer:
             drawer_header,
             text="DJGOO LIBRARY",
             bg=PANEL,
-            fg=TEXT,
-            font=("Segoe UI", 10, "bold"),
+            fg=ACCENT,
+            font=("Segoe UI Semibold", 10),
         ).pack(side=LEFT)
         self._button(
             drawer_header,
             "Close",
             self.toggle_drawer,
             width=6,
+            variant="neutral",
             core=False,
         ).pack(side=RIGHT)
 
@@ -673,7 +836,12 @@ class DjGooMiniPlayer:
                 minwidth=0 if column in hidden else 45,
                 stretch=column in {"title", "name"},
             )
-        scrollbar = ttk.Scrollbar(parent, orient=VERTICAL, command=tree.yview)
+        scrollbar = ttk.Scrollbar(
+            parent,
+            orient=VERTICAL,
+            command=tree.yview,
+            style="DjGoo.Vertical.TScrollbar",
+        )
         tree.configure(yscrollcommand=scrollbar.set)
         tree.pack(side=LEFT, fill=BOTH, expand=True)
         scrollbar.pack(side=RIGHT, fill=Y)
@@ -709,7 +877,7 @@ class DjGooMiniPlayer:
                 tools,
                 label,
                 action,
-                danger=label == "Clear",
+                variant="danger" if label == "Clear" else "neutral",
                 tooltip=tip,
             ).pack(side=LEFT, padx=(4, 0))
         body = Frame(self.queue_tab, bg=PANEL)
@@ -740,7 +908,13 @@ class DjGooMiniPlayer:
                 actions,
                 label,
                 lambda value=intent: self._queue_action(value),
-                danger=label == "Remove",
+                variant=(
+                    "primary"
+                    if label == "Play Now"
+                    else "danger"
+                    if label == "Remove"
+                    else "blue"
+                ),
             ).pack(side=LEFT, padx=(0, 5))
         self.queue_playlist_combo = ttk.Combobox(
             actions,
@@ -754,6 +928,7 @@ class DjGooMiniPlayer:
             actions,
             "Add to Playlist",
             self._queue_add_playlist,
+            variant="warn",
         ).pack(side=RIGHT)
 
     def _build_search_tab(self) -> None:
@@ -799,8 +974,11 @@ class DjGooMiniPlayer:
                 actions,
                 label,
                 lambda value=timing: self._play_search_result(value),
-                accent=timing == "next",
-                danger=timing == "now",
+                variant={
+                    "now": "danger",
+                    "next": "primary",
+                    "later": "neutral",
+                }[timing],
             ).pack(side=LEFT, padx=(0, 5))
 
     def _build_history_tab(self) -> None:
@@ -820,13 +998,13 @@ class DjGooMiniPlayer:
             actions,
             "Play Next",
             lambda: self._play_history("next"),
-            accent=True,
+            variant="primary",
         ).pack(side=LEFT)
         self._button(
             actions,
             "Play Now",
             lambda: self._play_history("now"),
-            danger=True,
+            variant="danger",
         ).pack(side=LEFT, padx=5)
 
     def _build_playlists_tab(self) -> None:
@@ -835,10 +1013,14 @@ class DjGooMiniPlayer:
         create = Entry(
             top,
             textvariable=self.new_playlist_name,
-            bg="#0b0e13",
+            bg=ENTRY_BG,
             fg=TEXT,
             insertbackground=TEXT,
             relief="flat",
+            bd=1,
+            highlightthickness=1,
+            highlightbackground=BORDER,
+            highlightcolor=ACCENT,
         )
         create.pack(side=LEFT, fill=X, expand=True, ipady=5)
         create.bind("<Return>", lambda _event: self._create_playlist())
@@ -846,7 +1028,7 @@ class DjGooMiniPlayer:
             top,
             "Create",
             self._create_playlist,
-            accent=True,
+            variant="primary",
         ).pack(side=LEFT, padx=(5, 0))
         body = Frame(self.playlists_tab, bg=PANEL)
         body.pack(fill=BOTH, expand=True)
@@ -854,9 +1036,13 @@ class DjGooMiniPlayer:
             body,
             bg=PANEL_2,
             fg=TEXT,
-            selectbackground="#34436d",
+            selectbackground="#1f5e5a",
             selectforeground=TEXT,
             relief="flat",
+            bd=1,
+            highlightthickness=1,
+            highlightbackground=BORDER,
+            highlightcolor=ACCENT,
             width=18,
             exportselection=False,
             font=("Segoe UI", 9),
@@ -878,7 +1064,7 @@ class DjGooMiniPlayer:
             actions,
             "Queue",
             lambda: self._playlist_action(False),
-            accent=True,
+            variant="primary",
         ).pack(side=LEFT)
         self._button(
             actions,
@@ -889,6 +1075,7 @@ class DjGooMiniPlayer:
             actions,
             "Add Current",
             self._add_current_to_playlist,
+            variant="warn",
         ).pack(side=RIGHT)
 
     def toggle_drawer(self) -> None:
@@ -1363,7 +1550,14 @@ class DjGooMiniPlayer:
             )
         )
         for button in self._core_buttons:
-            button.configure(state="normal" if core_ready else "disabled")
+            button.configure(
+                state="normal" if core_ready else "disabled",
+                bg=(
+                    getattr(button, "_djgoo_normal_bg", PANEL_3)
+                    if core_ready
+                    else PANEL_2
+                ),
+            )
         if stale and not self._pending:
             self._set_status("Player state is stale; waiting for Redbot.", WARN)
 
@@ -1379,7 +1573,22 @@ class DjGooMiniPlayer:
                 self.station_mode.set(mode)
         for control in self._radio_controls:
             with contextlib.suppress(Exception):
-                control.configure(state="normal" if active else "disabled")
+                control.configure(
+                    state="normal" if active else "disabled",
+                    **(
+                        {
+                            "bg": getattr(
+                                control,
+                                "_djgoo_normal_bg",
+                                PANEL_3,
+                            )
+                            if active
+                            else PANEL_2
+                        }
+                        if isinstance(control, Button)
+                        else {}
+                    ),
+                )
 
     def _update_queue(self, queue: list[dict[str, Any]]) -> None:
         queue = [
@@ -1626,6 +1835,7 @@ class DjGooMiniPlayer:
     def _set_status(self, message: str, color: str) -> None:
         self.status.set(str(message)[:110])
         self.status_label.configure(fg=color)
+        self.status_canvas.itemconfigure(self.status_dot, fill=color)
 
     def _set_topmost(self) -> None:
         self.root.attributes("-topmost", bool(self.always_on_top.get()))
