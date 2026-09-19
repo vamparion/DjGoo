@@ -384,6 +384,11 @@ def build_specs() -> list[ComponentSpec]:
 
 def component_environment(resume_playback: bool = False) -> dict[str, str]:
     env = os.environ.copy()
+    # Hidden Windows processes inherit the workstation's legacy console code
+    # page even though their output is redirected to UTF-8 log files. Force a
+    # deterministic encoding so non-ASCII track titles cannot break logging.
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8:backslashreplace"
     env["REDBOT_CONFIG_DIR"] = str(
         PROJECT_ROOT / ".localappdata" / "Red-DiscordBot" / "Red-DiscordBot"
     )

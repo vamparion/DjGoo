@@ -30,7 +30,7 @@ from tkinter import (
     Toplevel,
 )
 from tkinter import ttk
-from typing import Any, Callable
+from typing import Any, BinaryIO, Callable
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
@@ -139,6 +139,55 @@ class JsonSettings:
             encoding="utf-8",
         )
         temporary.replace(self.path)
+
+
+class SingleMiniPlayer:
+    """Keep repeated launcher clicks from opening competing player windows."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.handle: BinaryIO | None = None
+
+    def acquire(self) -> bool:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.handle = self.path.open("a+b")
+        if self.path.stat().st_size == 0:
+            self.handle.write(b"0")
+            self.handle.flush()
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(
+                    self.handle.fileno(),
+                    fcntl.LOCK_EX | fcntl.LOCK_NB,
+                )
+        except (OSError, BlockingIOError):
+            self.handle.close()
+            self.handle = None
+            return False
+        return True
+
+    def close(self) -> None:
+        if self.handle is None:
+            return
+        with contextlib.suppress(OSError):
+            if sys.platform == "win32":
+                import msvcrt
+
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        self.handle.close()
+        self.handle = None
 
 
 class DjGooMiniPlayer:
@@ -893,6 +942,11 @@ class DjGooMiniPlayer:
         self.queue_tree.bind("<B1-Motion>", self._queue_drag_motion, add="+")
         self.queue_tree.bind("<ButtonRelease-1>", self._queue_drag_end, add="+")
         self.queue_tree.bind(
+            "<Delete>",
+            lambda _event: self._queue_action("mini_queue_remove_many"),
+            add="+",
+        )
+        self.queue_tree.bind(
             "<Double-1>",
             lambda _event: self._queue_action("mini_queue_play_now"),
         )
@@ -1259,17 +1313,42 @@ class DjGooMiniPlayer:
 
     def _queue_drag_motion(self, event) -> None:
         target = self.queue_tree.identify_row(event.y)
-        if not self._drag_item or not target or target == self._drag_item:
+        if not self._drag_item:
+            return
+        outside = (
+            event.x < 0
+            or event.y < 0
+            or event.x >= self.queue_tree.winfo_width()
+            or event.y >= self.queue_tree.winfo_height()
+        )
+        if outside:
+            self._set_status("Release to remove this song from the queue.", DANGER)
+            return
+        if not target or target == self._drag_item:
             return
         self.queue_tree.move(self._drag_item, "", self.queue_tree.index(target))
         self._drag_changed = True
 
-    def _queue_drag_end(self, _event) -> None:
-        if self._drag_changed:
+    def _queue_drag_end(self, event) -> None:
+        outside = (
+            event.x < 0
+            or event.y < 0
+            or event.x >= self.queue_tree.winfo_width()
+            or event.y >= self.queue_tree.winfo_height()
+        )
+        if self._drag_item and outside:
+            self.send(
+                "mini_queue_remove_many",
+                payload={"track_ids": [self._drag_item]},
+                pending_key="queue:drag_remove",
+                status="Removing song from the queue...",
+            )
+        elif self._drag_changed:
             self.send(
                 "mini_queue_reorder",
                 payload={"track_ids": list(self.queue_tree.get_children())},
                 pending_key="queue:reorder",
+                status="Saving the new queue order...",
             )
         self._drag_item = ""
         self._drag_changed = False
@@ -1559,7 +1638,7 @@ class DjGooMiniPlayer:
                 ),
             )
         if stale and not self._pending:
-            self._set_status("Player state is stale; waiting for Redbot.", WARN)
+            self._set_status("DjGoo is reconnecting to the active session.", WARN)
 
     def _update_radio(self, station: dict[str, Any] | None) -> None:
         active = station is not None
@@ -1830,7 +1909,7 @@ class DjGooMiniPlayer:
         if self._closing or url != self._last_artwork_url or ImageTk is None:
             return
         self._artwork_photo = ImageTk.PhotoImage(image)
-        self.artwork.configure(image=self._artwork_photo, text="")
+        self.artwork.configure(image=self._artwork_photo, text="", width=58)
 
     def _set_status(self, message: str, color: str) -> None:
         self.status.set(str(message)[:110])
@@ -1877,9 +1956,16 @@ class DjGooMiniPlayer:
 
 
 def main() -> int:
-    root = Tk()
-    DjGooMiniPlayer(root, application_root())
-    root.mainloop()
+    project_root = application_root()
+    instance = SingleMiniPlayer(project_root / "data" / "mini-player.lock")
+    if not instance.acquire():
+        return 0
+    try:
+        root = Tk()
+        DjGooMiniPlayer(root, project_root)
+        root.mainloop()
+    finally:
+        instance.close()
     return 0
 
 

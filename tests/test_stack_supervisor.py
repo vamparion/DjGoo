@@ -35,6 +35,16 @@ def test_atomic_state_write_retries_windows_sharing_violation(tmp_path, monkeypa
     assert attempts == 3
 
 
+def test_component_environment_forces_utf8_logs(monkeypatch) -> None:
+    monkeypatch.delenv("PYTHONUTF8", raising=False)
+    monkeypatch.delenv("PYTHONIOENCODING", raising=False)
+
+    environment = stack.component_environment()
+
+    assert environment["PYTHONUTF8"] == "1"
+    assert environment["PYTHONIOENCODING"] == "utf-8:backslashreplace"
+
+
 def test_process_record_requires_creation_time_and_command_markers(tmp_path: Path) -> None:
     marker = "djgoo-supervisor-test-marker"
     process = subprocess.Popen(

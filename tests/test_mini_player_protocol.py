@@ -5,6 +5,8 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from voice.djgoo_playlists import DjGooPlaylists
 from voice.mini_player_protocol import (
     CommandReceiptStore,
@@ -157,3 +159,72 @@ def test_receipt_pruning_keeps_current_and_removes_old(tmp_path: Path) -> None:
 
     assert not old_path.exists()
     assert current_path.exists()
+
+
+def test_mini_player_lock_prevents_competing_windows(tmp_path: Path) -> None:
+    from launcher.djgoo_overlay import SingleMiniPlayer
+
+    first = SingleMiniPlayer(tmp_path / "mini-player.lock")
+    second = SingleMiniPlayer(tmp_path / "mini-player.lock")
+    try:
+        assert first.acquire() is True
+        assert second.acquire() is False
+    finally:
+        second.close()
+        first.close()
+
+    replacement = SingleMiniPlayer(tmp_path / "mini-player.lock")
+    try:
+        assert replacement.acquire() is True
+    finally:
+        replacement.close()
+
+
+@pytest.mark.asyncio
+async def test_queue_reorder_and_remove_use_stable_track_ids(monkeypatch) -> None:
+    from local_cogs.djgoowelcome import experience_audio_bridge as module
+
+    bridge = module.ExperienceDjGooAudioBridge.__new__(
+        module.ExperienceDjGooAudioBridge
+    )
+    audio = object()
+    bridge.bot = SimpleNamespace(
+        get_cog=lambda name: audio if name == "Audio" else None
+    )
+    bridge._context = lambda: SimpleNamespace(guild=SimpleNamespace(id=42))
+    bridge._queue_item_ids = {}
+    bridge._queue_undo = {}
+    bridge.request_ledger = SimpleNamespace(
+        entries=lambda _guild_id: [],
+        consume=lambda _guild_id, _track_key: None,
+    )
+    bridge._persist_player_state = lambda *_args, **_kwargs: None
+    bridge._track_key = lambda track: track.uri
+    tracks = [
+        SimpleNamespace(title="First", uri="track:first"),
+        SimpleNamespace(title="Second", uri="track:second"),
+        SimpleNamespace(title="Third", uri="track:third"),
+    ]
+    player = SimpleNamespace(queue=list(tracks), current=None)
+    monkeypatch.setattr(module.lavalink, "get_player", lambda _guild_id: player)
+    track_ids = [bridge._stable_track_id(track) for track in tracks]
+
+    reordered = await bridge._handle_mini_intent(
+        {
+            "intent": "mini_queue_reorder",
+            "payload": {"track_ids": [track_ids[2], track_ids[0], track_ids[1]]},
+        }
+    )
+    removed = await bridge._handle_mini_intent(
+        {
+            "intent": "mini_queue_remove_many",
+            "payload": {"track_ids": [track_ids[0]]},
+        }
+    )
+
+    assert reordered["status"] == "completed"
+    assert [track.title for track in player.queue] == ["Third", "Second"]
+    assert removed == {
+        "status": "completed",
+        "message": "Removed 1 queued track(s).",
+    }
