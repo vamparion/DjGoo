@@ -1248,8 +1248,21 @@ class DjGooAudioBridge:
         if audio is None or ctx is None:
             log_event("red_audio.rejected_skip.unavailable", guild_id=guild_id, has_audio=audio is not None, has_context=ctx is not None)
             return
-        await self._invoke_silently(audio.command_skip, ctx)
-        log_event("red_audio.rejected_skip.sent", guild_id=guild_id, top_up_station=top_up_station)
+        skipped_directly = False
+        try:
+            player = lavalink.get_player(guild_id)
+            result = player.skip()
+            if hasattr(result, "__await__"):
+                await result
+            skipped_directly = True
+        except (NodeNotFound, PlayerNotFound):
+            await self._invoke_silently(audio.command_skip, ctx)
+        log_event(
+            "red_audio.rejected_skip.sent",
+            guild_id=guild_id,
+            top_up_station=top_up_station,
+            direct=skipped_directly,
+        )
         if top_up_station:
             await self._top_up_station_queue(guild_id)
 

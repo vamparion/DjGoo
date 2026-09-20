@@ -514,6 +514,38 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bridge.controls, [])
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_rejected_track_bypasses_vote_skip_and_advances_player_directly(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        class Player:
+            def __init__(self):
+                self.skip_count = 0
+
+            def skip(self):
+                self.skip_count += 1
+
+        class Bot:
+            def get_cog(self, name):
+                return FakeAudio() if name == "Audio" else None
+
+        player = Player()
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge.bot = Bot()
+        bridge._context = lambda: FakeContext()
+        bridge.invocations = []
+
+        async def invoke(*args, **kwargs):
+            bridge.invocations.append((args, kwargs))
+
+        bridge._invoke_silently = invoke
+
+        with patch("local_cogs.djgoowelcome.audio_bridge.lavalink.get_player", return_value=player):
+            await bridge._skip_rejected_track(FakeGuild.id)
+
+        self.assertEqual(player.skip_count, 1)
+        self.assertEqual(bridge.invocations, [])
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     async def test_visible_enqueue_for_rejected_current_track_skips(self):
         from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
 
