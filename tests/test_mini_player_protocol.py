@@ -270,6 +270,43 @@ async def test_playlist_enqueue_always_skips_duplicates(
     assert notices == [first, second]
 
 
+def test_mini_player_track_duplicate_checks_current_and_queue(monkeypatch) -> None:
+    from local_cogs.djgoowelcome import request_semantics_bridge as module
+
+    bridge = module.RequestSemanticsDjGooAudioBridge.__new__(
+        module.RequestSemanticsDjGooAudioBridge
+    )
+    bridge._ytmusic = None
+    player = SimpleNamespace(
+        current=SimpleNamespace(
+            title="Never Gonna Give You Up",
+            uri="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            info={},
+        ),
+        queue=[
+            SimpleNamespace(
+                title="Sandstorm",
+                uri="https://youtu.be/y6120QOlsfU",
+                info={},
+            )
+        ],
+    )
+    monkeypatch.setattr(module.lavalink, "get_player", lambda _guild_id: player)
+
+    assert bridge._mini_player_has_track(
+        42,
+        "https://youtu.be/dQw4w9WgXcQ",
+    )
+    assert bridge._mini_player_has_track(
+        42,
+        "https://www.youtube.com/watch?v=y6120QOlsfU",
+    )
+    assert not bridge._mini_player_has_track(
+        42,
+        "https://www.youtube.com/watch?v=BBBBBBBBBBB",
+    )
+
+
 async def _async_result(value):
     return value
 

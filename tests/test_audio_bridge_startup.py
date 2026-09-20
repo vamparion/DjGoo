@@ -252,6 +252,13 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
             bridge.stations.set_active(FakeGuild.id, "Rock")
             bridge.invoked = []
             bridge.topped_up = []
+            skipped = []
+
+            class Player:
+                current = None
+
+                def skip(self):
+                    skipped.append(True)
 
             async def invoke(command, ctx, *args, **kwargs):
                 bridge.invoked.append(command)
@@ -262,9 +269,11 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
             bridge._invoke = invoke
             bridge._top_up_station_queue = top_up
 
-            await bridge._skip_playback(FakeAudio(), FakeContext())
+            with patch("lavalink.get_player", return_value=Player()):
+                await bridge._skip_playback(FakeAudio(), FakeContext())
 
-        self.assertEqual(bridge.invoked, [FakeAudio.command_skip])
+        self.assertEqual(bridge.invoked, [])
+        self.assertEqual(skipped, [True])
         self.assertEqual(bridge.topped_up, [FakeGuild.id])
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")

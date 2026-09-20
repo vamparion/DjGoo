@@ -1150,10 +1150,23 @@ class DjGooAudioBridge:
     async def _skip_playback(self, audio, ctx) -> None:
         station = self.stations.get_active(ctx.guild.id)
         await self._mark_station_skip(ctx)
-        log_event("play.skip", guild_id=ctx.guild.id, station=(station or {}).get("name"))
-        await self._invoke_silently(audio.command_skip, ctx)
         if station is not None:
             await self._top_up_station_queue(ctx.guild.id)
+        skipped_directly = False
+        try:
+            player = lavalink.get_player(ctx.guild.id)
+            result = player.skip()
+            if hasattr(result, "__await__"):
+                await result
+            skipped_directly = True
+        except (NodeNotFound, PlayerNotFound):
+            await self._invoke_silently(audio.command_skip, ctx)
+        log_event(
+            "play.skip",
+            guild_id=ctx.guild.id,
+            station=(station or {}).get("name"),
+            direct=skipped_directly,
+        )
 
     async def handle_station_track_start(self, guild, track) -> None:
         station = self.stations.get_active(guild.id)

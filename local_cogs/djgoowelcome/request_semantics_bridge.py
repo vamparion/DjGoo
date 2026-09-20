@@ -107,6 +107,20 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
             )
             return "Request startup failed"
 
+        if source == "mini_player" and self._mini_player_has_track(
+            ctx.guild.id,
+            resolved_query,
+        ):
+            message = "That song is already playing or queued."
+            log_event(
+                "request.mini_player.duplicate_rejected",
+                guild_id=ctx.guild.id,
+                timing=timing,
+                query=query,
+                resolved_query=resolved_query,
+            )
+            return message
+
         _prior_queue_ids, prior_track_ids = self._player_identity_snapshot(
             ctx.guild.id
         )
@@ -191,6 +205,21 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
             source=source,
         )
         return notice
+
+    def _mini_player_has_track(self, guild_id: int, resolved_query: str) -> bool:
+        """Keep UI retries from silently adding the same track more than once."""
+        try:
+            player = lavalink.get_player(guild_id)
+        except (NodeNotFound, PlayerNotFound):
+            return False
+        requested_identity = self._track_identity({"uri": resolved_query})
+        if not requested_identity:
+            return False
+        tracks = [getattr(player, "current", None), *list(player.queue)]
+        return any(
+            track is not None and self._track_identity(track) == requested_identity
+            for track in tracks
+        )
 
     async def _top_up_station_queue(self, guild_id: int) -> None:
         numeric_guild_id = int(guild_id)
