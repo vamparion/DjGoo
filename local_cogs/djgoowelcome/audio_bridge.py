@@ -1300,6 +1300,29 @@ class DjGooAudioBridge:
         log_event("red_audio.track.enqueue", guild_id=guild.id, track=self._track_data(track))
         self._persist_player_state(guild.id, reason="track_enqueue")
 
+    async def handle_track_end(self, guild, track) -> None:
+        log_event(
+            "red_audio.track.end",
+            guild_id=guild.id,
+            track=self._track_data(track) if track is not None else {},
+        )
+
+    async def handle_queue_end(self, guild, track) -> None:
+        station = self.stations.get_active(guild.id)
+        log_event(
+            "red_audio.queue.end",
+            guild_id=guild.id,
+            station=(station or {}).get("name"),
+            track=self._track_data(track) if track is not None else {},
+        )
+        if station is not None:
+            await self._top_up_station_queue(guild.id)
+            return
+        self._clear_playback_state(guild.id)
+        now_playing = getattr(self, "now_playing", None)
+        if now_playing is not None:
+            now_playing.clear(guild.id)
+
     async def handle_red_track_enqueue_message(self, message) -> None:
         track = self._current_track_for_controls(message.guild.id)
         if track is None:

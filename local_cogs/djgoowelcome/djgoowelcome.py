@@ -611,6 +611,14 @@ class DjGooWelcome(commands.Cog):
     async def on_red_audio_track_enqueue(self, guild, track, requester):
         await self._audio_bridge.handle_track_enqueue(guild, track)
 
+    @commands.Cog.listener()
+    async def on_red_audio_track_end(self, guild, track, requester):
+        await self._audio_bridge.handle_track_end(guild, track)
+
+    @commands.Cog.listener()
+    async def on_red_audio_queue_end(self, guild, track, requester):
+        await self._audio_bridge.handle_queue_end(guild, track)
+
     def _is_red_track_enqueue_message(self, message) -> bool:
         for embed in getattr(message, "embeds", []):
             if (getattr(embed, "title", "") or "").strip().lower() == "track enqueued":

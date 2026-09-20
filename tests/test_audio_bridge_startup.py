@@ -277,6 +277,48 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bridge.topped_up, [FakeGuild.id])
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_queue_end_clears_stale_playback_when_radio_is_off(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge.stations = type("Stations", (), {"get_active": lambda _self, _guild_id: None})()
+        cleared = []
+        now_playing_cleared = []
+        bridge._clear_playback_state = lambda guild_id: cleared.append(guild_id)
+        bridge.now_playing = type(
+            "NowPlaying",
+            (),
+            {"clear": lambda _self, guild_id: now_playing_cleared.append(guild_id)},
+        )()
+
+        await bridge.handle_queue_end(FakeGuild(), None)
+
+        self.assertEqual(cleared, [FakeGuild.id])
+        self.assertEqual(now_playing_cleared, [FakeGuild.id])
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_queue_end_replenishes_active_radio(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge.stations = type(
+            "Stations",
+            (),
+            {"get_active": lambda _self, _guild_id: {"name": "Rock radio"}},
+        )()
+        topped_up = []
+
+        async def top_up(guild_id):
+            topped_up.append(guild_id)
+
+        bridge._top_up_station_queue = top_up
+        bridge._clear_playback_state = lambda _guild_id: self.fail("active radio state was cleared")
+
+        await bridge.handle_queue_end(FakeGuild(), None)
+
+        self.assertEqual(topped_up, [FakeGuild.id])
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     async def test_radio_fallback_query_uses_nuclear_before_search_text(self):
         from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
 
