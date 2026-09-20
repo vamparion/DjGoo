@@ -152,6 +152,17 @@ class DjGooStations:
         self._write(data)
         return station
 
+    def set_seed_track(self, seed: str, track: Dict[str, Any]) -> Dict[str, Any]:
+        """Remember the exact seed without counting it as already played."""
+
+        station = self.get_or_create(seed)
+        data = self._read()
+        station = data["stations"][station["id"]]
+        station["seed_track"] = self._clean_track(track)
+        station["updated_at"] = self._now()
+        self._write(data)
+        return station
+
     def pick_candidate(
         self,
         seed: str,

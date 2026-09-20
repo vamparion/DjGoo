@@ -316,7 +316,12 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
         mode = str(station.get("mode") or "").strip().lower()
         if mode not in RADIO_MODES:
             mode, _actual_seed = self._split_radio_mode(str(station.get("seed", "")))
-        source_tracks = [track for track in (tracks or []) if isinstance(track, dict)]
+        source_tracks = [
+            track
+            for track in (tracks or [])
+            if isinstance(track, dict)
+            and not self._is_bad_radio_variant_title(str(track.get("title") or ""))
+        ]
         if mode == "throwbacks":
             dated = []
             for track in source_tracks:

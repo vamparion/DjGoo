@@ -153,6 +153,15 @@ class DjGooStationsTests(unittest.TestCase):
             self.assertEqual(station["recent"][0]["title"], "Recent")
             self.assertEqual(station["last_track"]["title"], "Recent")
 
+    def test_seed_track_does_not_count_as_played(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            stations = DjGooStations(Path(temp_dir) / "stations.json")
+            station = stations.set_seed_track("Sandstorm", {"title": "Darude - Sandstorm", "uri": "u:seed"})
+
+            self.assertEqual(station["seed_track"]["uri"], "u:seed")
+            self.assertEqual(station["played"], [])
+            self.assertEqual(station["recent"], [])
+
     def test_feedback_dedupes_tracks_by_key(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             stations = DjGooStations(Path(temp_dir) / "stations.json")

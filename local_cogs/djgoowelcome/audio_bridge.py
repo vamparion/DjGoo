@@ -844,6 +844,11 @@ class DjGooAudioBridge:
         return re.sub(r"\s+", " ", repaired).strip()
 
     async def _resolve_radio_seed_query(self, seed: str) -> str:
+        search_query = self._radio_seed_search_query(seed)
+        resolved = await asyncio.to_thread(self._ytmusic_song_search_query, search_query, True)
+        if resolved:
+            log_event("radio.seed.resolve.done", seed=seed, resolved_query=resolved, used_ytmusic=True)
+            return resolved
         return await self._radio_fallback_query(seed)
 
     async def _radio_fallback_query(self, seed: str) -> str:
@@ -905,17 +910,28 @@ class DjGooAudioBridge:
         if callable(split_mode):
             station_mode, station_seed = split_mode(seed)
         play_query = await self._resolve_radio_seed_query(seed)
+        station = self.stations.set_active(ctx.guild.id, station_seed)
+        set_mode = getattr(self.stations, "set_mode", None)
+        if callable(set_mode):
+            station = set_mode(station_seed, station_mode)
+        seed_video_id = self._youtube_video_id(play_query)
+        if seed_video_id:
+            station = self.stations.set_seed_track(
+                station_seed,
+                {
+                    "title": station_seed,
+                    "uri": f"https://www.youtube.com/watch?v={seed_video_id}",
+                },
+            )
         log_event("radio.start.play_seed", guild_id=ctx.guild.id, seed=seed, play_query=play_query)
         if not await self._play_query_when_ready(audio, ctx, play_query):
+            self.stations.clear_active(ctx.guild.id)
             await self._notice(
                 "DjGoo is still warming up the music engine. I did not start the radio station yet, "
                 "so it will not pretend music is playing."
             )
             return "Radio startup failed"
-        station = self.stations.set_active(ctx.guild.id, station_seed)
-        set_mode = getattr(self.stations, "set_mode", None)
-        if callable(set_mode):
-            station = set_mode(station_seed, station_mode)
+        station = self.stations.get_active(ctx.guild.id) or station
         log_event("radio.start.active", guild_id=ctx.guild.id, station=station["name"], seed=seed)
         await self._notice(f"Started `{station['name']}`. I will keep this station's taste separate.")
         await self._send_controls_for_player(ctx)
@@ -1189,6 +1205,13 @@ class DjGooAudioBridge:
             return True
         return any(phrase in lowered for phrase in RADIO_REJECT_TITLE_PHRASES)
 
+    def _is_bad_radio_variant_title(self, title: str) -> bool:
+        normalized = f" {re.sub(r'[^a-z0-9]+', ' ', title.lower()).strip()} "
+        return any(
+            phrase in normalized
+            for phrase in (" remix ", " dub ", " megamix ", " mashup ", " bootleg ", " sped up ", " slowed ")
+        )
+
     def _track_duration_seconds(self, track) -> int:
         info = getattr(track, "info", {}) or {}
         for value in (
@@ -1445,13 +1468,17 @@ class DjGooAudioBridge:
         if len(player.queue) >= 2:
             log_event("radio.top_up.skipped", guild_id=guild_id, reason="queue_already_buffered", queue_length=len(player.queue))
             return
-        seeds = [station["seed"]]
-        if station.get("liked"):
-            seeds.append(station["liked"][-1]["title"])
-        if station.get("more_like"):
-            seeds.append(station["more_like"][-1]["title"])
         recommended = await self._recommended_radio_track(station)
-        query = recommended["uri"] if recommended else await self._radio_fallback_query(random.choice(seeds))
+        if recommended is None:
+            log_event(
+                "radio.top_up.skipped",
+                guild_id=guild_id,
+                station=station["name"],
+                reason="no_clean_recommendation",
+                queue_length=len(player.queue),
+            )
+            return
+        query = recommended["uri"]
         log_event(
             "radio.top_up.play",
             guild_id=guild_id,
@@ -1464,7 +1491,18 @@ class DjGooAudioBridge:
 
     async def _recommended_radio_track(self, station: Dict[str, Any]) -> Optional[Dict[str, str]]:
         last_track = station.get("last_track") if isinstance(station.get("last_track"), dict) else None
-        video_id = self._youtube_video_id((last_track or {}).get("uri", ""))
+        seed_track = station.get("seed_track") if isinstance(station.get("seed_track"), dict) else None
+        anchor = last_track or seed_track
+        video_id = self._youtube_video_id((anchor or {}).get("uri", ""))
+        if not video_id:
+            seed_query = self._radio_seed_search_query(str(station.get("seed") or ""))
+            seed_uri = await asyncio.to_thread(self._ytmusic_song_search_query, seed_query, True)
+            video_id = self._youtube_video_id(seed_uri or "")
+            if video_id:
+                self.stations.set_seed_track(
+                    str(station.get("seed") or seed_query),
+                    {"title": seed_query, "uri": seed_uri},
+                )
         if not video_id:
             log_event("radio.recommendation.skipped", station=station.get("name"), reason="missing_youtube_video_id")
             return None
@@ -1562,38 +1600,38 @@ class DjGooAudioBridge:
     async def _youtube_playlist_tracks(self, playlist_id: str):
         normalized_id = playlist_id[2:] if playlist_id.startswith("VL") else playlist_id
         try:
-            tracks = await asyncio.to_thread(self._ytmusic_playlist_tracks, normalized_id)
+            tracks = await asyncio.to_thread(self._ytdlp_playlist_tracks, normalized_id)
             if tracks:
                 log_event(
                     "play.youtube.playlist.inspected",
                     playlist_id=normalized_id,
-                    extractor="ytmusicapi",
+                    extractor="yt-dlp-strict",
                     track_count=len(tracks),
                 )
                 return tracks
-        except Exception as exc:
-            log.warning("YouTube Music could not inspect playlist %s: %s", normalized_id, type(exc).__name__)
-            log_event(
-                "play.youtube.playlist.inspect_failed",
-                playlist_id=normalized_id,
-                extractor="ytmusicapi",
-                error=type(exc).__name__,
-            )
-        try:
-            tracks = await asyncio.to_thread(self._ytdlp_playlist_tracks, normalized_id)
-            log_event(
-                "play.youtube.playlist.inspected",
-                playlist_id=normalized_id,
-                extractor="yt-dlp",
-                track_count=len(tracks),
-            )
-            return tracks
         except Exception as exc:
             log.warning("yt-dlp could not inspect playlist %s: %s", normalized_id, type(exc).__name__)
             log_event(
                 "play.youtube.playlist.inspect_failed",
                 playlist_id=normalized_id,
-                extractor="yt-dlp",
+                extractor="yt-dlp-strict",
+                error=type(exc).__name__,
+            )
+        try:
+            tracks = await asyncio.to_thread(self._ytmusic_playlist_tracks, normalized_id)
+            log_event(
+                "play.youtube.playlist.inspected",
+                playlist_id=normalized_id,
+                extractor="ytmusicapi-fallback",
+                track_count=len(tracks),
+            )
+            return tracks
+        except Exception as exc:
+            log.warning("YouTube Music could not inspect playlist %s: %s", normalized_id, type(exc).__name__)
+            log_event(
+                "play.youtube.playlist.inspect_failed",
+                playlist_id=normalized_id,
+                extractor="ytmusicapi-fallback",
                 error=type(exc).__name__,
             )
             return []
@@ -1800,7 +1838,7 @@ class DjGooAudioBridge:
             self._ytmusic = YTMusic()
         return self._ytmusic.search(query, filter="playlists", limit=8)
 
-    def _ytmusic_song_search_query(self, query: str) -> Optional[str]:
+    def _ytmusic_song_search_query(self, query: str, reject_radio_variants: bool = False) -> Optional[str]:
         if getattr(self, "_ytmusic", None) is None:
             from ytmusicapi import YTMusic
 
@@ -1823,7 +1861,8 @@ class DjGooAudioBridge:
                 "uri": f"https://www.youtube.com/watch?v={video_id}" if video_id else "",
                 "duration_seconds": str(duration or 0),
             }
-            if not video_id or not title or self._should_reject_playing_track(data):
+            bad_radio_variant = reject_radio_variants and self._is_bad_radio_variant_title(data["title"])
+            if not video_id or not title or self._should_reject_playing_track(data) or bad_radio_variant:
                 log_event("ytmusic.song_search.rejected", query=query, index=index, track=data)
                 continue
             resolved = data["uri"]
@@ -1851,6 +1890,9 @@ class DjGooAudioBridge:
                 if isinstance(artist, dict) and str(artist.get("name", "")).strip()
             ]
             display_title = f"{', '.join(artists)} - {title}" if artists else title
+            if self._is_bad_radio_variant_title(display_title):
+                log_event("radio.recommendation.rejected", reason="alternate_version", title=display_title)
+                continue
             candidate = {"title": display_title, "uri": f"https://www.youtube.com/watch?v={video_id}"}
             if self._station_rejects_track(station, candidate):
                 log_event("radio.recommendation.rejected", reason="station_rejects_track", candidate=candidate, station=station.get("name"))

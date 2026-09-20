@@ -54,3 +54,11 @@ def test_play_history_is_bounded(tmp_path: Path) -> None:
     station = store.get_station("Rock")
     assert len(station["recent"]) == 50
     assert station["recent"][-1]["title"] == "Song 74"
+
+
+def test_seed_track_does_not_count_as_played(tmp_path: Path) -> None:
+    store = SqliteDjGooStations(tmp_path / "stations.sqlite3")
+    station = store.set_seed_track("Rock", {"title": "Seed", "uri": "media:seed"})
+    assert station["seed_track"]["uri"] == "media:seed"
+    assert station["played"] == []
+    assert station["recent"] == []

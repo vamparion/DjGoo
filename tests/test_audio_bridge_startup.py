@@ -214,6 +214,35 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(active_station["seed"], "Rock")
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_radio_start_activates_station_and_saves_exact_seed_before_playing(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+            bridge.stations = DjGooStations(Path(temp_dir) / "stations.json")
+
+            async def resolve(_query):
+                return "https://www.youtube.com/watch?v=YFtrq9vy9UM"
+
+            async def play_query_when_ready(_audio, ctx, _query):
+                station = bridge.stations.get_active(ctx.guild.id)
+                self.assertIsNotNone(station)
+                self.assertEqual(station["seed_track"]["uri"], "https://www.youtube.com/watch?v=YFtrq9vy9UM")
+                return True
+
+            async def no_op(*_args, **_kwargs):
+                return None
+
+            bridge._resolve_radio_seed_query = resolve
+            bridge._play_query_when_ready = play_query_when_ready
+            bridge._notice = no_op
+            bridge._send_controls_for_player = no_op
+
+            result = await bridge._start_radio(FakeAudio(), FakeContext(), "The Death and Resurrection Show")
+
+        self.assertEqual(result, "Started The Death And Resurrection Show radio")
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     async def test_radio_skip_tops_up_station_after_skipping(self):
         from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
 
@@ -359,6 +388,45 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(picked["title"], "Metallica - The Unforgiven")
         self.assertEqual(picked["uri"], "https://www.youtube.com/watch?v=DDGhKS6bSAE")
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    def test_radio_recommendation_rejects_remixes_and_dubs(self):
+        from local_cogs.djgoowelcome.enhanced_audio_bridge import EnhancedDjGooAudioBridge
+
+        bridge = EnhancedDjGooAudioBridge.__new__(EnhancedDjGooAudioBridge)
+        station = {"seed": "Song", "mode": "balanced", "banned": [], "recent": []}
+        tracks = [
+            {"videoId": "AAAAAAAAAAA", "title": "Song (Long Remix)", "duration": "8:00", "artists": [{"name": "Artist"}]},
+            {"videoId": "BBBBBBBBBBB", "title": "Song Ambient Dub", "duration": "5:00", "artists": [{"name": "Artist"}]},
+            {"videoId": "CCCCCCCCCCC", "title": "Related Song", "duration": "4:00", "artists": [{"name": "Band"}]},
+        ]
+
+        picked = bridge._pick_recommended_track(station, tracks)
+
+        self.assertEqual(picked["uri"], "https://www.youtube.com/watch?v=CCCCCCCCCCC")
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_youtube_playlist_uses_strict_playlist_page_before_metadata_fallback(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        calls = []
+
+        def strict(playlist_id):
+            calls.append(("strict", playlist_id))
+            return [{"videoId": "AAAAAAAAAAA", "title": "Exact playlist song", "duration_seconds": 210}]
+
+        def fallback(_playlist_id):
+            calls.append(("fallback", _playlist_id))
+            return [{"videoId": "BBBBBBBBBBB", "title": "Wrong playlist song", "duration_seconds": 220}]
+
+        bridge._ytdlp_playlist_tracks = strict
+        bridge._ytmusic_playlist_tracks = fallback
+
+        tracks = await bridge._youtube_playlist_tracks("PLrequested")
+
+        self.assertEqual([track["videoId"] for track in tracks], ["AAAAAAAAAAA"])
+        self.assertEqual(calls, [("strict", "PLrequested")])
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     def test_youtube_video_id_and_length_helpers(self):

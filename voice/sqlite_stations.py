@@ -253,6 +253,18 @@ class SqliteDjGooStations:
             self._save_station(connection, station)
             return station
 
+    def set_seed_track(self, seed: str, track: Dict[str, Any]) -> Dict[str, Any]:
+        """Remember the exact seed without counting it as already played."""
+
+        identifier = self.get_or_create(seed)["id"]
+        with self._transaction() as connection:
+            station = self._load_station(connection, identifier)
+            if station is None:
+                raise RuntimeError(f"Station disappeared during update: {identifier}")
+            station["seed_track"] = self._clean_track(track)
+            self._save_station(connection, station)
+            return station
+
     def pick_candidate(
         self,
         seed: str,
