@@ -6,6 +6,16 @@ from control_panel.server import create_handler_class
 
 
 class ControlPanelServerTests(unittest.TestCase):
+    def test_health_route_is_constant_time_service_check(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            handler_cls = create_handler_class(Path(temp_dir))
+
+            status, body = handler_cls.route_get("/api/healthz")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["service"], "djgoo-control-panel")
+
     def test_route_state_returns_snapshot(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

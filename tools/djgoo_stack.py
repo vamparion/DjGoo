@@ -351,7 +351,8 @@ def voice_ready() -> bool:
 def control_panel_ready() -> bool:
     try:
         context = ssl._create_unverified_context()
-        with urllib.request.urlopen("https://127.0.0.1:8765/api/state", timeout=1.0, context=context) as response:
+        with urllib.request.urlopen("https://127.0.0.1:8765/api/healthz", timeout=1.0, context=context) as response:
+            response.read()
             return response.status == 200
     except (OSError, ValueError):
         return False

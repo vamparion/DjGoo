@@ -37,6 +37,8 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
     @classmethod
     def route_get(cls, path: str) -> Tuple[int, Dict[str, Any]]:
         parsed = urlparse(path)
+        if parsed.path == "/api/healthz":
+            return 200, ok({"service": "djgoo-control-panel"})
         if parsed.path == "/api/state":
             return 200, ok({"state": build_state_snapshot(cls.root)})
         if parsed.path == "/api/search":
