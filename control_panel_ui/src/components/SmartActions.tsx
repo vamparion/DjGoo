@@ -30,7 +30,7 @@ export function SmartActions({ send, mode = "live" }: Props) {
       </div>
       <div className="smart">
         <strong>Recovery</strong>
-        <p>Restart Redbot, voice listener, and resume only on reset.</p>
+        <p>Restart the DjGoo engine and voice control, resuming only on reset.</p>
         <button className="btn danger" onClick={() => void send("reset")}>Reset DjGoo</button>
       </div>
     </section>

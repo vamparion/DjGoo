@@ -28,7 +28,7 @@ export function LogsPanel({ state, expanded = false }: PanelProps & { expanded?:
         ) : (
           <div className="empty-state">
             <strong>No recent logs available</strong>
-            <p>DjGoo will show Redbot and voice listener activity here once logs are written.</p>
+            <p>DjGoo will show Music Core and voice-control activity here once logs are written.</p>
           </div>
         )}
       </div>

@@ -1,7 +1,7 @@
 import type { PanelProps } from "./types";
 
 const labels: Record<string, string> = {
-  redbot: "Redbot",
+  redbot: "Music Core",
   lavalink: "Lavalink",
   voice: "Voice",
   nuclear: "Nuclear",
