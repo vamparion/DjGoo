@@ -20,11 +20,12 @@ from voice.audio_capture import (
     prepare_for_whisper,
 )
 from voice.command_queue import append_queue_item, command_to_queue_item
-from voice.command_parser import parse_command
+from voice.command_parser import ParsedCommand, PendingChoice, parse_command, parse_followup
 from voice.corrections import apply_corrections, correction_hotwords, load_corrections
 from voice.input_binding import ButtonWaiter, COMMON_BUTTONS, is_button_down
 from voice.listener_settings import voice_settings
 from voice.operational_log import log_event
+from voice.pending_choices import PendingChoiceStore
 from voice.secrets import load_project_secrets
 
 
@@ -198,6 +199,9 @@ def run(project_root: Path) -> None:
     secrets = load_project_secrets(project_root)
     voice_config = secrets.get("voice", {})
     settings = voice_settings(voice_config, project_root)
+    pending_choices = PendingChoiceStore(
+        project_root / "data" / "djgoo-pending-choice.json"
+    )
     input_device = resolve_input_device(settings["input_device"])
     corrections = load_corrections(project_root, settings["corrections"])
     dynamic_hotwords = " ".join(
@@ -382,7 +386,48 @@ def run(project_root: Path) -> None:
                 confidence=round(math.exp(min(0.0, result.avg_logprob)), 4),
             )
 
-            command = parse_command(transcript, require_wake=settings["require_wake_word"])
+            pending_payload = pending_choices.get()
+            command = None
+            if pending_payload is not None:
+                options = [
+                    str(option.get("uri") or "")
+                    for option in pending_payload.get("options", [])
+                    if isinstance(option, dict) and str(option.get("uri") or "")
+                ]
+                followup = parse_followup(
+                    transcript,
+                    PendingChoice(
+                        kind="track",
+                        options=options,
+                        created_at=float(pending_payload.get("created_at") or 0),
+                    ),
+                    now=time.time(),
+                )
+                if followup.action == "choose" and followup.index is not None:
+                    selected = pending_choices.choose(followup.index)
+                    if selected is not None:
+                        command = ParsedCommand(
+                            intent="play",
+                            query=str(selected.get("uri") or ""),
+                            confidence=1.0,
+                            raw=transcript,
+                        )
+                        log_event(
+                            "voice.choice.selected",
+                            index=followup.index + 1,
+                            title=selected.get("title"),
+                            uri=selected.get("uri"),
+                        )
+                elif followup.action in {"neither", "cancel", "expired"}:
+                    pending_choices.clear()
+                    log_event("voice.choice.dismissed", action=followup.action)
+                    feedback_sound("accepted", settings["feedback_beeps"])
+                    continue
+            if command is None:
+                command = parse_command(
+                    transcript,
+                    require_wake=settings["require_wake_word"],
+                )
             log_event(
                 "voice.command.parsed",
                 intent=command.intent,

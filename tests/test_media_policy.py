@@ -8,6 +8,9 @@ from voice.media_policy import (
     duration_is_plausible,
     pick_best_search_candidate,
     pick_radio_candidate,
+    quality_rejection_reasons,
+    ranked_search_candidates,
+    search_match_is_confident,
     title_is_rejected,
 )
 
@@ -55,6 +58,27 @@ def test_title_policy_rejects_album_and_loop_sources() -> None:
     assert title_is_rejected("Best Song one hour loop")
     assert title_is_rejected("Artist Full Album 2026")
     assert not title_is_rejected("Best Song Official Music Video")
+
+
+def test_quality_policy_rejects_unrequested_remixes_covers_and_instrumentals() -> None:
+    assert quality_rejection_reasons(candidate("Best Song Remix"))
+    assert quality_rejection_reasons(candidate("Best Song Cover"))
+    assert quality_rejection_reasons(candidate("Best Song Instrumental"))
+    requested = CanonicalTrack("Best Song Remix", ("Example Artist",), 180)
+    assert not quality_rejection_reasons(candidate("Best Song Remix"), canonical=requested)
+
+
+def test_ambiguous_or_wrong_artist_search_requires_a_choice() -> None:
+    canonical = CanonicalTrack("Shadows", ("Lindsey Stirling",), 223)
+    ranked = ranked_search_candidates(
+        [
+            candidate("Shadows", artist="Different Artist", duration=223, identifier="wrong"),
+            candidate("Shadow", artist="Lindsey Stirling Tribute", duration=223, identifier="tribute"),
+        ],
+        canonical,
+    )
+
+    assert not search_match_is_confident(ranked, canonical)
 
 
 def test_radio_uses_feedback_without_permanently_banning_artist() -> None:

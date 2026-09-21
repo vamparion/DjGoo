@@ -23,6 +23,9 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
         self.request_ledger = RequestLedger(
             project_root / "data" / "djgoo-requests.json"
         )
+        if not self._should_resume_playback():
+            self.request_ledger.clear_all()
+            self.queue_origins.clear_all()
         self._pending_request_context: dict[int, dict[str, Any]] = {}
         self._active_request_metadata: dict[int, dict[str, Any]] = {}
         self._station_enqueue_depth: dict[int, int] = {}
@@ -64,6 +67,9 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
             ctx,
             timing=timing,
         )
+        self._pending_request_context[guild_id]["source"] = str(
+            item.get("source") or "unknown"
+        )
         try:
             if intent == "play":
                 return await super().handle(item)
@@ -85,7 +91,7 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
         query: str,
         source: str,
         timing: str,
-    ) -> str:
+    ) -> Any:
         if not query:
             await self._notice("Tell me which song to request.")
             return "Missing request query"
@@ -94,6 +100,18 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
             source=source,
         )
         if not resolved:
+            pending_store = getattr(self, "pending_choices", None)
+            pending = pending_store.get() if pending_store is not None else None
+            if isinstance(pending, dict) and str(pending.get("query") or "") == query:
+                self._lifecycle_transition(
+                    ctx.guild.id,
+                    "failed",
+                    reason="DjGoo needs a player choice before playback can begin",
+                )
+                return {
+                    "status": "failed",
+                    "message": "Choose one of the four matching songs within 15 seconds.",
+                }
             await self._notice(
                 "I could not find a clean playable version of that request."
             )
@@ -106,6 +124,12 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
                 "The request was not queued because the Audio Engine is unavailable."
             )
             return "Request startup failed"
+
+        self._lifecycle_transition(
+            ctx.guild.id,
+            "loading",
+            reason="Clean track resolved; sending to player",
+        )
 
         if source == "mini_player" and self._mini_player_has_track(
             ctx.guild.id,
@@ -166,6 +190,15 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
                 "The Music Core did not add that request, so the queue was unchanged."
             )
             return "Request enqueue failed"
+
+        requested_key = self._track_key(requested_track)
+        self._lifecycle_transition(
+            ctx.guild.id,
+            "queued",
+            reason="Player confirmed queue entry",
+            track=self._track_data(requested_track),
+            track_key=requested_key,
+        )
 
         if station is not None:
             self._remember_radio_request(
@@ -274,6 +307,10 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
             timing="next",
             requester_id=requester_id,
             requester_name=requester_name,
+            entry_id=self._stable_track_id(track),
+            lane="request",
+            insertion_reason="Discord manual request",
+            source="discord",
         )
         self._place_request_before_radio(
             guild_id,
@@ -355,6 +392,10 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
             timing=str(metadata.get("timing") or "next"),
             requester_id=int(metadata.get("requester_id") or 0),
             requester_name=str(metadata.get("requester_name") or ""),
+            entry_id=self._stable_track_id(track),
+            lane="request",
+            insertion_reason=f"{str(metadata.get('timing') or 'next')} request",
+            source=str(metadata.get("source") or "unknown"),
         )
 
     def _consume_radio_request(

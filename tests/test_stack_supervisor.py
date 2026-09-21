@@ -45,6 +45,19 @@ def test_component_environment_forces_utf8_logs(monkeypatch) -> None:
     assert environment["PYTHONIOENCODING"] == "utf-8:backslashreplace"
 
 
+def test_normal_start_removes_inherited_restart_recovery_flags(monkeypatch) -> None:
+    monkeypatch.setenv("DJGOO_RESUME_PLAYBACK", "1")
+    monkeypatch.setenv("DJGOO_RESUME_ACTIVE_RADIO", "1")
+
+    clean = stack.component_environment(resume_playback=False)
+    recovery = stack.component_environment(resume_playback=True)
+
+    assert "DJGOO_RESUME_PLAYBACK" not in clean
+    assert "DJGOO_RESUME_ACTIVE_RADIO" not in clean
+    assert recovery["DJGOO_RESUME_PLAYBACK"] == "1"
+    assert recovery["DJGOO_RESUME_ACTIVE_RADIO"] == "1"
+
+
 def test_process_record_requires_creation_time_and_command_markers(tmp_path: Path) -> None:
     marker = "djgoo-supervisor-test-marker"
     process = subprocess.Popen(

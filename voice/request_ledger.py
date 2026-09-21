@@ -47,6 +47,10 @@ class RequestLedger:
         timing: str,
         requester_id: int | None = None,
         requester_name: str = "",
+        entry_id: str = "",
+        lane: str = "request",
+        insertion_reason: str = "manual request",
+        source: str = "unknown",
     ) -> None:
         if not track_key:
             return
@@ -60,6 +64,10 @@ class RequestLedger:
                     "timing": timing,
                     "requester_id": int(requester_id or 0),
                     "requester_name": requester_name[:100],
+                    "entry_id": str(entry_id),
+                    "lane": str(lane),
+                    "insertion_reason": str(insertion_reason)[:200],
+                    "source": str(source),
                     "created_at": time.time(),
                 }
             )
@@ -125,6 +133,10 @@ class RequestLedger:
             else:
                 guilds.pop(str(int(guild_id)), None)
             self._write(guilds)
+
+    def clear_all(self) -> None:
+        with self._lock:
+            self._write({})
 
     def _write(self, guilds: dict[str, list[dict[str, Any]]]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

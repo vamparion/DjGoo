@@ -21,6 +21,7 @@ from voice.djgoo_playlists import DjGooPlaylists
 from voice.nuclear_resolver import NuclearResolver
 from voice.djgoo_stations import DjGooStations, track_key
 from voice.operational_log import log_event
+from voice.duplicate_policy import filter_automatic_duplicates
 
 from .helpers import (
     PLAYBACK_CONTROL_BUTTONS,
@@ -327,7 +328,6 @@ class DjGooAudioBridge:
                         "so try that command again in a few seconds if nothing starts."
                     )
                     return "Playback startup failed"
-                await self._send_controls_for_player(ctx)
                 return f"Playing {resolved_queries[0]}"
             if intent == "play_album":
                 return await self._play_album(audio, ctx, str(item.get("query", "")))
@@ -338,8 +338,9 @@ class DjGooAudioBridge:
             if intent in {"save_current_to_playlist", "save_last_to_playlist"}:
                 return await self._save_track(ctx, str(item.get("playlist", "")), last=intent == "save_last_to_playlist")
             if intent == "skip":
-                await self._skip_playback(audio, ctx)
-                return "Skipped"
+                if await self._skip_playback(audio, ctx):
+                    return "Skipped"
+                return "Skip failed: player did not advance"
             if intent in {"pause", "resume"}:
                 await self._pause_or_resume(audio, ctx, want_pause=intent == "pause")
                 return intent.title()
@@ -361,8 +362,9 @@ class DjGooAudioBridge:
                 await self._invoke(audio.command_prev, ctx)
                 return "Replaying"
             if intent == "remove_current":
-                await self._notice("Remove-current is queued for a later pass. Try `DjGoo skip` for now.")
-                return "Remove current not wired"
+                if await self._skip_playback(audio, ctx):
+                    return "Removed current track"
+                return "Remove current failed: player did not advance"
             if intent == "volume":
                 value = item.get("value")
                 await self._invoke(audio.command_volume, ctx, vol=int(value))
@@ -583,6 +585,7 @@ class DjGooAudioBridge:
                 log_event("playback.resume.skipped_guild", guild_id=guild.id, reason="missing_author_or_channel")
                 continue
             ctx = self._context_for(guild, author, channel)
+            self._restore_saved_provenance(guild.id, guild_state)
             tracks = self._state_tracks_to_queries(guild_state)
             if tracks:
                 log_event(
@@ -592,7 +595,18 @@ class DjGooAudioBridge:
                     mode=guild_state.get("mode"),
                     current=(guild_state.get("current") or {}).get("title"),
                 )
-                if await self._restore_playback_queries(audio, ctx, tracks):
+                if await self._restore_playback_queries(
+                    audio,
+                    ctx,
+                    tracks,
+                    position_seconds=int(guild_state.get("position_seconds") or 0),
+                    volume=(
+                        int(guild_state.get("volume"))
+                        if guild_state.get("volume") is not None
+                        else None
+                    ),
+                    paused=bool(guild_state.get("paused")),
+                ):
                     resumed_any = True
                     station = self.stations.get_active(guild.id)
                     if station is not None:
@@ -672,8 +686,11 @@ class DjGooAudioBridge:
         except (NodeNotFound, PlayerNotFound):
             log_event("playback.state.save_skipped", guild_id=guild_id, reason="no_player")
             return
-        current = self._track_data(player.current) if player.current else {}
-        queue = [self._track_data(track) for track in list(getattr(player, "queue", []) or [])[:50]]
+        current = self._state_track_snapshot(guild_id, player.current) if player.current else {}
+        queue = [
+            self._state_track_snapshot(guild_id, track)
+            for track in list(getattr(player, "queue", []) or [])[:50]
+        ]
         if not current and not queue:
             log_event("playback.state.save_skipped", guild_id=guild_id, reason="empty_player")
             return
@@ -684,6 +701,9 @@ class DjGooAudioBridge:
             "reason": reason,
             "current": current,
             "queue": queue,
+            "position_seconds": self._player_position_seconds(player, current),
+            "volume": int(getattr(player, "volume", 0) or 0),
+            "paused": bool(getattr(player, "paused", False)),
             "station": {
                 "name": station.get("name", ""),
                 "seed": station.get("seed", ""),
@@ -693,19 +713,100 @@ class DjGooAudioBridge:
         }
         self._write_playback_state(guild_id, state)
 
+    def _player_position_seconds(self, player: Any, current: Dict[str, Any]) -> int:
+        position = int(getattr(player, "position", 0) or 0)
+        duration = int(current.get("duration_seconds") or 0)
+        if position > max(10_000, duration * 10):
+            position //= 1000
+        return max(0, position)
+
+    def _state_track_snapshot(self, guild_id: int, track: Any) -> Dict[str, Any]:
+        data: Dict[str, Any] = dict(self._track_data(track))
+        data["track_key"] = self._track_key(track)
+        entry_id = ""
+        stable_id = getattr(self, "_stable_track_id", None)
+        if callable(stable_id):
+            entry_id = str(stable_id(track) or "")
+        requests = getattr(self, "request_ledger", None)
+        origins = getattr(self, "queue_origins", None)
+        metadata: Dict[str, Any] = {}
+        if requests is not None:
+            metadata = next(
+                (
+                    entry
+                    for entry in requests.entries(guild_id)
+                    if entry_id and str(entry.get("entry_id") or "") == entry_id
+                ),
+                {},
+            )
+        if not metadata and origins is not None:
+            metadata = next(
+                (
+                    entry
+                    for entry in origins.entries(guild_id)
+                    if entry_id and str(entry.get("entry_id") or "") == entry_id
+                ),
+                {},
+            )
+        data.update(
+            {
+                "entry_id": entry_id,
+                "source": str(metadata.get("source") or "recovery"),
+                "lane": str(metadata.get("lane") or "program"),
+                "requester_id": int(metadata.get("requester_id") or 0),
+                "requester_name": str(metadata.get("requester_name") or ""),
+                "request_timing": str(metadata.get("timing") or ""),
+                "label": str(metadata.get("label") or ""),
+                "insertion_reason": str(metadata.get("insertion_reason") or "Saved playback entry"),
+            }
+        )
+        return data
+
+    def _restore_saved_provenance(self, guild_id: int, guild_state: Dict[str, Any]) -> None:
+        tracks = [guild_state.get("current"), *list(guild_state.get("queue") or [])]
+        requests = []
+        origins = []
+        now = time.time()
+        for track in tracks:
+            if not isinstance(track, dict) or not str(track.get("track_key") or ""):
+                continue
+            entry = {
+                "track_key": str(track.get("track_key") or ""),
+                "title": str(track.get("title") or ""),
+                "timing": str(track.get("request_timing") or "next"),
+                "requester_id": int(track.get("requester_id") or 0),
+                "requester_name": str(track.get("requester_name") or ""),
+                "entry_id": str(track.get("entry_id") or ""),
+                "lane": str(track.get("lane") or "program"),
+                "insertion_reason": str(track.get("insertion_reason") or "Restart recovery"),
+                "source": str(track.get("source") or "recovery"),
+                "created_at": now,
+            }
+            if entry["lane"] == "request":
+                requests.append(entry)
+            else:
+                origins.append({**entry, "label": str(track.get("label") or "")})
+        request_ledger = getattr(self, "request_ledger", None)
+        if request_ledger is not None:
+            request_ledger.replace_entries(guild_id, requests)
+        origin_ledger = getattr(self, "queue_origins", None)
+        if origin_ledger is not None:
+            origin_ledger.replace_entries(guild_id, origins)
+
     def _state_tracks_to_queries(self, guild_state: Dict[str, Any]) -> List[str]:
         tracks = []
         current = guild_state.get("current")
         if isinstance(current, dict):
             tracks.append(current)
         tracks.extend(track for track in guild_state.get("queue", []) or [] if isinstance(track, dict))
+        filtered, skipped = filter_automatic_duplicates(tracks)
+        if skipped:
+            log_event("playback.resume.duplicates_filtered", count=skipped)
         queries = []
-        seen = set()
-        for track in tracks:
+        for track in filtered:
             query = str(track.get("uri") or track.get("title") or "").strip()
-            if not query or query in seen:
+            if not query:
                 continue
-            seen.add(query)
             queries.append(query)
         return queries[:50]
 
@@ -795,7 +896,20 @@ class DjGooAudioBridge:
             return
         added = [track for track in list(player.queue) if id(track) not in previous_ids]
         if added:
-            ledger.add(guild_id, track_key=self._track_key(added[-1]), source=source, label=label)
+            selected = added[-1]
+            stable_id = getattr(self, "_stable_track_id", lambda _track: "")(selected)
+            lane = "radio" if source == "radio" else "program"
+            ledger.add(
+                guild_id,
+                track_key=self._track_key(selected),
+                source=source,
+                label=label,
+                entry_id=stable_id,
+                lane=lane,
+                insertion_reason=(
+                    f"Saved playlist: {label}" if source == "playlist" and label else source
+                ),
+            )
 
     def _track_identity(self, track: Any) -> str:
         data = dict(track) if isinstance(track, dict) else self._track_data(track)
@@ -909,6 +1023,11 @@ class DjGooAudioBridge:
         split_mode = getattr(self, "_split_radio_mode", None)
         if callable(split_mode):
             station_mode, station_seed = split_mode(seed)
+        self._lifecycle_transition(
+            ctx.guild.id,
+            "loading",
+            reason="Resolving radio seed",
+        )
         play_query = await self._resolve_radio_seed_query(seed)
         station = self.stations.set_active(ctx.guild.id, station_seed)
         set_mode = getattr(self.stations, "set_mode", None)
@@ -932,9 +1051,26 @@ class DjGooAudioBridge:
             )
             return "Radio startup failed"
         station = self.stations.get_active(ctx.guild.id) or station
+        selected = self._selected_track(ctx.guild.id, last=False)
+        if selected is not None:
+            data = self._track_data(selected)
+            key = self._track_key(selected)
+            self._lifecycle_transition(
+                ctx.guild.id,
+                "queued",
+                reason="Player confirmed radio seed",
+                track=data,
+                track_key=key,
+            )
+            self._lifecycle_transition(
+                ctx.guild.id,
+                "playing",
+                reason="Radio seed is playing",
+                track=data,
+                track_key=key,
+            )
         log_event("radio.start.active", guild_id=ctx.guild.id, station=station["name"], seed=seed)
         await self._notice(f"Started `{station['name']}`. I will keep this station's taste separate.")
-        await self._send_controls_for_player(ctx)
         return f"Started {station['name']}"
 
     async def _play_query_when_ready(self, audio, ctx, query: str) -> bool:
@@ -945,6 +1081,10 @@ class DjGooAudioBridge:
         audio: Any,
         ctx: Any,
         queries: List[str],
+        *,
+        position_seconds: int = 0,
+        volume: int | None = None,
+        paused: bool = False,
     ) -> bool:
         """Start the saved current track before appending its saved queue."""
 
@@ -953,6 +1093,25 @@ class DjGooAudioBridge:
             return False
         if not await self._play_query_when_ready(audio, ctx, queries[0]):
             return False
+        guild = getattr(ctx, "guild", None)
+        player = None
+        if guild is not None:
+            try:
+                player = lavalink.get_player(guild.id)
+            except (NodeNotFound, PlayerNotFound):
+                player = None
+        if player is not None and position_seconds > 0:
+            result = player.seek(max(0, int(position_seconds)) * 1000)
+            if hasattr(result, "__await__"):
+                await result
+        if volume is not None:
+            await self._invoke_silently(
+                audio.command_volume,
+                ctx,
+                vol=max(0, min(150, int(volume))),
+            )
+        if paused:
+            await self._invoke_silently(audio.command_pause, ctx)
         for query in queries[1:]:
             await self._invoke_silently(audio.command_play, ctx, query=query)
         return True
@@ -1036,10 +1195,24 @@ class DjGooAudioBridge:
 
     async def _stop_radio(self, audio, ctx) -> str:
         station = self.stations.get_active(ctx.guild.id)
+        self._lifecycle_transition(ctx.guild.id, "loading", reason="Stopping radio")
+        await self._invoke_silently(audio.command_stop, ctx)
+        verified = await self._wait_for_player_condition(
+            ctx.guild.id,
+            lambda player: player is None
+            or (getattr(player, "current", None) is None and not list(getattr(player, "queue", []))),
+        )
+        self._lifecycle_transition(
+            ctx.guild.id,
+            "ended" if verified else "failed",
+            reason="Radio stopped" if verified else "Player did not confirm radio stop",
+        )
+        if not verified:
+            log_event("radio.stop.failed", guild_id=ctx.guild.id, reason="player_not_confirmed")
+            return "Radio stop failed: player did not confirm stop"
         self.stations.clear_active(ctx.guild.id)
         self._clear_playback_state(ctx.guild.id)
         log_event("radio.stop", guild_id=ctx.guild.id, had_station=station is not None, station=(station or {}).get("name"))
-        await self._invoke_silently(audio.command_stop, ctx)
         if station is None:
             await self._notice("Radio mode is already off.")
             return "Radio already off"
@@ -1048,10 +1221,24 @@ class DjGooAudioBridge:
 
     async def _stop_playback(self, audio, ctx) -> str:
         station = self.stations.get_active(ctx.guild.id)
+        self._lifecycle_transition(ctx.guild.id, "loading", reason="Stopping playback")
+        await self._invoke_silently(audio.command_stop, ctx)
+        verified = await self._wait_for_player_condition(
+            ctx.guild.id,
+            lambda player: player is None
+            or (getattr(player, "current", None) is None and not list(getattr(player, "queue", []))),
+        )
+        self._lifecycle_transition(
+            ctx.guild.id,
+            "ended" if verified else "failed",
+            reason="Playback stopped" if verified else "Player did not confirm stop",
+        )
+        if not verified:
+            log_event("play.stop.failed", guild_id=ctx.guild.id, reason="player_not_confirmed")
+            return "Stop failed: player did not confirm stop"
         self.stations.clear_active(ctx.guild.id)
         self._clear_playback_state(ctx.guild.id)
         log_event("play.stop", guild_id=ctx.guild.id, cleared_station=(station or {}).get("name"))
-        await self._invoke_silently(audio.command_stop, ctx)
         if station is not None:
             await self._notice(f"Stopped playback and turned off `{station['name']}`.")
         return "Stopped"
@@ -1147,8 +1334,11 @@ class DjGooAudioBridge:
             self.stations.add_feedback(station["seed"], "banned", data)
             self.stations.mark_played(station["seed"], data)
 
-    async def _skip_playback(self, audio, ctx) -> None:
+    async def _skip_playback(self, audio, ctx) -> bool:
         station = self.stations.get_active(ctx.guild.id)
+        previous = self._selected_track(ctx.guild.id, last=False)
+        previous_key = self._track_key(previous) if previous is not None else ""
+        self._lifecycle_transition(ctx.guild.id, "loading", reason="Skip sent to player")
         await self._mark_station_skip(ctx)
         if station is not None:
             await self._top_up_station_queue(ctx.guild.id)
@@ -1161,12 +1351,75 @@ class DjGooAudioBridge:
             skipped_directly = True
         except (NodeNotFound, PlayerNotFound):
             await self._invoke_silently(audio.command_skip, ctx)
+        verified = await self._wait_for_player_condition(
+            ctx.guild.id,
+            lambda player: player is None
+            or getattr(player, "current", None) is None
+            or self._track_key(getattr(player, "current", None)) != previous_key,
+        )
+        lifecycle = getattr(self, "lifecycle", None)
+        if verified and lifecycle is not None and previous_key:
+            previous_operation = lifecycle.active_for_track(ctx.guild.id, previous_key)
+            if previous_operation is not None:
+                with contextlib.suppress(ValueError):
+                    lifecycle.transition(
+                        ctx.guild.id,
+                        str(previous_operation.get("operation_id") or ""),
+                        "skipped",
+                        reason="Player confirmed this track was skipped",
+                        track_key=previous_key,
+                    )
+        self._lifecycle_transition(
+            ctx.guild.id,
+            "skipped" if verified else "failed",
+            reason="Player advanced" if verified else "Player did not advance after skip",
+        )
         log_event(
             "play.skip",
             guild_id=ctx.guild.id,
             station=(station or {}).get("name"),
             direct=skipped_directly,
+            verified=verified,
         )
+        return verified
+
+    async def _wait_for_player_condition(
+        self,
+        guild_id: int,
+        predicate,
+        *,
+        timeout: float = 5.0,
+    ) -> bool:
+        deadline = time.monotonic() + max(0.1, float(timeout))
+        while True:
+            try:
+                player = lavalink.get_player(guild_id)
+            except (NodeNotFound, PlayerNotFound):
+                player = None
+            if predicate(player):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.1)
+
+    def _lifecycle_transition(
+        self,
+        guild_id: int,
+        state: str,
+        *,
+        reason: str,
+        track: Dict[str, Any] | None = None,
+        track_key: str = "",
+    ) -> None:
+        transition = getattr(self, "_transition_lifecycle", None)
+        if callable(transition):
+            transition(
+                guild_id,
+                state,
+                reason=reason,
+                track=track,
+                track_key=track_key,
+            )
 
     async def handle_station_track_start(self, guild, track) -> None:
         station = self.stations.get_active(guild.id)
@@ -1325,27 +1578,29 @@ class DjGooAudioBridge:
 
     async def handle_red_track_enqueue_message(self, message) -> None:
         track = self._current_track_for_controls(message.guild.id)
-        if track is None:
-            log.info("DjGoo saw Track Enqueued in #%s before playback started.", message.channel)
-            log_event("red_audio.visible_enqueue.before_playback", guild_id=message.guild.id, channel_id=message.channel.id)
-            return
-        data = self._track_data(track)
-        if self._should_reject_playing_track(data):
-            log_event(
-                "red_audio.visible_enqueue.controls_blocked",
-                guild_id=message.guild.id,
-                channel_id=message.channel.id,
-                reason="bad_title_or_duration",
-                track=data,
-            )
-            station = self.stations.get_active(message.guild.id)
-            if station is not None:
-                self.stations.add_feedback(station["seed"], "banned", data)
-            await self._skip_rejected_track(message.guild.id, top_up_station=station is not None)
-            return
-        log.info("DjGoo saw visible Track Enqueued message in #%s.", message.channel)
-        log_event("red_audio.visible_enqueue.after_playback", guild_id=message.guild.id, channel_id=message.channel.id, track=data)
-        await self._send_playback_controls(message.guild, track, preferred_channel=message.channel)
+        if track is not None:
+            data = self._track_data(track)
+            if self._should_reject_playing_track(data):
+                log_event(
+                    "red_audio.visible_enqueue.blocked",
+                    guild_id=message.guild.id,
+                    channel_id=message.channel.id,
+                    reason="bad_title_or_duration",
+                    track=data,
+                )
+                station = self.stations.get_active(message.guild.id)
+                if station is not None:
+                    self.stations.add_feedback(station["seed"], "banned", data)
+                await self._skip_rejected_track(
+                    message.guild.id,
+                    top_up_station=station is not None,
+                )
+        log_event(
+            "red_audio.visible_enqueue.ignored",
+            guild_id=message.guild.id,
+            channel_id=message.channel.id,
+            reason="Discord deck updates only after confirmed track start",
+        )
 
     async def _send_controls_for_player(self, ctx: DjGooAudioContext) -> None:
         track = self._track_from_player_for_controls(ctx.guild.id)
@@ -1444,11 +1699,10 @@ class DjGooAudioBridge:
         if audio is None:
             await interaction.followup.send("Audio is not loaded yet.", ephemeral=True)
             return
-        item = {"type": "command", "intent": intent, "raw": f"button:{intent}", "source": "button"}
         try:
             if intent == "skip":
-                await self._skip_playback(audio, ctx)
-                message = "Skipped."
+                skipped = await self._skip_playback(audio, ctx)
+                message = "Skipped." if skipped else "Skip failed: the player did not advance."
             elif intent == "toggle_pause":
                 message = await self._toggle_pause(audio, ctx)
             elif intent == "stop":

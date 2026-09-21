@@ -5,6 +5,7 @@ import inspect
 import math
 import random
 import re
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -14,19 +15,25 @@ from lavalink import NodeNotFound, PlayerNotFound
 from voice.media_policy import (
     CanonicalTrack,
     candidates_from_ytmusic,
-    pick_best_search_candidate,
     pick_radio_candidate,
+    ranked_search_candidates,
     score_search_candidate,
+    search_match_is_confident,
     title_is_rejected,
     track_identity,
 )
 from voice.operational_log import log_event
 from voice.sqlite_stations import SqliteDjGooStations
+from voice.pending_choices import PendingChoiceStore
 
 from .audio_bridge import DjGooAudioBridge
 
 
 RADIO_MODES = {"bangers", "balanced", "discovery", "throwbacks"}
+_RANKED_CHOICES: ContextVar[tuple[Dict[str, Any], ...]] = ContextVar(
+    "djgoo_ranked_choices",
+    default=(),
+)
 
 
 class EnhancedDjGooAudioBridge(DjGooAudioBridge):
@@ -38,10 +45,31 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
             project_root / "data" / "djgoo-stations.sqlite3",
             legacy_json_path=project_root / "data" / "djgoo-stations.json",
         )
+        self.pending_choices = PendingChoiceStore(
+            project_root / "data" / "djgoo-pending-choice.json"
+        )
         if not self._should_resume_playback():
             self.stations.clear_all_active()
 
     async def handle(self, item: Dict[str, Any]) -> str:
+        if str(item.get("type") or "") == "followup":
+            action = str(item.get("action") or "").lower()
+            if action in {"neither", "cancel", "expired"}:
+                self.pending_choices.clear()
+                return "Song choices cleared"
+            index = item.get("index")
+            if action == "select" and index is not None:
+                selected = self.pending_choices.choose(int(index))
+                if selected is None:
+                    return "Song choice expired"
+                return await super().handle(
+                    {
+                        **item,
+                        "type": "command",
+                        "intent": "play",
+                        "query": str(selected.get("uri") or ""),
+                    }
+                )
         intent = str(item.get("intent", ""))
         if intent in {
             "seek",
@@ -132,8 +160,9 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
             return "Station ban undone"
 
         if intent == "remove_current":
-            await self._invoke_silently(audio.command_skip, ctx)
-            return "Removed current track"
+            if await self._skip_playback(audio, ctx):
+                return "Removed current track"
+            return "Remove current failed: player did not advance"
 
         return await super().handle(item)
 
@@ -152,6 +181,21 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
                 duration_seconds=nuclear_track.duration_seconds,
                 isrc=nuclear_track.isrc,
             )
+        else:
+            requested_title = query
+            requested_artists: tuple[str, ...] = ()
+            title_artist = re.match(
+                r"^\s*(?P<title>.+?)\s+by\s+(?P<artist>.+?)\s*$",
+                query,
+                flags=re.IGNORECASE,
+            )
+            if title_artist is not None:
+                requested_title = title_artist.group("title")
+                requested_artists = (title_artist.group("artist"),)
+            canonical = CanonicalTrack(
+                title=requested_title,
+                artists=requested_artists,
+            )
         resolved = await asyncio.to_thread(self._ranked_ytmusic_song, query, canonical)
         if resolved:
             log_event(
@@ -163,11 +207,35 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
                 canonical_duration=canonical.duration_seconds if canonical else 0,
             )
             return [resolved]
+        ranked_choices = list(_RANKED_CHOICES.get())
+        if ranked_choices:
+            ctx = self._context()
+            guild_id = int(getattr(getattr(ctx, "guild", None), "id", 0) or 0)
+            self.pending_choices.set(
+                query=query,
+                options=ranked_choices,
+                guild_id=guild_id,
+            )
+            lines = ["DjGoo needs a choice:"]
+            lines.extend(
+                f"{index}. {choice.get('artist', '')} - {choice.get('title', '')}".strip(" -")
+                for index, choice in enumerate(ranked_choices, start=1)
+            )
+            lines.append("Say `Number 1`, `Number 2`, `Number 3`, `Number 4`, or `Neither` within 15 seconds.")
+            await self._notice("\n".join(lines))
+            log_event(
+                "play.resolve.choice_required",
+                query=query,
+                guild_id=guild_id,
+                choices=ranked_choices,
+            )
+            return []
         if nuclear_track is not None:
             return [nuclear_track.redbot_query()]
         return await super()._resolve_play_queries(query, source=source)
 
     def _ranked_ytmusic_song(self, query: str, canonical: CanonicalTrack | None) -> Optional[str]:
+        _RANKED_CHOICES.set(())
         if self._ytmusic is None:
             from ytmusicapi import YTMusic
 
@@ -178,7 +246,19 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
             log_event("ytmusic.ranked_search.failed", query=query, error=type(exc).__name__, detail=str(exc))
             return None
         candidates = candidates_from_ytmusic(items or [])
-        selected = pick_best_search_candidate(candidates, canonical)
+        ranked = ranked_search_candidates(candidates, canonical)
+        selected = ranked[0][1] if ranked else None
+        confident = search_match_is_confident(ranked, canonical)
+        _RANKED_CHOICES.set(tuple(
+            {
+                "title": candidate.title,
+                "artist": ", ".join(candidate.artists),
+                "uri": candidate.uri,
+                "duration_seconds": candidate.duration_seconds,
+                "score": round(score, 2),
+            }
+            for score, candidate in ranked[:4]
+        ) if selected is not None and not confident else ())
         log_event(
             "ytmusic.ranked_search.result",
             query=query,
@@ -186,8 +266,9 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
             selected=selected.display_title if selected else None,
             selected_duration=selected.duration_seconds if selected else 0,
             canonical_duration=canonical.duration_seconds if canonical else 0,
+            confident=confident,
         )
-        return selected.uri if selected else None
+        return selected.uri if selected and confident else None
 
     async def search_candidates(self, query: str, *, limit: int = 4) -> List[Dict[str, Any]]:
         cleaned_query = re.sub(r"\s+", " ", str(query).strip())

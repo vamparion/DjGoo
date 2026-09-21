@@ -246,6 +246,7 @@ class DjGooMiniPlayer:
         self._core_buttons: list[Button] = []
         self._radio_controls: list[Any] = []
         self._last_position_save = 0.0
+        self._last_lifecycle_failure_id = ""
         self._closing = False
 
         self._configure_styles()
@@ -1923,6 +1924,7 @@ class DjGooMiniPlayer:
         self._update_queue(queue)
         self._update_history(payload.get("history", []))
         self._update_playlists(payload.get("playlists", []))
+        self._show_lifecycle_failure(payload)
         if not self.volume_scale.identify(
             self.volume_scale.winfo_pointerx() - self.volume_scale.winfo_rootx(),
             self.volume_scale.winfo_pointery() - self.volume_scale.winfo_rooty(),
@@ -1947,6 +1949,21 @@ class DjGooMiniPlayer:
                 else ""
             )
         )
+
+    def _show_lifecycle_failure(self, payload: dict[str, Any]) -> None:
+        failures = payload.get("recent_failures")
+        if not isinstance(failures, list) or not failures:
+            return
+        failure = failures[0]
+        if not isinstance(failure, dict):
+            return
+        identifier = str(failure.get("operation_id") or "")
+        if not identifier or identifier == self._last_lifecycle_failure_id:
+            return
+        self._last_lifecycle_failure_id = identifier
+        intent = str(failure.get("intent") or "action").replace("_", " ")
+        reason = str(failure.get("reason") or "DjGoo could not complete it").strip()
+        self._set_status(f"{intent.title()} failed: {reason}", DANGER)
 
     def _update_progress(self, payload: dict[str, Any]) -> None:
         duration = int(payload.get("duration_seconds") or 0)
@@ -2003,7 +2020,8 @@ class DjGooMiniPlayer:
                     else PANEL_2
                 ),
             )
-        if stale and not self._pending:
+        recent_failures = payload.get("recent_failures")
+        if stale and not self._pending and not recent_failures:
             self._set_status("DjGoo is reconnecting to the active session.", WARN)
 
     def _update_radio(self, station: dict[str, Any] | None) -> None:

@@ -22,6 +22,11 @@ class QueueOriginLedger:
         track_key: str,
         source: str,
         label: str = "",
+        entry_id: str = "",
+        lane: str = "program",
+        insertion_reason: str = "",
+        requester_id: int = 0,
+        requester_name: str = "",
     ) -> None:
         if not track_key:
             return
@@ -33,6 +38,11 @@ class QueueOriginLedger:
                     "track_key": str(track_key),
                     "source": str(source),
                     "label": str(label)[:100],
+                    "entry_id": str(entry_id),
+                    "lane": str(lane),
+                    "insertion_reason": str(insertion_reason or source)[:200],
+                    "requester_id": int(requester_id or 0),
+                    "requester_name": str(requester_name)[:100],
                     "created_at": time.time(),
                 }
             )
@@ -60,6 +70,24 @@ class QueueOriginLedger:
                 data.pop(str(int(guild_id)), None)
             self._write(data)
             return dict(selected) if selected else None
+
+    def replace_entries(self, guild_id: int, entries: list[dict[str, Any]]) -> None:
+        with self._lock:
+            guilds = self._read()
+            cleaned = [
+                {**dict(entry), "created_at": time.time()}
+                for entry in entries
+                if isinstance(entry, dict) and str(entry.get("track_key") or "")
+            ][-300:]
+            if cleaned:
+                guilds[str(int(guild_id))] = cleaned
+            else:
+                guilds.pop(str(int(guild_id)), None)
+            self._write(guilds)
+
+    def clear_all(self) -> None:
+        with self._lock:
+            self._write({})
 
     def _read(self) -> dict[str, list[dict[str, Any]]]:
         try:

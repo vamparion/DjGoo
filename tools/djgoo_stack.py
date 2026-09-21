@@ -398,6 +398,9 @@ def component_environment(resume_playback: bool = False) -> dict[str, str]:
     if resume_playback:
         env["DJGOO_RESUME_PLAYBACK"] = "1"
         env["DJGOO_RESUME_ACTIVE_RADIO"] = "1"
+    else:
+        env.pop("DJGOO_RESUME_PLAYBACK", None)
+        env.pop("DJGOO_RESUME_ACTIVE_RADIO", None)
     return env
 
 
@@ -617,6 +620,10 @@ def write_supervisor_pid() -> None:
 
 
 def run_supervisor() -> int:
+    if not hasattr(sys.modules[__name__], "_djgoo_recovery_policy"):
+        from tools.recovery_policy import install_recovery_policy
+
+        install_recovery_policy(sys.modules[__name__])
     instance = SingleInstance(LOCK_PATH)
     if not instance.acquire():
         return 0

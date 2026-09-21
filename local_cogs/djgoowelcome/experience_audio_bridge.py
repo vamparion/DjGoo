@@ -7,6 +7,7 @@ import json
 import random
 import time
 import uuid
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -17,13 +18,32 @@ from lavalink import NodeNotFound, PlayerNotFound
 from voice.command_catalog import command_tip
 from voice.deck_store import DeckStore
 from voice.now_playing_state import NowPlayingState
-from voice.mini_player_protocol import MiniPlayerHistory
+from voice.mini_player_protocol import MiniPlayerHistory, result_failed
 from voice.operational_log import log_event
 from voice.queue_origin_ledger import QueueOriginLedger
+from voice.playback_lifecycle import PlaybackLifecycleStore, operation_id
+from voice.queue_transactions import QueueTransactionStore
 
 from .audio_bridge import PlaybackControlsView
 from .helpers import build_playback_control_embed
 from .resilient_game_first_bridge import ResilientGameFirstDjGooAudioBridge
+
+
+_EXPERIENCE_COMMAND: ContextVar[dict[str, Any] | None] = ContextVar(
+    "djgoo_experience_command",
+    default=None,
+)
+PLAYBACK_INTENTS = {
+    "play",
+    "play_now",
+    "queue_request",
+    "skip",
+    "stop",
+    "start_radio",
+    "stop_radio",
+    "mini_queue_play_now",
+    "mini_stop_radio",
+}
 
 
 class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
@@ -38,6 +58,7 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         self._deck_locks: dict[int, asyncio.Lock] = {}
         self._deck_render_state: dict[int, tuple[tuple[Any, ...], float]] = {}
         self._queue_item_ids: dict[int, str] = {}
+        self._queue_locks: dict[int, asyncio.Lock] = {}
         self._queue_undo: dict[int, dict[str, Any]] = {}
         self._muted_volumes: dict[int, int] = {}
         self._mini_command_depth = 0
@@ -47,6 +68,12 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         self.queue_origins = QueueOriginLedger(
             project_root / "data" / "djgoo-queue-origins.json"
         )
+        self.lifecycle = PlaybackLifecycleStore(
+            project_root / "data" / "djgoo-playback-lifecycle.json"
+        )
+        self.queue_transactions = QueueTransactionStore(
+            project_root / "data" / "djgoo-queue-transactions.json"
+        )
 
     async def _notice(self, description: str) -> None:
         if self._mini_command_depth > 0:
@@ -55,6 +82,37 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         await super()._notice(description)
 
     async def handle(self, item: dict[str, Any]) -> Any:
+        intent = str(item.get("intent") or "")
+        normalized_item = dict(item)
+        normalized_item["operation_id"] = operation_id(
+            str(item.get("operation_id") or item.get("command_id") or "")
+        )
+        token = _EXPERIENCE_COMMAND.set(normalized_item)
+        ctx = self._context()
+        guild_id = int(getattr(getattr(ctx, "guild", None), "id", 0) or 0)
+        if intent in PLAYBACK_INTENTS and guild_id:
+            self.lifecycle.begin(
+                guild_id,
+                intent=intent,
+                source=str(item.get("source") or "unknown"),
+                query=str(item.get("query") or ""),
+                command_id=normalized_item["operation_id"],
+            )
+        try:
+            result = await self._handle_with_context(normalized_item)
+        except Exception as exc:
+            if intent in PLAYBACK_INTENTS and guild_id:
+                self._transition_lifecycle(
+                    guild_id,
+                    "failed",
+                    reason=f"{type(exc).__name__}: {exc}",
+                )
+            raise
+        finally:
+            _EXPERIENCE_COMMAND.reset(token)
+        return result
+
+    async def _handle_with_context(self, item: dict[str, Any]) -> Any:
         intent = str(item.get("intent") or "")
         if intent in {
             "mini_search",
@@ -81,7 +139,13 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             "mini_mute",
             "mini_set_volume",
         }:
-            result = await self._handle_mini_intent(item)
+            if intent.startswith("mini_queue_"):
+                guild_id, _player = self._mini_player_target()
+                lock = self._queue_locks.setdefault(int(guild_id), asyncio.Lock())
+                async with lock:
+                    result = await self._handle_mini_intent(item)
+            else:
+                result = await self._handle_mini_intent(item)
         else:
             result = await super().handle(item)
         if intent in {
@@ -101,14 +165,65 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             ctx = self._context()
             if ctx is not None and intent not in {"stop", "stop_radio"}:
                 self._publish_now_playing(ctx.guild.id)
+        if intent in PLAYBACK_INTENTS and result_failed(result):
+            ctx = self._context()
+            if ctx is not None:
+                with contextlib.suppress(ValueError):
+                    self._transition_lifecycle(
+                        ctx.guild.id,
+                        "failed",
+                        reason=(
+                            str(result.get("message") or result)
+                            if isinstance(result, dict)
+                            else str(result)
+                        ),
+                    )
         return result
 
+    def _operation(self) -> dict[str, Any]:
+        return dict(_EXPERIENCE_COMMAND.get() or {})
+
+    def _transition_lifecycle(
+        self,
+        guild_id: int,
+        state: str,
+        *,
+        reason: str = "",
+        track: dict[str, Any] | None = None,
+        track_key: str = "",
+    ) -> None:
+        command = self._operation()
+        identifier = str(command.get("operation_id") or "")
+        if not identifier:
+            return
+        self.lifecycle.transition(
+            guild_id,
+            identifier,
+            state,
+            reason=reason,
+            track=track,
+            track_key=track_key,
+            intent=str(command.get("intent") or ""),
+            source=str(command.get("source") or ""),
+            query=str(command.get("query") or ""),
+        )
+
     def _stable_track_id(self, track: Any) -> str:
+        extras = getattr(track, "extras", None)
+        if isinstance(extras, dict):
+            persisted = str(extras.get("djgoo_entry_id") or "")
+            if persisted:
+                return persisted
         identity = id(track)
-        value = self._queue_item_ids.get(identity)
+        item_ids = getattr(self, "_queue_item_ids", None)
+        if item_ids is None:
+            item_ids = self._queue_item_ids = {}
+        value = item_ids.get(identity)
         if value is None:
             value = str(uuid.uuid4())
-            self._queue_item_ids[identity] = value
+            item_ids[identity] = value
+            if isinstance(extras, dict):
+                extras["djgoo_entry_id"] = value
         return value
 
     def _track_snapshot(
@@ -230,7 +345,69 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         self._queue_undo[int(guild_id)] = {
             "queue": list(player.queue),
             "requests": ledger.entries(guild_id) if ledger is not None else [],
+            "snapshot": self._queue_transaction_snapshot(guild_id, list(player.queue)),
         }
+
+    def _queue_transaction_snapshot(
+        self,
+        guild_id: int,
+        queue: list[Any],
+    ) -> list[dict[str, Any]]:
+        requests = {
+            str(entry.get("entry_id") or ""): entry
+            for entry in getattr(self, "request_ledger", None).entries(guild_id)
+            if str(entry.get("entry_id") or "")
+        } if getattr(self, "request_ledger", None) is not None else {}
+        origin_ledger = getattr(self, "queue_origins", None)
+        origins = {
+            str(entry.get("entry_id") or ""): entry
+            for entry in origin_ledger.entries(guild_id)
+            if str(entry.get("entry_id") or "")
+        } if origin_ledger is not None else {}
+        snapshot = []
+        for track in queue:
+            entry_id = self._stable_track_id(track)
+            metadata = requests.get(entry_id) or origins.get(entry_id) or {}
+            data = self._track_data(track)
+            snapshot.append(
+                {
+                    "id": entry_id,
+                    "track_key": self._track_key(track),
+                    "title": str(data.get("title") or ""),
+                    "artist": str(data.get("artist") or ""),
+                    "uri": str(data.get("uri") or ""),
+                    "source": str(metadata.get("source") or ("manual" if entry_id in requests else "automatic")),
+                    "requester_id": int(metadata.get("requester_id") or 0),
+                    "requester_name": str(metadata.get("requester_name") or ""),
+                    "lane": str(metadata.get("lane") or ("request" if entry_id in requests else "program")),
+                    "insertion_reason": str(metadata.get("insertion_reason") or "Unclassified queue entry"),
+                }
+            )
+        return snapshot
+
+    def _record_queue_transaction(
+        self,
+        guild_id: int,
+        player: Any,
+        *,
+        action: str,
+        reason: str,
+        before: list[dict[str, Any]] | None = None,
+    ) -> None:
+        previous = self._queue_undo.get(int(guild_id)) or {}
+        command = self._operation()
+        transactions = getattr(self, "queue_transactions", None)
+        if transactions is None:
+            return
+        transactions.record(
+            guild_id,
+            action=action,
+            before=before if before is not None else previous.get("snapshot", []),
+            after=self._queue_transaction_snapshot(guild_id, list(player.queue)),
+            source=str(command.get("source") or "unknown"),
+            reason=reason,
+            operation_id=str(command.get("operation_id") or ""),
+        )
 
     def _mini_player_target(self) -> tuple[int, Any | None]:
         """Find DjGoo's player without requiring a human voice member."""
@@ -489,15 +666,24 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             return {"status": "completed", "message": f"Volume {target}.", "volume": target}
 
         if intent == "mini_queue_undo":
-            previous = self._queue_undo.pop(guild_id, None)
+            previous = self._queue_undo.get(guild_id)
             if previous is None:
                 return {"status": "failed", "message": "There is no queue change to undo."}
+            before_undo = self._queue_transaction_snapshot(guild_id, list(player.queue))
             player.queue.clear()
             player.queue.extend(previous.get("queue", []))
             ledger = getattr(self, "request_ledger", None)
             if ledger is not None:
                 ledger.replace_entries(guild_id, previous.get("requests", []))
             self._persist_player_state(guild_id, reason="mini_queue_undo")
+            self._record_queue_transaction(
+                guild_id,
+                player,
+                action="undo",
+                reason="Restored previous queue transaction",
+                before=before_undo,
+            )
+            self._queue_undo.pop(guild_id, None)
             return {"status": "completed", "message": "Restored the previous queue."}
 
         if intent == "mini_queue_clear":
@@ -508,6 +694,7 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             if ledger is not None:
                 ledger.replace_entries(guild_id, [])
             self._persist_player_state(guild_id, reason="mini_queue_clear")
+            self._record_queue_transaction(guild_id, player, action="clear", reason="Cleared queue")
             return {"status": "completed", "message": f"Cleared {count} queued track(s)."}
 
         if intent in {"mini_queue_shuffle", "mini_queue_shuffle_requests"}:
@@ -519,6 +706,7 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             player.queue.clear()
             player.queue.extend(queue)
             self._persist_player_state(guild_id, reason="mini_shuffle_queue")
+            self._record_queue_transaction(guild_id, player, action="shuffle", reason="Shuffled queue")
             return {"status": "completed", "message": f"Shuffled {len(queue)} queued tracks."}
 
         if intent == "mini_queue_reorder":
@@ -531,6 +719,7 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             player.queue.clear()
             player.queue.extend(by_id[track_id] for track_id in ordered_ids)
             self._persist_player_state(guild_id, reason="mini_queue_reorder")
+            self._record_queue_transaction(guild_id, player, action="reorder", reason="Drag reorder")
             return {"status": "completed", "message": "Queue order updated."}
 
         selected_ids = [str(value) for value in payload.get("track_ids", [])]
@@ -588,6 +777,7 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             if inspect.isawaitable(skipped):
                 await skipped
         self._persist_player_state(guild_id, reason=intent)
+        self._record_queue_transaction(guild_id, player, action=intent, reason=message)
         return {"status": "completed", "message": message}
 
     async def _stop_radio_keep_requests(self, audio: Any, ctx: Any) -> dict[str, Any]:
@@ -610,15 +800,14 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                 or self._track_key(current) == active_request_key
             )
         )
+        queued_tracks = list(getattr(player, "queue", []) or []) if player is not None else []
         if player is not None:
-            queued_tracks = list(getattr(player, "queue", []) or [])
             player.queue.clear()
             player.queue.extend(
                 track
                 for track in queued_tracks
                 if self._track_key(track) in request_keys
             )
-        self.stations.clear_active(guild_id)
         if not current_is_request:
             if player is not None and player.queue:
                 skipped = player.skip()
@@ -626,6 +815,28 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                     await skipped
             else:
                 await self._invoke_silently(audio.command_stop, ctx)
+        verified = await self._wait_for_player_condition(
+            guild_id,
+            lambda active: current_is_request
+            or (active is None and not request_keys)
+            or (not request_keys and (
+                getattr(active, "current", None) is None
+                and not list(getattr(active, "queue", []))
+            ))
+            or (
+                getattr(active, "current", None) is not None
+                and self._track_key(getattr(active, "current", None)) in request_keys
+            ),
+        )
+        if not verified:
+            if player is not None:
+                player.queue.clear()
+                player.queue.extend(queued_tracks)
+            return {
+                "status": "failed",
+                "message": "DjGoo could not confirm that radio stopped. The station remains active.",
+            }
+        self.stations.clear_active(guild_id)
         self._persist_player_state(guild_id, reason="mini_stop_radio")
         return {
             "status": "completed",
@@ -853,6 +1064,8 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                     "health": self._health_snapshot(),
                     "stale_after_seconds": 8,
                     "tip": "",
+                    "last_action": self.lifecycle.latest(guild_id),
+                    "recent_failures": self.lifecycle.failures(guild_id, limit=5),
                 },
             )
             return
@@ -922,6 +1135,8 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                     selected,
                     radio_active=station is not None,
                 ),
+                "last_action": self.lifecycle.latest(guild_id),
+                "recent_failures": self.lifecycle.failures(guild_id, limit=5),
             },
         )
 
@@ -930,6 +1145,17 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         if origin_ledger is not None:
             origin_ledger.consume(int(guild.id), self._track_key(track))
         await super().handle_track_start(guild, track)
+        track_key = self._track_key(track)
+        lifecycle = self.lifecycle.active_for_track(guild.id, track_key)
+        if lifecycle is not None:
+            self.lifecycle.transition(
+                guild.id,
+                str(lifecycle.get("operation_id") or ""),
+                "playing",
+                reason="Player confirmed track start",
+                track=self._track_data(track),
+                track_key=track_key,
+            )
         # The lower bridge classifies a track as REQUEST during its station-start
         # hook, which runs after the first deck update. Refresh once more so the
         # persistent deck and Mini Player immediately show the correct mode.
@@ -950,12 +1176,32 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         await super().handle_track_enqueue(guild, track)
         self._publish_now_playing(guild.id)
 
+    async def handle_track_end(self, guild, track) -> None:
+        await super().handle_track_end(guild, track)
+        track_key = self._track_key(track) if track is not None else ""
+        lifecycle = self.lifecycle.active_for_track(guild.id, track_key)
+        if lifecycle is not None:
+            self.lifecycle.transition(
+                guild.id,
+                str(lifecycle.get("operation_id") or ""),
+                "ended",
+                reason="Player confirmed track end",
+                track=self._track_data(track),
+                track_key=track_key,
+            )
+
+    async def handle_queue_end(self, guild, track) -> None:
+        await super().handle_queue_end(guild, track)
+        self._publish_now_playing(guild.id)
+
     async def _stop_radio(self, audio, ctx) -> str:
         result = await super()._stop_radio(audio, ctx)
-        self.now_playing.clear(ctx.guild.id)
+        if not result_failed(result):
+            self.now_playing.clear(ctx.guild.id)
         return result
 
     async def _stop_playback(self, audio, ctx) -> str:
         result = await super()._stop_playback(audio, ctx)
-        self.now_playing.clear(ctx.guild.id)
+        if not result_failed(result):
+            self.now_playing.clear(ctx.guild.id)
         return result

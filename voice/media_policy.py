@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import random
 import re
+from urllib.parse import parse_qs, urlparse
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -11,6 +12,15 @@ MAX_TRACK_SECONDS = 10 * 60
 BAD_TITLE_PHRASES = (
     "instrumental",
     "karaoke",
+    "cover",
+    "tribute",
+    "remix",
+    "mashup",
+    "bootleg",
+    "nightcore",
+    "sped up",
+    "slowed",
+    "reverb",
     "reaction",
     "interview",
     "lesson",
@@ -65,13 +75,18 @@ def normalize_words(value: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", value.lower()))
 
 
-def title_is_rejected(title: str) -> bool:
+def title_is_rejected(title: str, *, requested_variant: str = "") -> bool:
     normalized = f" {normalize_words(title)} "
+    requested = set(normalize_words(requested_variant).split())
     if re.search(r"\b\d+\s*(?:hour|hours|hr|hrs)\b", normalized):
         return True
     if re.search(r"\b(?:full\s+)?album\b", normalized):
         return True
-    return any(f" {normalize_words(phrase)} " in normalized for phrase in BAD_TITLE_PHRASES)
+    return any(
+        f" {normalize_words(phrase)} " in normalized
+        and not set(normalize_words(phrase).split()).issubset(requested)
+        for phrase in BAD_TITLE_PHRASES
+    )
 
 
 def duration_tolerance(canonical_seconds: int) -> int:
@@ -89,6 +104,25 @@ def duration_is_plausible(candidate_seconds: int, canonical_seconds: int = 0) ->
         return True
     tolerance = duration_tolerance(canonical_seconds)
     return abs(candidate_seconds - canonical_seconds) <= tolerance
+
+
+def quality_rejection_reasons(
+    candidate: MediaCandidate,
+    *,
+    canonical: CanonicalTrack | None = None,
+) -> tuple[str, ...]:
+    reasons: list[str] = []
+    requested_variant = canonical.title if canonical else ""
+    if not candidate.uri:
+        reasons.append("missing URI")
+    if not candidate.title:
+        reasons.append("missing title")
+    if title_is_rejected(candidate.display_title, requested_variant=requested_variant):
+        reasons.append("non-standard or long-format version")
+    canonical_duration = canonical.duration_seconds if canonical else 0
+    if not duration_is_plausible(candidate.duration_seconds, canonical_duration):
+        reasons.append("implausible duration")
+    return tuple(reasons)
 
 
 def artist_similarity(candidate_artists: Sequence[str], canonical_artists: Sequence[str]) -> float:
@@ -117,7 +151,8 @@ def title_similarity(candidate_title: str, canonical_title: str) -> float:
 
 
 def score_search_candidate(candidate: MediaCandidate, canonical: CanonicalTrack | None) -> float:
-    if not candidate.uri or not candidate.title or title_is_rejected(candidate.display_title):
+    requested_variant = canonical.title if canonical else ""
+    if quality_rejection_reasons(candidate, canonical=canonical):
         return float("-inf")
     canonical_duration = canonical.duration_seconds if canonical else 0
     if not duration_is_plausible(candidate.duration_seconds, canonical_duration):
@@ -147,12 +182,41 @@ def score_search_candidate(candidate: MediaCandidate, canonical: CanonicalTrack 
     return score
 
 
+def ranked_search_candidates(
+    candidates: Sequence[MediaCandidate],
+    canonical: CanonicalTrack | None,
+) -> list[tuple[float, MediaCandidate]]:
+    ranked = [
+        (score_search_candidate(candidate, canonical), candidate)
+        for candidate in candidates
+    ]
+    ranked = [item for item in ranked if math.isfinite(item[0])]
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return ranked
+
+
+def search_match_is_confident(
+    ranked: Sequence[tuple[float, MediaCandidate]],
+    canonical: CanonicalTrack | None,
+) -> bool:
+    if not ranked:
+        return False
+    best_score, best = ranked[0]
+    runner_up = ranked[1][0] if len(ranked) > 1 else float("-inf")
+    if canonical is not None:
+        title_match = title_similarity(best.title, canonical.title)
+        artist_match = artist_similarity(best.artists, canonical.artists)
+        if title_match < 0.62 or artist_match < 0.5:
+            return False
+        return best_score >= 145 and (runner_up == float("-inf") or best_score - runner_up >= 4)
+    return best_score >= 112 and (runner_up == float("-inf") or best_score - runner_up >= 8)
+
+
 def pick_best_search_candidate(
     candidates: Sequence[MediaCandidate],
     canonical: CanonicalTrack | None,
 ) -> MediaCandidate | None:
-    scored = [(score_search_candidate(candidate, canonical), candidate) for candidate in candidates]
-    scored = [item for item in scored if math.isfinite(item[0])]
+    scored = ranked_search_candidates(candidates, canonical)
     if not scored:
         return None
     scored.sort(key=lambda item: item[0], reverse=True)
@@ -162,6 +226,16 @@ def pick_best_search_candidate(
 def track_identity(track: Mapping[str, Any]) -> str:
     uri = str(track.get("uri", "")).strip()
     if uri:
+        parsed = urlparse(uri)
+        host = parsed.netloc.lower().removeprefix("www.")
+        if host in {"youtube.com", "m.youtube.com", "music.youtube.com"}:
+            video_id = parse_qs(parsed.query).get("v", [""])[0]
+            if video_id:
+                return f"youtube:{video_id}"
+        if host == "youtu.be":
+            video_id = parsed.path.strip("/").split("/", 1)[0]
+            if video_id:
+                return f"youtube:{video_id}"
         return f"uri:{uri}"
     return f"title:{normalize_words(str(track.get('title', '')))}"
 
@@ -177,7 +251,7 @@ def track_artist(track: Mapping[str, Any]) -> str:
 
 
 def score_radio_candidate(candidate: MediaCandidate, station: Mapping[str, Any]) -> float:
-    if title_is_rejected(candidate.display_title) or not duration_is_plausible(candidate.duration_seconds):
+    if quality_rejection_reasons(candidate):
         return float("-inf")
     candidate_data = {
         "title": candidate.display_title,
@@ -234,6 +308,9 @@ def pick_radio_candidate(
     if not scored:
         return None
     scored.sort(key=lambda item: item[0], reverse=True)
+    scored = [item for item in scored if item[0] >= 70]
+    if not scored:
+        return None
     shortlist = scored[: min(5, len(scored))]
     floor = shortlist[-1][0]
     weights = [max(1.0, score - floor + 1.0) ** 1.4 for score, _ in shortlist]
