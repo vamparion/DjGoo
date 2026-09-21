@@ -23,6 +23,7 @@ from voice.operational_log import log_event
 from voice.queue_origin_ledger import QueueOriginLedger
 from voice.playback_lifecycle import PlaybackLifecycleStore, operation_id
 from voice.queue_transactions import QueueTransactionStore
+from voice.gaming_session import GamingSessionStore
 
 from .audio_bridge import PlaybackControlsView
 from .helpers import build_playback_control_embed
@@ -73,6 +74,9 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         )
         self.queue_transactions = QueueTransactionStore(
             project_root / "data" / "djgoo-queue-transactions.json"
+        )
+        self.gaming = GamingSessionStore(
+            project_root / "data" / "djgoo-gaming-session.json"
         )
 
     async def _notice(self, description: str) -> None:
@@ -347,6 +351,9 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             "requests": ledger.entries(guild_id) if ledger is not None else [],
             "snapshot": self._queue_transaction_snapshot(guild_id, list(player.queue)),
         }
+        gaming = getattr(self, "gaming", None)
+        if gaming is not None:
+            gaming.record_undo(guild_id, "queue", {})
 
     def _queue_transaction_snapshot(
         self,

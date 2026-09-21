@@ -1,0 +1,12 @@
+{
+  "name": "DjGoo Gaming DJ",
+  "short_name": "DjGoo",
+  "description": "Game-first shared music controls",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#090d10",
+  "theme_color": "#090d10",
+  "icons": [
+    { "src": "/djgoo-mark.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

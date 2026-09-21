@@ -1700,6 +1700,12 @@ class DjGooAudioBridge:
             await interaction.followup.send("Audio is not loaded yet.", ephemeral=True)
             return
         try:
+            gaming_button = getattr(self, "handle_gaming_button", None)
+            if callable(gaming_button):
+                vote_message = await gaming_button(interaction, intent)
+                if vote_message is not None:
+                    await interaction.followup.send(vote_message, ephemeral=True)
+                    return
             if intent == "skip":
                 skipped = await self._skip_playback(audio, ctx)
                 message = "Skipped." if skipped else "Skip failed: the player did not advance."

@@ -64,6 +64,7 @@ class MediaCandidate:
     duration_seconds: int = 0
     channel: str = ""
     result_index: int = 0
+    explicit: bool = False
 
     @property
     def display_title(self) -> str:
@@ -341,6 +342,7 @@ def candidates_from_ytmusic(items: Iterable[Mapping[str, Any]]) -> list[MediaCan
                 duration_seconds=duration,
                 channel=channel,
                 result_index=index,
+                explicit=bool(item.get("isExplicit") or item.get("explicit")),
             )
         )
     return candidates

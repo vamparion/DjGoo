@@ -15,6 +15,7 @@ export function PersistentFooter({ state, send, status }: Props) {
       <button className="btn primary" onClick={() => void send("skip")}>Skip</button>
       <div className="mini-title">{status} | {title}</div>
       <div className="footer-actions">
+        <button className="btn" onClick={() => void send("undo")}>Undo</button>
         <button className="btn good" onClick={() => void send("like")}>Like</button>
         <button className="btn" onClick={() => void send("less_like")}>Less Like</button>
         <button className="btn danger" onClick={() => void send("stop")}>Stop</button>

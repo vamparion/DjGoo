@@ -62,6 +62,7 @@ DESTRUCTIVE_REMOTE_INTENTS = {
     "toggle_autoplay",
     "station_ban_current",
     "undo_station_ban",
+    "gaming_undo",
     "volume",
     "volume_up",
     "volume_down",
@@ -587,6 +588,7 @@ class DjGooWelcome(commands.Cog):
             "autoplay",
             "favorite_current",
             "undo_station_ban",
+            "gaming_undo",
         }
         if parsed.intent in bridge_intents:
             result = await self._audio_bridge.handle(

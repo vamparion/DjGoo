@@ -48,6 +48,7 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
         self.pending_choices = PendingChoiceStore(
             project_root / "data" / "djgoo-pending-choice.json"
         )
+        self._explicit_by_uri: dict[str, bool] = {}
         if not self._should_resume_playback():
             self.stations.clear_all_active()
 
@@ -247,6 +248,8 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
             return None
         candidates = candidates_from_ytmusic(items or [])
         ranked = ranked_search_candidates(candidates, canonical)
+        for _score, candidate in ranked:
+            self._explicit_by_uri[candidate.uri] = bool(candidate.explicit)
         selected = ranked[0][1] if ranked else None
         confident = search_match_is_confident(ranked, canonical)
         _RANKED_CHOICES.set(tuple(
@@ -256,6 +259,7 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
                 "uri": candidate.uri,
                 "duration_seconds": candidate.duration_seconds,
                 "score": round(score, 2),
+                "explicit": candidate.explicit,
             }
             for score, candidate in ranked[:4]
         ) if selected is not None and not confident else ())
@@ -269,6 +273,9 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
             confident=confident,
         )
         return selected.uri if selected and confident else None
+
+    def _resolved_track_explicit(self, uri: str) -> bool:
+        return bool(self._explicit_by_uri.get(str(uri), False))
 
     async def search_candidates(self, query: str, *, limit: int = 4) -> List[Dict[str, Any]]:
         cleaned_query = re.sub(r"\s+", " ", str(query).strip())

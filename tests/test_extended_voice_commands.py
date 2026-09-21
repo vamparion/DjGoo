@@ -22,6 +22,7 @@ def test_radio_and_library_commands() -> None:
     assert stop.intent == "stop_radio"
     assert parse_command("don't like this", require_wake=False).intent == "station_less_like_current"
     assert parse_command("undo last ban", require_wake=False).intent == "undo_station_ban"
+    assert parse_command("undo that", require_wake=False).intent == "gaming_undo"
     assert parse_command("add to favorites", require_wake=False).intent == "favorite_current"
     assert parse_command("toggle repeat", require_wake=False).intent == "repeat"
     assert parse_command("toggle autoplay", require_wake=False).intent == "autoplay"

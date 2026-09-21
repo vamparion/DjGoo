@@ -30,6 +30,9 @@ ACTION_TO_INTENT = {
     "shuffle_playlist": "shuffle_playlist",
     "volume_up": "volume_up",
     "volume_down": "volume_down",
+    "undo": "gaming_undo",
+    "mute": "mini_mute",
+    "remove_queue": "mini_queue_remove",
 }
 
 
@@ -51,6 +54,11 @@ def resolve_panel_action(payload: Dict[str, Any]) -> Dict[str, Any]:
         "value": int(payload.get("value", 0) or 0),
         "confidence": 1.0,
         "raw": f"panel:{action}",
+        "profile_id": str(payload.get("profile_id", "")),
+        "device_id": str(payload.get("device_id", "")),
+        "username": str(payload.get("username", "")),
+        "actor_role": str(payload.get("actor_role", "guest")),
+        "payload": dict(payload.get("payload") or {}),
     }
 
 

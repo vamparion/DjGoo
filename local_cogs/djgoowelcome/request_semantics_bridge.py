@@ -35,16 +35,30 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
         ctx: Any,
         *,
         timing: str,
+        item: Dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         author = getattr(ctx, "author", None)
+        command = item or {}
+        requester_id = int(getattr(author, "id", 0) or 0)
+        requester_key = str(
+            command.get("profile_id")
+            or command.get("device_id")
+            or requester_id
+            or "anonymous"
+        )
         return {
             "timing": timing,
-            "requester_id": int(getattr(author, "id", 0) or 0),
+            "requester_id": requester_id,
             "requester_name": str(
+                command.get("username")
+                or command.get("requester_name")
+                or
                 getattr(author, "display_name", "")
                 or getattr(author, "name", "")
                 or "Player"
             )[:100],
+            "requester_key": requester_key,
+            "role": str(command.get("actor_role") or "member"),
         }
 
     async def handle(self, item: Dict[str, Any]) -> str:
@@ -66,10 +80,22 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
         self._pending_request_context[guild_id] = self._request_metadata(
             ctx,
             timing=timing,
+            item=item,
         )
         self._pending_request_context[guild_id]["source"] = str(
             item.get("source") or "unknown"
         )
+        requester_key = str(self._pending_request_context[guild_id]["requester_key"])
+        if self.gaming.queue_limit_reached(
+            guild_id,
+            requester_key,
+            self.request_ledger.entries(guild_id),
+        ):
+            limit = self.gaming.settings(guild_id)["per_user_queue_limit"]
+            return {
+                "status": "rejected",
+                "message": f"Your DjGoo queue limit is {limit} songs. Let one play before adding another.",
+            }
         try:
             if intent == "play":
                 return await super().handle(item)
@@ -117,6 +143,15 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
             )
             return "No clean request"
         resolved_query = resolved[0]
+        explicit = bool(getattr(self, "_resolved_track_explicit", lambda _uri: False)(resolved_query))
+        explicit_policy = self.gaming.settings(ctx.guild.id)["explicit_policy"]
+        if explicit and explicit_policy == "reject":
+            return {
+                "status": "rejected",
+                "message": "DjGoo blocked that explicit track for this session.",
+            }
+        if explicit and explicit_policy == "warn":
+            await self._notice("Explicit track warning: this request contains explicit lyrics.")
         station = self.stations.get_active(ctx.guild.id)
 
         if not await self._wait_for_lavalink_node(ctx.guild.id):
@@ -211,6 +246,23 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
                     requested_track,
                     force_front=False,
                 )
+        else:
+            metadata = self._pending_request_context.get(int(ctx.guild.id), {})
+            data = self._track_data(requested_track)
+            self.request_ledger.add(
+                ctx.guild.id,
+                track_key=requested_key,
+                title=str(data.get("title") or ""),
+                timing=timing,
+                requester_id=int(metadata.get("requester_id") or 0),
+                requester_name=str(metadata.get("requester_name") or ""),
+                requester_key=str(metadata.get("requester_key") or ""),
+                entry_id=self._stable_track_id(requested_track),
+                lane="request",
+                insertion_reason=f"{timing} request",
+                source=source,
+            )
+        self._apply_request_fairness(ctx.guild.id, force_front=timing == "now")
 
         data = self._track_data(requested_track)
         display = data.get("title") or query
@@ -271,8 +323,6 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
     async def handle_track_enqueue(self, guild: Any, track: Any) -> None:
         await super().handle_track_enqueue(guild, track)
         guild_id = int(guild.id)
-        if self.stations.get_active(guild_id) is None:
-            return
         if self._station_enqueue_depth.get(guild_id, 0) > 0:
             return
         if guild_id in self._pending_request_context:
@@ -298,7 +348,31 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
         except AttributeError:
             force_front = False
 
-        super()._remember_radio_request(guild_id, track)
+        requester_key = str(requester_id or "discord")
+        if self.gaming.queue_limit_reached(
+            guild_id,
+            requester_key,
+            self.request_ledger.entries(guild_id),
+        ):
+            try:
+                player = lavalink.get_player(guild_id)
+                player.queue.remove(track)
+            except (NodeNotFound, PlayerNotFound, ValueError):
+                pass
+            await self._notice(
+                f"{requester_name} already has the maximum number of pending requests."
+            )
+            log_event(
+                "request.native_discord.limit_rejected",
+                guild_id=guild_id,
+                requester_id=requester_id,
+                requester_name=requester_name,
+            )
+            self._publish_now_playing(guild_id)
+            return
+
+        if self.stations.get_active(guild_id) is not None:
+            super()._remember_radio_request(guild_id, track)
         data = self._track_data(track)
         self.request_ledger.add(
             guild_id,
@@ -311,12 +385,14 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
             lane="request",
             insertion_reason="Discord manual request",
             source="discord",
+            requester_key=requester_key,
         )
         self._place_request_before_radio(
             guild_id,
             track,
             force_front=force_front,
         )
+        self._apply_request_fairness(guild_id, force_front=force_front)
         self._persist_player_state(
             guild_id,
             reason="native_discord_request_enqueued",
@@ -396,7 +472,38 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
             lane="request",
             insertion_reason=f"{str(metadata.get('timing') or 'next')} request",
             source=str(metadata.get("source") or "unknown"),
+            requester_key=str(metadata.get("requester_key") or ""),
         )
+
+    def _apply_request_fairness(self, guild_id: int, *, force_front: bool = False) -> None:
+        if force_front or not self.gaming.settings(guild_id)["round_robin"]:
+            return
+        try:
+            player = lavalink.get_player(guild_id)
+        except (NodeNotFound, PlayerNotFound):
+            return
+        queue = list(player.queue)
+        requests = self.request_ledger.entries(guild_id)
+        by_track_key: dict[str, list[dict[str, Any]]] = {}
+        for entry in requests:
+            by_track_key.setdefault(str(entry.get("track_key") or ""), []).append(entry)
+        request_tracks: dict[str, Any] = {}
+        request_entries: list[dict[str, Any]] = []
+        program_tracks: list[Any] = []
+        for track in queue:
+            entries = by_track_key.get(self._track_key(track), [])
+            entry = entries.pop(0) if entries else None
+            if entry is None:
+                program_tracks.append(track)
+                continue
+            entry_id = str(entry.get("entry_id") or self._stable_track_id(track))
+            entry = {**entry, "entry_id": entry_id}
+            request_entries.append(entry)
+            request_tracks[entry_id] = track
+        ordered_ids = self.gaming.fair_order(request_entries)
+        player.queue.clear()
+        player.queue.extend(request_tracks[entry_id] for entry_id in ordered_ids if entry_id in request_tracks)
+        player.queue.extend(program_tracks)
 
     def _consume_radio_request(
         self,

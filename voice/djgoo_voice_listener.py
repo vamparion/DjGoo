@@ -26,6 +26,7 @@ from voice.input_binding import ButtonWaiter, COMMON_BUTTONS, is_button_down
 from voice.listener_settings import voice_settings
 from voice.operational_log import log_event
 from voice.pending_choices import PendingChoiceStore
+from voice.media_keys import start_media_key_listener
 from voice.secrets import load_project_secrets
 
 
@@ -202,6 +203,22 @@ def run(project_root: Path) -> None:
     pending_choices = PendingChoiceStore(
         project_root / "data" / "djgoo-pending-choice.json"
     )
+    queue_path = Path(settings["queue_path"])
+
+    def emit_media_key(intent: str) -> None:
+        append_queue_item(
+            queue_path,
+            {
+                "type": "command",
+                "source": "media_key",
+                "created_at": time.time(),
+                "intent": intent,
+                "confidence": 1.0,
+                "raw": f"media:{intent}",
+            },
+        )
+
+    start_media_key_listener(project_root, emit_media_key)
     input_device = resolve_input_device(settings["input_device"])
     corrections = load_corrections(project_root, settings["corrections"])
     dynamic_hotwords = " ".join(

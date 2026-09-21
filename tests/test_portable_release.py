@@ -17,6 +17,7 @@ def test_repository_contains_no_powershell_or_vbscript_files() -> None:
         and path.suffix.lower() in {".ps1", ".vbs"}
         and ".git" not in path.parts
         and "build" not in path.parts
+        and "node_modules" not in path.parts
     )
     assert forbidden == []
 

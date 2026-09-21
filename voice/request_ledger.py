@@ -51,6 +51,7 @@ class RequestLedger:
         lane: str = "request",
         insertion_reason: str = "manual request",
         source: str = "unknown",
+        requester_key: str = "",
     ) -> None:
         if not track_key:
             return
@@ -68,6 +69,7 @@ class RequestLedger:
                     "lane": str(lane),
                     "insertion_reason": str(insertion_reason)[:200],
                     "source": str(source),
+                    "requester_key": str(requester_key or requester_id or ""),
                     "created_at": time.time(),
                 }
             )

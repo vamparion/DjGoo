@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 from voice.operational_log import log_event
 
-from .profile_audio_bridge import ProfileDjGooAudioBridge
+from .gaming_audio_bridge import GamingDjGooAudioBridge
 
 
 _CURRENT_COMMAND: ContextVar[Dict[str, Any] | None] = ContextVar(
@@ -14,7 +14,7 @@ _CURRENT_COMMAND: ContextVar[Dict[str, Any] | None] = ContextVar(
 )
 
 
-class RemoteAwareDjGooAudioBridge(ProfileDjGooAudioBridge):
+class RemoteAwareDjGooAudioBridge(GamingDjGooAudioBridge):
     """Resolve a recipient command to its paired Discord member."""
 
     async def handle(self, item: Dict[str, Any]) -> str:

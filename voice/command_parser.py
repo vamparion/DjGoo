@@ -353,6 +353,7 @@ def parse_command(transcript: str, *, require_wake: bool = True) -> ParsedComman
             "station_ban_current",
         ),
         (("undo ban", "undo last ban", "allow that again"), "undo_station_ban"),
+        (("undo", "undo that", "put it back", "take that back"), "gaming_undo"),
         (("more like this",), "station_more_like_current"),
         (("less like this",), "station_less_like_current"),
         (

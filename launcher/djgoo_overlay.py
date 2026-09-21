@@ -40,6 +40,7 @@ if str(SOURCE_ROOT) not in sys.path:
 from voice.command_queue import append_queue_item
 from voice.mini_player_protocol import CommandReceiptStore, mini_player_command
 from voice.now_playing_state import NowPlayingState
+from voice.gaming_session import GamingSessionStore
 
 
 BG = "#090d10"
@@ -199,6 +200,9 @@ class DjGooMiniPlayer:
         self.receipts = CommandReceiptStore(project_root / "data" / "mini-player-acks")
         self.settings_store = JsonSettings(project_root / "data" / "mini-player-settings.json")
         self.settings = self.settings_store.read()
+        self.gaming = GamingSessionStore(
+            project_root / "data" / "djgoo-gaming-session.json"
+        )
 
         self.title = StringVar(value="DjGoo is waiting for music")
         self.detail = StringVar(value="Ready for a song, playlist, or radio station")
@@ -1881,6 +1885,8 @@ class DjGooMiniPlayer:
 
     def _apply_state(self, payload: dict[str, Any]) -> None:
         self._payload = payload
+        if self.gaming.settings(0)["ranked_mode"] and self._drawer_open:
+            self.toggle_drawer()
         current = (
             payload.get("current")
             if isinstance(payload.get("current"), dict)
@@ -2361,6 +2367,8 @@ class DjGooMiniPlayer:
         self.artwork.configure(image=self._artwork_photo, text="", width=58)
 
     def _set_status(self, message: str, color: str) -> None:
+        if self.gaming.settings(0)["ranked_mode"] and color != DANGER:
+            return
         self.status.set(str(message)[:110])
         self.status_label.configure(fg=color)
         self.status_canvas.itemconfigure(self.status_dot, fill=color)

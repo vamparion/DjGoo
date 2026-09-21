@@ -32,7 +32,12 @@ def certificate_fingerprint(certificate_path: Path) -> str:
     return hashlib.sha256(certificate.public_bytes(serialization.Encoding.DER)).hexdigest()
 
 
-def ensure_tls_identity(certificate_path: Path, private_key_path: Path) -> TlsIdentity:
+def ensure_tls_identity(
+    certificate_path: Path,
+    private_key_path: Path,
+    *,
+    additional_ip_addresses: tuple[str, ...] = (),
+) -> TlsIdentity:
     certificate_path.parent.mkdir(parents=True, exist_ok=True)
     private_key_path.parent.mkdir(parents=True, exist_ok=True)
     if certificate_path.exists() and private_key_path.exists():
@@ -46,6 +51,11 @@ def ensure_tls_identity(certificate_path: Path, private_key_path: Path) -> TlsId
         ]
     )
     now = dt.datetime.now(dt.timezone.utc)
+    ip_sans = [
+        x509.IPAddress(ipaddress.ip_address(value))
+        for value in additional_ip_addresses
+        if value
+    ]
     certificate = (
         x509.CertificateBuilder()
         .subject_name(subject)
@@ -61,6 +71,7 @@ def ensure_tls_identity(certificate_path: Path, private_key_path: Path) -> TlsId
                     x509.DNSName("djgoo.local"),
                     x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
                     x509.IPAddress(ipaddress.ip_address("::1")),
+                    *ip_sans,
                 ]
             ),
             critical=False,
@@ -69,8 +80,8 @@ def ensure_tls_identity(certificate_path: Path, private_key_path: Path) -> TlsId
         .sign(private_key, hashes.SHA256())
     )
 
-    key_temp = private_key_path.with_suffix(".tmp")
-    cert_temp = certificate_path.with_suffix(".tmp")
+    key_temp = private_key_path.with_name(f"{private_key_path.name}.tmp")
+    cert_temp = certificate_path.with_name(f"{certificate_path.name}.tmp")
     key_temp.write_bytes(
         private_key.private_bytes(
             encoding=serialization.Encoding.PEM,

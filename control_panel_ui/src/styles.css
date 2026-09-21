@@ -27,6 +27,86 @@ body {
   font-family: Inter, Segoe UI, system-ui, sans-serif;
 }
 
+.onboarding {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.onboarding-panel {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 24px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.settings-grid label {
+  min-height: 48px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel3);
+  padding: 9px 11px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settings-grid input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--green);
+}
+
+.settings-grid input[type="number"],
+.settings-grid select {
+  width: 92px;
+  padding: 7px;
+}
+
+.role-badge {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 8px;
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.player-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.ranked-mode .side,
+.ranked-mode .hint-strip,
+.ranked-mode .smart-row,
+.ranked-mode .banner:not(.error) {
+  display: none;
+}
+
+.ranked-mode .content {
+  grid-template-columns: 70px minmax(0, 1fr);
+}
+
+.ranked-mode .panel {
+  box-shadow: none;
+}
+
 button,
 input,
 select {
@@ -712,5 +792,18 @@ p {
 
   .title {
     font-size: 21px;
+  }
+
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .content {
+    padding: 8px 8px 112px;
+    gap: 8px;
+  }
+
+  .panel {
+    padding: 12px;
   }
 }

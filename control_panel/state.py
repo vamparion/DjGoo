@@ -6,8 +6,10 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
+from voice.gaming_session import GamingSessionStore
 
-CORE_COMPONENTS = ("redbot", "lavalink", "voice")
+
+CORE_COMPONENTS = ("redbot", "lavalink", "voice", "web")
 
 
 def read_json_file(path: Path, fallback: Dict[str, Any]) -> Dict[str, Any]:
@@ -31,6 +33,10 @@ def read_recent_log_lines(path: Path, *, limit: int = 80) -> List[str]:
 
 
 def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
+    now_playing = read_json_file(
+        project_root / "data" / "djgoo-now-playing.json",
+        {},
+    )
     playlists_data = read_json_file(
         project_root / "data" / "djgoo-playlists.json",
         {"playlists": {}},
@@ -50,16 +56,21 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
         for name in CORE_COMPONENTS
         if str((health.get(name) or {}).get("status") or "") != "online"
     ]
+    current = now_playing.get("current") if isinstance(now_playing.get("current"), dict) else {}
+    live_queue = now_playing.get("queue") if isinstance(now_playing.get("queue"), list) else []
+    gaming = GamingSessionStore(project_root / "data" / "djgoo-gaming-session.json")
     return {
         "playback": {
-            "title": last_title,
-            "artist": "",
-            "station": active_station["name"] if active_station else "",
-            "source": "Station memory" if last_title else "",
-            "remaining": "",
-            "queue_count": 0,
+            "title": str(current.get("title") or last_title),
+            "artist": str(current.get("artist") or ""),
+            "station": str((now_playing.get("station_details") or {}).get("name") or (active_station["name"] if active_station else "")),
+            "source": str(now_playing.get("mode") or ("Station memory" if last_title else "")),
+            "remaining": str(now_playing.get("progress_text") or ""),
+            "queue_count": len(live_queue),
+            "requester": str(now_playing.get("requester") or ""),
+            "state": str(now_playing.get("playback_state") or "idle"),
         },
-        "queue": [],
+        "queue": live_queue,
         "playlists": playlists,
         "stations": stations,
         "active_station": active_station,
@@ -73,6 +84,7 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
                 else "Failed components: " + ", ".join(failed)
             ),
         },
+        "gaming": gaming.public_state(0),
         "logs": {
             "startup": read_recent_log_lines(
                 project_root / "logs" / "startup.log",
@@ -227,6 +239,13 @@ def build_health(project_root: Path) -> Dict[str, Any]:
             process_name="python.exe",
             command_marker="voice.djgoo_voice_listener",
             heartbeat_max_age=45.0,
+        ),
+        "web": _component_status(
+            project_root,
+            "web",
+            process_name="python.exe",
+            command_marker="control_panel.server",
+            heartbeat_max_age=120.0,
         ),
         "nuclear": {
             "status": "unknown",

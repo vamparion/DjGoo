@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getState, resetDjGoo, sendCommand } from "./api";
+import { createProfile, getState, resetDjGoo, savedProfile, sendCommand } from "./api";
 import { CommandBar } from "./components/CommandBar";
 import { HealthPanel } from "./components/HealthPanel";
 import { LivePanel } from "./components/LivePanel";
@@ -12,8 +12,11 @@ import { SmartActions } from "./components/SmartActions";
 import { StationPanel } from "./components/StationPanel";
 import { GuestPanel } from "./components/GuestPanel";
 import type { ControlState } from "./types";
+import type { DjGooProfile } from "./api";
+import { Onboarding } from "./components/Onboarding";
+import { GamingSettings } from "./components/GamingSettings";
 
-const views = ["Live", "Find", "Radio", "Lists", "Guests", "Logs"] as const;
+const views = ["Live", "Find", "Radio", "Lists", "Players", "Settings", "Logs"] as const;
 type View = (typeof views)[number];
 
 export function App() {
@@ -21,6 +24,7 @@ export function App() {
   const [error, setError] = useState("");
   const [status, setStatus] = useState("Ready");
   const [activeView, setActiveView] = useState<View>("Live");
+  const [profile, setProfile] = useState<DjGooProfile | null>(() => savedProfile());
 
   async function refresh() {
     try {
@@ -72,8 +76,11 @@ export function App() {
     if (activeView === "Lists") {
       return <PlaylistPanel state={state} send={send} expanded />;
     }
-    if (activeView === "Guests") {
-      return <GuestPanel state={state} send={send} />;
+    if (activeView === "Players") {
+      return <GuestPanel state={state} send={send} profile={profile} refresh={refresh} />;
+    }
+    if (activeView === "Settings") {
+      return <GamingSettings state={state} refresh={refresh} host={profile?.role === "host"} />;
     }
     if (activeView === "Logs") {
       return <LogsPanel state={state} send={send} expanded />;
@@ -90,8 +97,12 @@ export function App() {
     );
   }
 
+  if (!profile) {
+    return <Onboarding submit={async (username) => setProfile(await createProfile(username))} />;
+  }
+
   return (
-    <div className="app">
+    <div className={`app ${state.gaming.settings.ranked_mode ? "ranked-mode" : ""}`}>
       <CommandBar send={send} />
       {error && <div className="banner error">{error}</div>}
       <main className="content">

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -347,6 +348,15 @@ def voice_ready() -> bool:
     return heartbeat_ready("voice", max_age_seconds=45)
 
 
+def control_panel_ready() -> bool:
+    try:
+        context = ssl._create_unverified_context()
+        with urllib.request.urlopen("https://127.0.0.1:8765/api/state", timeout=1.0, context=context) as response:
+            return response.status == 200
+    except (OSError, ValueError):
+        return False
+
+
 def build_specs() -> list[ComponentSpec]:
     return [
         ComponentSpec(
@@ -378,6 +388,25 @@ def build_specs() -> list[ComponentSpec]:
             command_markers=("voice.djgoo_voice_listener", str(PROJECT_ROOT)),
             ready=voice_ready,
             ready_timeout=900,
+        ),
+        ComponentSpec(
+            name="web",
+            command=[
+                str(BOT_PYTHON),
+                "-m",
+                "control_panel.server",
+                "--project-root",
+                str(PROJECT_ROOT),
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8765",
+                "--tls",
+            ],
+            cwd=PROJECT_ROOT,
+            command_markers=("control_panel.server", str(PROJECT_ROOT)),
+            ready=control_panel_ready,
+            ready_timeout=30,
         ),
     ]
 

@@ -99,6 +99,11 @@ class ControlPanelStateTests(unittest.TestCase):
                                 "running": True,
                                 "ready": True,
                             },
+                            "web": {
+                                "pid": 104,
+                                "running": True,
+                                "ready": True,
+                            },
                         },
                     }
                 ),
@@ -112,7 +117,7 @@ class ControlPanelStateTests(unittest.TestCase):
                 health = build_health(root)
                 snapshot = build_state_snapshot(root)
 
-        for component in ("redbot", "lavalink", "voice"):
+        for component in ("redbot", "lavalink", "voice", "web"):
             self.assertEqual(health[component]["status"], "online")
             self.assertEqual(health[component]["source"], "supervisor")
         self.assertTrue(snapshot["health_summary"]["ok"])
@@ -173,7 +178,7 @@ class ControlPanelStateTests(unittest.TestCase):
         self.assertFalse(snapshot["health_summary"]["ok"])
         self.assertEqual(
             snapshot["health_summary"]["failed_components"],
-            ["redbot", "lavalink", "voice"],
+            ["redbot", "lavalink", "voice", "web"],
         )
         self.assertIn("redbot", snapshot["health_summary"]["message"])
 

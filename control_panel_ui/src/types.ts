@@ -1,6 +1,10 @@
 export type Track = {
+  id?: string;
   title: string;
   uri?: string;
+  artist?: string;
+  requester?: string;
+  request_type?: string;
 };
 
 export type Playlist = {
@@ -40,6 +44,8 @@ export type ControlState = {
     source: string;
     remaining: string;
     queue_count: number;
+    requester?: string;
+    state?: string;
   };
   queue: Track[];
   playlists: Playlist[];
@@ -47,4 +53,20 @@ export type ControlState = {
   active_station: Station | null;
   health: Record<string, HealthItem>;
   logs: Record<string, string[]>;
+  gaming: {
+    settings: {
+      ranked_mode: boolean;
+      per_user_queue_limit: number;
+      round_robin: boolean;
+      vote_thresholds: Record<string, number>;
+      explicit_policy: "allow" | "warn" | "reject";
+      volume_normalization: boolean;
+      normalization_target: number;
+      crossfade_enabled: boolean;
+      crossfade_seconds: number;
+      preload_enabled: boolean;
+      media_keys_enabled: boolean;
+    };
+    profiles: Array<{ id: string; username: string; role: string; last_seen: number }>;
+  };
 };
