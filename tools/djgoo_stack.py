@@ -20,6 +20,8 @@ import psutil
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 LOG_DIR = PROJECT_ROOT / "logs"
 COMPONENT_LOG_DIR = LOG_DIR / "components"
 PID_DIR = PROJECT_ROOT / "data" / "pids"
