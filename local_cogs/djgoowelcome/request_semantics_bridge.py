@@ -166,14 +166,15 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
             reason="Clean track resolved; sending to player",
         )
 
-        if source == "mini_player" and self._mini_player_has_track(
+        if source in {"mini_player", "web_remote"} and self._mini_player_has_track(
             ctx.guild.id,
             resolved_query,
         ):
             message = "That song is already playing or queued."
             log_event(
-                "request.mini_player.duplicate_rejected",
+                "request.control_surface.duplicate_rejected",
                 guild_id=ctx.guild.id,
+                source=source,
                 timing=timing,
                 query=query,
                 resolved_query=resolved_query,

@@ -118,3 +118,14 @@ def test_remote_frontend_erases_fragment_and_reuses_shared_app() -> None:
     assert "self.skipWaiting()" in worker and "self.clients.claim()" in worker
     assert "discordJson(created" in transport and "discordJson(response" in transport
     assert "device_token" not in worker and "#pair=" not in worker
+
+
+def test_guest_stop_is_not_admin_only_and_web_retries_are_deduplicated() -> None:
+    root = Path(__file__).resolve().parents[1]
+    cog = (root / "local_cogs" / "djgoowelcome" / "djgoowelcome.py").read_text(encoding="utf-8")
+    requests = (root / "local_cogs" / "djgoowelcome" / "request_semantics_bridge.py").read_text(encoding="utf-8")
+    destructive = cog.split("DESTRUCTIVE_REMOTE_INTENTS = {", 1)[1].split("}", 1)[0]
+
+    assert '"stop"' not in destructive
+    assert 'source in {"mini_player", "web_remote"}' in requests
+    assert '"request.control_surface.duplicate_rejected"' in requests

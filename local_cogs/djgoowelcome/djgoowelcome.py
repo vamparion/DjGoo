@@ -54,7 +54,6 @@ FAST_CONTROL_INTENTS = {
     "shuffle_queue",
 }
 DESTRUCTIVE_REMOTE_INTENTS = {
-    "stop",
     "clear_queue",
     "remove_queue",
     "shuffle_queue",
