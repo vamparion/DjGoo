@@ -223,7 +223,7 @@ class DjGooWelcome(commands.Cog):
             return AuthorizationResult(False, "That command requires Manage Server or server ownership")
         return AuthorizationResult(
             True,
-            voice_channel_id=int(member_channel.id),
+            voice_channel_id=int(member_channel.id) if member_channel is not None else 0,
             actor_role=actor_role,
         )
 

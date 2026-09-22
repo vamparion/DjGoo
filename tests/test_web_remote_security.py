@@ -8,11 +8,40 @@ from pathlib import Path
 import pytest
 
 from control_panel.state import build_remote_state_snapshot
+from local_cogs.djgoowelcome.djgoowelcome import DjGooWelcome
 from voice.command_acceptance import AuthenticatedCommandProcessor, AuthorizationResult, CommandRejected
 from voice.pairing_store import PairingStore
 
 
 WEB_CAPS = ("state.read", "queue.read", "playback.request", "playback.vote_skip")
+
+
+@pytest.mark.asyncio
+async def test_remote_state_is_available_when_member_is_not_in_voice() -> None:
+    class Member:
+        id = 12
+        voice = None
+        guild_permissions = type("Permissions", (), {"manage_guild": False})()
+
+    class Guild:
+        owner_id = 99
+        voice_client = None
+
+        def get_member(self, user_id):
+            return Member() if user_id == 12 else None
+
+    class Bot:
+        def get_guild(self, guild_id):
+            return Guild() if guild_id == 34 else None
+
+    cog = object.__new__(DjGooWelcome)
+    cog.bot = Bot()
+    identity = type("Identity", (), {"guild_id": 34, "user_id": 12})()
+
+    result = await cog._authorize_remote(identity, "state.read")
+
+    assert result.allowed is True
+    assert result.voice_channel_id == 0
 
 
 def store(tmp_path: Path) -> PairingStore:
