@@ -248,7 +248,7 @@ def heartbeat_ready(
         age = time.time() - float(heartbeat.get("timestamp") or 0)
     except (TypeError, ValueError):
         return False
-    if expected_pid <= 0 or heartbeat_pid != expected_pid:
+    if expected_pid <= 0 or not heartbeat_pid_owned_by(expected_pid, heartbeat_pid):
         return False
     if age < -5 or age > max_age_seconds:
         return False
@@ -258,6 +258,32 @@ def heartbeat_ready(
         if heartbeat.get(key) != expected:
             return False
     return True
+
+
+def heartbeat_pid_owned_by(expected_pid: int, heartbeat_pid: int) -> bool:
+    """Confirm a heartbeat belongs to the recorded process or its child.
+
+    On Windows a virtual-environment ``python.exe`` can remain as a launcher
+    while the base interpreter runs DjGoo as its direct child.  The component
+    record intentionally owns the launcher so shutdown can terminate the whole
+    tree; readiness must therefore recognize the verified descendant too.
+    """
+
+    if expected_pid <= 0 or heartbeat_pid <= 0:
+        return False
+    if heartbeat_pid == expected_pid:
+        return True
+    try:
+        child = psutil.Process(heartbeat_pid)
+        if expected_pid not in {parent.pid for parent in child.parents()}:
+            return False
+        cmdline = " ".join(child.cmdline()).lower()
+    except psutil.Error:
+        return False
+    return (
+        "start_redbot_selector.py" in cmdline
+        and str(PROJECT_ROOT).lower() in cmdline
+    )
 
 
 def write_component_record(spec: ComponentSpec, process: subprocess.Popen[Any]) -> None:
