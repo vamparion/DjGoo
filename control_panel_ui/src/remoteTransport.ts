@@ -29,18 +29,29 @@ async function discordJson(response: Response, operation: string): Promise<Recor
   throw new Error(`Discord returned ${received} while ${operation}. Refresh DjGoo and try the newest link.`);
 }
 
-function parseInvite(uri: string): { endpoint: Endpoint; expires_at: number; guild_name: string } {
+function parseInvite(uri: string, allowExpired = false): { endpoint: Endpoint; expires_at: number; guild_name: string } {
   if (uri.length > 16384) throw new Error("Pairing invitation is too large");
   const url = new URL(uri);
   if (url.protocol !== "djgoo:" || url.hostname !== "pair") throw new Error("Invalid DjGoo invitation");
   const payload = JSON.parse(dec.decode(b64d(url.searchParams.get("d") || "")));
-  if (payload.protocol !== 2 || Number(payload.expires_at) <= Date.now() / 1000) throw new Error("This pairing invitation has expired");
+  if (payload.protocol !== 2 || (!allowExpired && Number(payload.expires_at) <= Date.now() / 1000)) throw new Error("This pairing invitation has expired");
   const endpoint = payload.endpoints?.find((item: Endpoint) => item.transport === "discord");
   if (!endpoint) throw new Error("This invitation has no browser-compatible route");
   const hook = new URL(endpoint.endpoint);
   if (hook.protocol !== "https:" || !["discord.com", "www.discord.com", "ptb.discord.com", "canary.discord.com"].includes(hook.hostname)) throw new Error("Invalid Discord route");
   if (hex(sha256(b64d(endpoint.host_public_key))) !== endpoint.security.toLowerCase()) throw new Error("Host identity fingerprint does not match");
   return { endpoint, expires_at: payload.expires_at, guild_name: String(payload.guild_name || "") };
+}
+
+export function inviteMatchesCredential(uri: string, credential: WebCredential): boolean {
+  try {
+    const { endpoint } = parseInvite(uri, true);
+    return endpoint.endpoint === credential.webhook_url
+      && endpoint.room_id === credential.room_id
+      && endpoint.host_public_key === credential.host_public_key;
+  } catch {
+    return false;
+  }
 }
 
 async function exchange(endpoint: Pick<WebCredential, "webhook_url" | "room_id" | "host_public_key">, action: string, payload: Record<string, unknown>) {

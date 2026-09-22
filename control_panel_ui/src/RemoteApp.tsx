@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { App } from "./App";
 import { configureRemote } from "./api";
-import { pairWeb, type WebCredential } from "./remoteTransport";
+import { inviteMatchesCredential, pairWeb, type WebCredential } from "./remoteTransport";
 
 const SESSION_KEY = "djgoo-web-session";
 const REMEMBER_KEY = "djgoo-web-remembered";
@@ -16,10 +16,13 @@ function storedCredential(): WebCredential | null {
 }
 
 export function RemoteApp({ invite }: { invite: string }) {
-  // A fresh invite always supersedes a remembered route. This is essential
-  // when the Host rotates a revoked webhook into its private transport channel.
-  const [credential, setCredential] = useState<WebCredential | null>(() => invite ? null : storedCredential());
-  const [remember, setRemember] = useState(false);
+  // Reopening the same one-time link must reuse its completed pairing. A link
+  // for a rotated host route still supersedes the remembered credential.
+  const [credential, setCredential] = useState<WebCredential | null>(() => {
+    const stored = storedCredential();
+    return !invite || (stored && inviteMatchesCredential(invite, stored)) ? stored : null;
+  });
+  const [remember, setRemember] = useState(true);
   const [error, setError] = useState("");
 
   if (credential) {
@@ -33,6 +36,7 @@ export function RemoteApp({ invite }: { invite: string }) {
       const paired = await pairWeb(invite, navigator.userAgent.includes("Mobile") ? "DjGoo Web Mobile" : "DjGoo Web Browser");
       sessionStorage.setItem(SESSION_KEY, JSON.stringify(paired.credential));
       if (remember) localStorage.setItem(REMEMBER_KEY, JSON.stringify(paired.credential));
+      else localStorage.removeItem(REMEMBER_KEY);
       configureRemote(paired.credential);
       setCredential(paired.credential);
     } catch (err) {
