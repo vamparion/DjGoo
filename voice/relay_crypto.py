@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import secrets
+import gzip
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -251,6 +252,11 @@ def encrypt_response(
     key = _derive_key(shared, room_id, request_id, "response")
     nonce = secrets.token_bytes(12)
     encoded = json.dumps(plaintext, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    encoding = "json"
+    compressed = gzip.compress(encoded, compresslevel=6)
+    if len(compressed) < len(encoded):
+        encoded = compressed
+        encoding = "gzip-json"
     if len(encoded) > MAX_ENCRYPTED_PAYLOAD_BYTES:
         raise ValueError("Relay response is too large")
     ciphertext = ChaCha20Poly1305(key).encrypt(
@@ -265,6 +271,7 @@ def encrypt_response(
         "host_ephemeral_public_key": _b64encode(public_key_bytes(ephemeral.public_key())),
         "nonce": _b64encode(nonce),
         "ciphertext": _b64encode(ciphertext),
+        "encoding": encoding,
     }
 
 
@@ -285,6 +292,8 @@ def decrypt_response(request_key: ClientRequestKey, envelope: dict[str, Any]) ->
         ciphertext,
         _aad(room_id, request_id, "response"),
     )
+    if str(envelope.get("encoding") or "json") == "gzip-json":
+        decoded = gzip.decompress(decoded)
     payload = json.loads(decoded.decode("utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("Relay response must decrypt to an object")

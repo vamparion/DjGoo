@@ -15,9 +15,29 @@ from voice.discord_link_transport import (
 )
 from voice.relay_crypto import (
     decrypt_response,
+    encrypt_response,
     encrypt_request,
     load_or_create_host_identity,
 )
+
+
+def test_large_response_uses_compression_and_round_trips(tmp_path: Path) -> None:
+    identity = load_or_create_host_identity(tmp_path / "identity")
+    _request, request_key = encrypt_request(
+        identity.encryption_public_b64,
+        "room",
+        "large-response",
+        {"action": "status", "payload": {}},
+    )
+    payload = {"ok": True, "result": {"history": [{"title": "Song", "artist": "Artist"}] * 1500}}
+    envelope = encrypt_response(
+        request_key.private_key.public_key(),
+        "room",
+        "large-response",
+        payload,
+    )
+    assert envelope["encoding"] == "gzip-json"
+    assert decrypt_response(request_key, envelope) == payload
 
 
 class FakeCommands:

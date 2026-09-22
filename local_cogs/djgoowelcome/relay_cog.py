@@ -18,6 +18,7 @@ from voice.discord_relay import (
     delete_discord_message_after,
     discord_webhook_id,
     encode_discord_response,
+    publish_discord_response,
     normalize_discord_webhook_url,
     update_discord_message,
 )
@@ -264,7 +265,6 @@ class DjGooRelay(commands.Cog):
                 self.processor,
                 envelope,
             )
-            response_content = encode_discord_response(response)
             event = "voice.discord_relay.request_handled"
         except Exception as exc:
             response_content = (
@@ -273,11 +273,10 @@ class DjGooRelay(commands.Cog):
             )
             event = "voice.discord_relay.request_failed"
         try:
-            await update_discord_message(
-                self.discord_webhook_url,
-                message_id,
-                response_content,
-            )
+            if event == "voice.discord_relay.request_handled":
+                await publish_discord_response(self.discord_webhook_url, message_id, response)
+            else:
+                await update_discord_message(self.discord_webhook_url, message_id, response_content)
         except Exception as exc:
             log_event(
                 "voice.discord_relay.response_failed",

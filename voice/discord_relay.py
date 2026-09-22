@@ -21,6 +21,7 @@ from voice.relay_transport import (
 
 REQUEST_PREFIX = "DJGOO-LINK-1:"
 RESPONSE_PREFIX = "DJGOO-LINK-1-RESPONSE:"
+RESPONSE_ATTACHMENT_PREFIX = "DJGOO-LINK-1-ATTACHMENT:"
 ERROR_PREFIX = "DJGOO-LINK-1-ERROR:"
 MAX_DISCORD_CONTENT = 1950
 POLL_INTERVAL_SECONDS = 0.35
@@ -171,6 +172,47 @@ async def update_discord_message(
                     )
                 return
     raise RuntimeError("Discord relay response remained rate limited")
+
+
+async def publish_discord_response(
+    webhook_url: str,
+    message_id: str | int,
+    envelope: dict[str, Any],
+) -> None:
+    encoded = RESPONSE_PREFIX + _encode_envelope(envelope)
+    if len(encoded) <= MAX_DISCORD_CONTENT:
+        await update_discord_message(webhook_url, message_id, encoded)
+        return
+    url = discord_message_url(webhook_url, message_id)
+    marker = RESPONSE_ATTACHMENT_PREFIX + str(envelope.get("request_id") or "")
+    timeout = aiohttp.ClientTimeout(total=20, sock_connect=8, sock_read=15)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for _ in range(5):
+            form = aiohttp.FormData()
+            form.add_field(
+                "payload_json",
+                json.dumps({
+                    "content": marker,
+                    "attachments": [{"id": 0, "filename": "djgoo-response.txt"}],
+                    "allowed_mentions": {"parse": []},
+                }),
+                content_type="application/json",
+            )
+            form.add_field(
+                "files[0]",
+                encoded.encode("ascii"),
+                filename="djgoo-response.txt",
+                content_type="text/plain",
+            )
+            async with session.patch(url, data=form) as response:
+                if response.status == 429:
+                    await asyncio.sleep(await _rate_limit_delay(response))
+                    continue
+                if response.status != 200:
+                    detail = (await response.text())[:300]
+                    raise RuntimeError(f"Discord relay could not publish Host attachment ({response.status}): {detail}")
+                return
+    raise RuntimeError("Discord relay attachment remained rate limited")
 
 
 async def delete_discord_message_after(

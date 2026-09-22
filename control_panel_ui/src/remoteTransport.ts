@@ -7,6 +7,7 @@ const enc = new TextEncoder();
 const dec = new TextDecoder();
 const REQUEST = "DJGOO-LINK-1:";
 const RESPONSE = "DJGOO-LINK-1-RESPONSE:";
+const RESPONSE_ATTACHMENT = "DJGOO-LINK-1-ATTACHMENT:";
 const MAX_CONTENT = 1950;
 
 type Endpoint = { transport: string; endpoint: string; security: string; code: string; room_id: string; host_public_key: string };
@@ -43,8 +44,15 @@ async function exchange(endpoint: Pick<WebCredential, "webhook_url" | "room_id" 
   const envelope = { protocol: 1, room_id: endpoint.room_id, request_id: requestId, client_public_key: b64e(clientPublic), nonce: b64e(nonce), ciphertext: b64e(ciphertext) };
   const content = REQUEST + b64e(enc.encode(JSON.stringify(envelope)));
   if (content.length > MAX_CONTENT) throw new Error("Encrypted request is too large");
-  const created = await fetch(endpoint.webhook_url + "?wait=true", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content, flags: 4096, allowed_mentions: { parse: [] } }) });
-  if (!created.ok) throw new Error(`Discord transport failed (${created.status})`);
+  let created: Response | null = null;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    created = await fetch(endpoint.webhook_url + "?wait=true", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content, flags: 4096, allowed_mentions: { parse: [] } }) });
+    if (created.status !== 429) break;
+    const limited = await created.clone().json().catch(() => ({}));
+    const retrySeconds = Math.max(0.5, Math.min(15, Number(limited.retry_after || 1)));
+    await new Promise(resolve => setTimeout(resolve, retrySeconds * 1000));
+  }
+  if (!created?.ok) throw new Error(`Discord is busy (${created?.status || "offline"}). DjGoo will retry when you tap Retry.`);
   const messageId = String((await created.json()).id || "");
   const messageUrl = `${endpoint.webhook_url}/messages/${messageId}`;
   try {
@@ -54,14 +62,23 @@ async function exchange(endpoint: Pick<WebCredential, "webhook_url" | "room_id" 
       const response = await fetch(messageUrl, { cache: "no-store" });
       if (response.status === 429) { await new Promise(r => setTimeout(r, delay = Math.min(delay * 2, 4000))); continue; }
       if (response.ok) {
-        const responseContent = String((await response.json()).content || "");
+        const message = await response.json();
+        let responseContent = String(message.content || "");
+        if (responseContent.startsWith(RESPONSE_ATTACHMENT)) {
+          const attachmentUrl = String(message.attachments?.[0]?.url || "");
+          if (attachmentUrl) responseContent = await fetch(attachmentUrl, { cache: "no-store" }).then(item => item.text());
+        }
         if (responseContent.startsWith(RESPONSE)) {
           const encrypted = JSON.parse(dec.decode(b64d(responseContent.slice(RESPONSE.length))));
           if (encrypted.request_id !== requestId || encrypted.room_id !== endpoint.room_id) throw new Error("Host response identity changed");
           const responseShared = x25519.getSharedSecret(secret, b64d(encrypted.host_ephemeral_public_key));
           const responseKey = hkdf(sha256, responseShared, salt, enc.encode(`djgoo-relay-v1:${requestId}:response`), 32);
           const responseAad = enc.encode(`djgoo-relay-v1|${endpoint.room_id}|${requestId}|response`);
-          const plain = chacha20poly1305(responseKey, b64d(encrypted.nonce), responseAad).decrypt(b64d(encrypted.ciphertext));
+          let plain = chacha20poly1305(responseKey, b64d(encrypted.nonce), responseAad).decrypt(b64d(encrypted.ciphertext));
+          if (encrypted.encoding === "gzip-json") {
+            const stream = new Blob([plain as BlobPart]).stream().pipeThrough(new DecompressionStream("gzip"));
+            plain = new Uint8Array(await new Response(stream).arrayBuffer());
+          }
           const result = JSON.parse(dec.decode(plain));
           if (!result.ok) throw new Error(String(result.error || "DjGoo Host rejected the request"));
           return result.result;
