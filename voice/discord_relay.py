@@ -226,10 +226,12 @@ async def delete_discord_message_after(
     timeout = aiohttp.ClientTimeout(total=10, sock_connect=6, sock_read=8)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.delete(url):
-                pass
-    except Exception:
-        pass
+            async with session.delete(url) as response:
+                if response.status not in {204, 404}:
+                    raise RuntimeError(f"Discord relay cleanup failed ({response.status})")
+    except Exception as exc:
+        from voice.operational_log import log_event
+        log_event("voice.discord_relay.cleanup_failed", message_id=str(message_id), detail=str(exc))
 
 
 @dataclass(frozen=True)

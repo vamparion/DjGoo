@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import aiohttp
+import discord
 from redbot.core import commands
 
 from voice.command_acceptance import AuthenticatedCommandProcessor
@@ -115,7 +116,13 @@ class DjGooRelay(commands.Cog):
             )
             return ""
 
-    def _save_discord_webhook_url(self, value: str) -> None:
+    def _save_discord_webhook_url(
+        self,
+        value: str,
+        *,
+        channel_id: int = 0,
+        private_channel: bool = False,
+    ) -> None:
         normalized = normalize_discord_webhook_url(value)
         path = self.djgoo_cog._secrets_path()
         payload = self._raw_secrets()
@@ -129,6 +136,8 @@ class DjGooRelay(commands.Cog):
             gateway["discord_relay"] = settings
         settings["enabled"] = True
         settings["webhook_url"] = normalized
+        settings["channel_id"] = str(channel_id or "")
+        settings["private_channel"] = bool(private_channel)
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(path.suffix + ".tmp")
         temporary.write_text(
@@ -148,6 +157,15 @@ class DjGooRelay(commands.Cog):
         except (aiohttp.ClientError, asyncio.TimeoutError):
             return False
 
+    async def _delete_discord_webhook(self, webhook_url: str) -> None:
+        if not webhook_url:
+            return
+        timeout = aiohttp.ClientTimeout(total=8, connect=4)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.delete(webhook_url) as response:
+                if response.status not in {204, 404}:
+                    raise RuntimeError(f"Discord webhook removal failed ({response.status})")
+
     def _forget_discord_webhook(self) -> None:
         path = self.djgoo_cog._secrets_path()
         payload = self._raw_secrets()
@@ -166,42 +184,60 @@ class DjGooRelay(commands.Cog):
         self.discord_webhook_id = 0
 
     async def _ensure_discord_webhook(self, ctx: commands.Context) -> bool:
-        if self.discord_webhook_url:
+        secrets = self._raw_secrets()
+        gateway_settings = secrets.get("voice_gateway", {})
+        gateway_settings = gateway_settings if isinstance(gateway_settings, dict) else {}
+        relay_settings = gateway_settings.get("discord_relay", {})
+        relay_settings = relay_settings if isinstance(relay_settings, dict) else {}
+        if self.discord_webhook_url and bool(relay_settings.get("private_channel", False)):
             if await self._discord_webhook_is_alive():
                 return True
             await asyncio.to_thread(self._forget_discord_webhook)
             log_event("voice.discord_relay.revoked_route_removed")
-        channel = getattr(ctx, "channel", None)
         guild = getattr(ctx, "guild", None)
-        create_webhook = getattr(channel, "create_webhook", None)
-        if guild is None or not callable(create_webhook):
+        if guild is None:
             await ctx.send(
-                "DjGoo could not create its outbound encrypted bridge in this channel. "
-                "Run the command in a normal server text channel."
+                "DjGoo could not create its private outbound bridge outside a server."
             )
             return False
-        bot_member = getattr(guild, "me", None)
+        bot_member = getattr(guild, "me", None) or getattr(ctx, "me", None)
         try:
-            permissions = channel.permissions_for(bot_member)
-            can_manage = bool(getattr(permissions, "manage_webhooks", False))
+            previous_webhook = self.discord_webhook_url
+            permissions = getattr(bot_member, "guild_permissions", None)
+            can_manage = bool(getattr(permissions, "manage_channels", False)) and bool(getattr(permissions, "manage_webhooks", False))
         except Exception:
             can_manage = False
         if not can_manage:
             await ctx.send(
-                "DjGoo Link needs the **Manage Webhooks** permission in this channel "
-                "to create its outbound encrypted bridge. No router port or inbound "
-                "firewall rule is required after that permission is granted."
+                "DjGoo Link needs **Manage Channels** and **Manage Webhooks** to create "
+                "a hidden transport channel."
             )
             return False
         try:
-            webhook = await create_webhook(
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                bot_member: discord.PermissionOverwrite(
+                    view_channel=True,
+                    send_messages=True,
+                    read_message_history=True,
+                    manage_webhooks=True,
+                ),
+            }
+            channel = await guild.create_text_channel(
+                "djgoo-link-private",
+                overwrites=overwrites,
+                reason="Private encrypted DjGoo web transport",
+            )
+            webhook = await channel.create_webhook(
                 name="DjGoo Link",
-                reason="Outbound encrypted DjGoo Voice bridge",
+                reason="Private outbound encrypted DjGoo web bridge",
             )
             normalized = normalize_discord_webhook_url(str(webhook.url))
             await asyncio.to_thread(
                 self._save_discord_webhook_url,
                 normalized,
+                channel_id=int(channel.id),
+                private_channel=True,
             )
         except Exception as exc:
             log_event(
@@ -216,11 +252,17 @@ class DjGooRelay(commands.Cog):
             return False
         self.discord_webhook_url = normalized
         self.discord_webhook_id = discord_webhook_id(normalized)
+        if previous_webhook and previous_webhook != normalized:
+            try:
+                await self._delete_discord_webhook(previous_webhook)
+            except Exception as exc:
+                log_event("voice.discord_relay.old_route_cleanup_failed", detail=str(exc))
         log_event(
             "voice.discord_relay.provisioned",
             webhook_id=str(self.discord_webhook_id),
             guild_id=getattr(guild, "id", 0),
             channel_id=getattr(channel, "id", 0),
+            private_channel=True,
         )
         return True
 
@@ -290,7 +332,7 @@ class DjGooRelay(commands.Cog):
             delete_discord_message_after(
                 self.discord_webhook_url,
                 message_id,
-                delay_seconds=60.0,
+                delay_seconds=3.0,
             )
         )
 

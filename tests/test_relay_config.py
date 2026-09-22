@@ -66,6 +66,8 @@ def test_saving_discord_bridge_preserves_existing_secrets(tmp_path: Path) -> Non
     assert saved["voice_gateway"]["discord_relay"] == {
         "enabled": True,
         "webhook_url": webhook,
+        "channel_id": "",
+        "private_channel": False,
     }
 
 
