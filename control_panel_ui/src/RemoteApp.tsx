@@ -16,7 +16,9 @@ function storedCredential(): WebCredential | null {
 }
 
 export function RemoteApp({ invite }: { invite: string }) {
-  const [credential, setCredential] = useState<WebCredential | null>(() => storedCredential());
+  // A fresh invite always supersedes a remembered route. This is essential
+  // when the Host rotates a revoked webhook into its private transport channel.
+  const [credential, setCredential] = useState<WebCredential | null>(() => invite ? null : storedCredential());
   const [remember, setRemember] = useState(false);
   const [error, setError] = useState("");
 

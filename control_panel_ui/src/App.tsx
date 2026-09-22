@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { createProfile, getState, isRemoteSession, resetDjGoo, savedProfile, sendCommand } from "./api";
+import { createProfile, forgetRemoteSession, getState, isRemoteSession, resetDjGoo, savedProfile, sendCommand } from "./api";
 import { CommandBar } from "./components/CommandBar";
 import { HealthPanel } from "./components/HealthPanel";
 import { LivePanel } from "./components/LivePanel";
@@ -73,7 +73,7 @@ export function App() {
     return (
       <main className="loading loading-state">
         <strong>{error ? "DjGoo could not load" : "Loading DjGoo..."}</strong>
-        {error && <><p>{error}</p><button className="btn primary" onClick={() => void refresh()}>Retry</button></>}
+        {error && <><p>{error}</p><div className="inline-actions"><button className="btn primary" onClick={() => void refresh()}>Retry</button>{isRemoteSession() && <button className="btn" onClick={() => { forgetRemoteSession(); window.location.reload(); }}>Clear Old Link</button>}</div></>}
       </main>
     );
   }

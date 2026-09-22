@@ -80,6 +80,8 @@ def test_remote_frontend_erases_fragment_and_reuses_shared_app() -> None:
     worker = (root / "public" / "service-worker.js").read_text(encoding="utf-8")
     assert "history.replaceState" in main
     assert "<App />" in remote
+    assert "invite ? null : storedCredential()" in remote
+    assert "djgoo-web-remembered" in remote
     assert "document.hidden" in app and "visibilitychange" in app
     assert "/api/system" not in remote and "/api/system" not in transport
     assert "actor_role" not in transport and "is_admin" not in transport

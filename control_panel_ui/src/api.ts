@@ -24,6 +24,13 @@ export function updateRemoteProfile(profile: Partial<DjGooProfile>) {
 
 export function isRemoteSession() { return Boolean(remoteCredential); }
 
+export function forgetRemoteSession() {
+  remoteCredential = null;
+  remoteProfile = null;
+  window.sessionStorage.removeItem("djgoo-web-session");
+  window.localStorage.removeItem("djgoo-web-remembered");
+}
+
 export function savedProfile(): DjGooProfile | null {
   if (remoteProfile) return remoteProfile;
   try {
