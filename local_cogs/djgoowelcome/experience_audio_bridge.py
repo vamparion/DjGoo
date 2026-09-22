@@ -648,7 +648,7 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                 "mode": mode,
             }
 
-        if intent == "mini_stop_radio":
+        if intent in {"mini_stop_radio", "stop_radio"}:
             return await self._stop_radio_keep_requests(audio, ctx)
 
         try:

@@ -43,7 +43,7 @@ async function exchange(endpoint: Pick<WebCredential, "webhook_url" | "room_id" 
   const envelope = { protocol: 1, room_id: endpoint.room_id, request_id: requestId, client_public_key: b64e(clientPublic), nonce: b64e(nonce), ciphertext: b64e(ciphertext) };
   const content = REQUEST + b64e(enc.encode(JSON.stringify(envelope)));
   if (content.length > MAX_CONTENT) throw new Error("Encrypted request is too large");
-  const created = await fetch(endpoint.webhook_url + "?wait=true", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content, allowed_mentions: { parse: [] } }) });
+  const created = await fetch(endpoint.webhook_url + "?wait=true", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content, flags: 4096, allowed_mentions: { parse: [] } }) });
   if (!created.ok) throw new Error(`Discord transport failed (${created.status})`);
   const messageId = String((await created.json()).id || "");
   const messageUrl = `${endpoint.webhook_url}/messages/${messageId}`;
@@ -82,4 +82,3 @@ export async function pairWeb(invite: string, deviceName: string): Promise<{ cre
 
 export const remoteState = (c: WebCredential) => exchange(c, "web/state", { device_token: c.device_token, device_id: c.device_id, guild_id: c.guild_id });
 export const remoteCommand = (c: WebCredential, intent: string, values: Record<string, unknown> = {}) => exchange(c, "command", { ...values, intent, command_id: crypto.randomUUID(), created_at: Date.now() / 1000, confidence: 1, device_token: c.device_token, device_id: c.device_id, guild_id: c.guild_id });
-

@@ -21,9 +21,12 @@ LIFECYCLE_STATES = {
 }
 TERMINAL_STATES = {"ended", "skipped", "failed"}
 ALLOWED_TRANSITIONS = {
-    "searching": {"queued", "loading", "failed"},
+    # Player events can legitimately overtake command acknowledgements. A stop,
+    # replacement, or very short track may end while its operation still reads
+    # searching/loading, so both states accept the externally verified ending.
+    "searching": {"queued", "loading", "ended", "failed"},
     "queued": {"loading", "playing", "skipped", "failed"},
-    "loading": {"queued", "playing", "skipped", "failed"},
+    "loading": {"queued", "playing", "ended", "skipped", "failed"},
     "playing": {"ended", "skipped", "failed"},
     "ended": set(),
     "skipped": set(),

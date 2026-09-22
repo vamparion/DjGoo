@@ -33,6 +33,19 @@ def test_lifecycle_rejects_impossible_transition(tmp_path) -> None:
         store.transition(42, operation, "playing")
 
 
+@pytest.mark.parametrize("prior", ["searching", "loading"])
+def test_lifecycle_accepts_verified_end_during_player_race(tmp_path, prior: str) -> None:
+    store = PlaybackLifecycleStore(tmp_path / "lifecycle.json")
+    operation = store.begin(42, intent="stop_radio", source="web")
+    if prior == "loading":
+        store.transition(42, operation, "loading", reason="Stopping radio")
+
+    final = store.transition(42, operation, "ended", reason="Player confirmed stop")
+
+    assert final["state"] == "ended"
+    assert store.latest(42)["state"] == "ended"
+
+
 def test_failures_remain_available_for_diagnostics(tmp_path) -> None:
     store = PlaybackLifecycleStore(tmp_path / "lifecycle.json")
     operation = store.begin(42, intent="skip", source="mini_player")

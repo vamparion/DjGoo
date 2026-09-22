@@ -307,6 +307,21 @@ class GameFirstDjGooAudioBridge(EnhancedDjGooAudioBridge):
                 if recommended
                 else await self._radio_fallback_query(random.choice(seeds))
             )
+            # Recommendation lookup is asynchronous. The station may have been
+            # stopped while it was running, so never enqueue from the stale
+            # snapshot captured at the beginning of this top-up.
+            active_station = self.stations.get_active(guild_id)
+            if (
+                active_station is None
+                or str(active_station.get("id") or active_station.get("seed") or "")
+                != str(station.get("id") or station.get("seed") or "")
+            ):
+                log_event(
+                    "radio.top_up.skipped",
+                    guild_id=guild_id,
+                    reason="station_stopped_during_recommendation",
+                )
+                return
             log_event(
                 "radio.top_up.play",
                 guild_id=guild_id,
