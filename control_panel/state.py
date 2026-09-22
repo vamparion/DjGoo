@@ -124,23 +124,61 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
 
 
 def build_remote_state_snapshot(project_root: Path, *, privileged: bool = False) -> Dict[str, Any]:
-    """Return the shared control state, excluding host-only diagnostics by default."""
-    state = build_state_snapshot(project_root)
-    state["protocol"] = 2
-    state["generated_at"] = time.time()
-    # Raw process logs can contain machine paths. The readable event timeline and
-    # component health are enough for paired administrators to diagnose remotely.
-    state["logs"] = state.get("logs", {}) if privileged else {}
-    if not privileged:
-        gaming = state.get("gaming") if isinstance(state.get("gaming"), dict) else {}
-        gaming["profiles"] = []
-        _remove_private_track_sources(state)
-    state["capabilities"] = {
+    """Return the immediately useful state that fits Discord's inline relay."""
+    full = build_state_snapshot(project_root)
+    gaming = dict(full.get("gaming") or {})
+    gaming["profiles"] = list(gaming.get("profiles") or []) if privileged else []
+    playlists = [
+        {
+            "name": item.get("name"),
+            "track_count": item.get("track_count", 0),
+            "description": item.get("description", ""),
+            "artwork_url": item.get("artwork_url", ""),
+            "folder": item.get("folder", ""),
+            "tags": item.get("tags", []),
+            "smart_query": item.get("smart_query", ""),
+            "tracks": [],
+        }
+        for item in list(full.get("playlists") or [])[:50]
+        if isinstance(item, dict)
+    ]
+    state = {
+        "protocol": 3,
+        "generated_at": time.time(),
+        "playback": full.get("playback") or {},
+        "queue": list(full.get("queue") or [])[:12],
+        "playlists": playlists,
+        "stations": [],
+        "active_station": None,
+        "health": full.get("health") or {},
+        "health_summary": full.get("health_summary") or {},
+        "gaming": gaming,
+        "logs": {},
+        "timeline": list(full.get("timeline") or [])[:4] if privileged else [],
+        "history": [],
+        "capabilities": {
         "system_management": False,
         "diagnostics": privileged,
         "library_management": privileged,
         "settings_management": privileged,
+        },
     }
+    active = full.get("active_station")
+    if isinstance(active, dict):
+        station = {
+            key: active.get(key)
+            for key in (
+                "id", "name", "seed", "seed_type", "liked_count",
+                "more_like_count", "less_like_count", "banned_count",
+                "skipped_count", "familiar_percent", "balanced_percent",
+                "discovery_percent", "artist_spacing", "song_spacing",
+                "last_selection_reason", "last_drift_score", "last_track",
+            )
+        }
+        station.update({key: [] for key in ("liked", "more_like", "less_like", "banned", "skipped", "played", "recent", "feedback_history", "snapshots", "seed_examples")})
+        state["active_station"] = station
+        state["stations"] = [station]
+    _remove_private_track_sources(state)
     return state
 
 
