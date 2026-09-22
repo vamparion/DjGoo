@@ -40,7 +40,7 @@ async def test_web_pairing_is_typed_single_use_and_revocable(tmp_path: Path) -> 
 async def test_web_capabilities_and_replay_are_enforced_host_side(tmp_path: Path) -> None:
     pairing = store(tmp_path)
     identity, token = web_device(pairing)
-    async def authorize(_identity, _intent): return AuthorizationResult(True, voice_channel_id=99)
+    async def authorize(_identity, _intent): return AuthorizationResult(True, voice_channel_id=99, actor_role="host")
     async def state(_identity): return {"playback": {}, "queue": []}
     processor = AuthenticatedCommandProcessor(pairing, tmp_path / "queue.jsonl", authorize, state)
     command_id = str(uuid.uuid4())
@@ -49,7 +49,8 @@ async def test_web_capabilities_and_replay_are_enforced_host_side(tmp_path: Path
     assert (await processor.accept(token, payload))["duplicate"] is True
     queued = json.loads((tmp_path / "queue.jsonl").read_text().strip())
     assert queued["user_id"] == 12 and queued["guild_id"] == 34
-    assert "actor_role" not in queued and "is_admin" not in queued
+    assert queued["actor_role"] == "host"
+    assert "is_admin" not in queued
     with pytest.raises(CommandRejected, match="not enabled"):
         await processor.accept(token, {**payload, "command_id": str(uuid.uuid4()), "intent": "stop"})
     with pytest.raises(CommandRejected, match="not paired"):
