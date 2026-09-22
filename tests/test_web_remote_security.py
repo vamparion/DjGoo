@@ -58,26 +58,29 @@ async def test_web_capabilities_and_replay_are_enforced_host_side(tmp_path: Path
     assert (await processor.remote_state(token))["queue"] == []
 
 
-def test_remote_state_excludes_administrative_and_private_data(tmp_path: Path) -> None:
+def test_remote_state_matches_control_surface_but_excludes_private_data(tmp_path: Path) -> None:
     (tmp_path / "data").mkdir(); (tmp_path / "logs").mkdir()
     (tmp_path / "data" / "djgoo-now-playing.json").write_text(json.dumps({"current": {"title": "Song", "artist": "Artist"}, "queue": [{"id": "1", "title": "Next", "uri": "https://secret.invalid"}]}))
     (tmp_path / "logs" / "startup.log").write_text("bot_token=secret C:/private/path")
     state = build_remote_state_snapshot(tmp_path)
     encoded = json.dumps(state)
     assert state["playback"]["title"] == "Song"
-    assert "logs" not in state and "health" not in state
+    assert state["logs"] == {} and "health" in state
+    assert "playlists" in state and "stations" in state and "gaming" in state
     assert "secret.invalid" not in encoded and "private/path" not in encoded and "bot_token" not in encoded
     assert state["capabilities"]["system_management"] is False
 
 
-def test_remote_frontend_erases_fragment_and_avoids_admin_api() -> None:
+def test_remote_frontend_erases_fragment_and_reuses_shared_app() -> None:
     root = Path(__file__).resolve().parents[1] / "control_panel_ui"
     main = (root / "src" / "main.tsx").read_text(encoding="utf-8")
     remote = (root / "src" / "RemoteApp.tsx").read_text(encoding="utf-8")
+    app = (root / "src" / "App.tsx").read_text(encoding="utf-8")
     transport = (root / "src" / "remoteTransport.ts").read_text(encoding="utf-8")
     worker = (root / "public" / "service-worker.js").read_text(encoding="utf-8")
     assert "history.replaceState" in main
-    assert "document.hidden" in remote and "visibilitychange" in remote
+    assert "<App />" in remote
+    assert "document.hidden" in app and "visibilitychange" in app
     assert "/api/system" not in remote and "/api/system" not in transport
     assert "actor_role" not in transport and "is_admin" not in transport
     assert 'url.origin === "https://discord.com"' in worker

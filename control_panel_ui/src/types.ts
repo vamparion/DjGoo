@@ -44,6 +44,9 @@ export type HealthItem = {
 };
 
 export type ControlState = {
+  generated_at?: number;
+  session?: { role: string; display_name: string; discord_user_id?: string; guild_id?: string; device_id?: string };
+  capabilities?: { system_management?: boolean; diagnostics?: boolean; library_management?: boolean; settings_management?: boolean };
   playback: {
     title: string;
     artist: string;

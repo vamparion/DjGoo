@@ -35,6 +35,7 @@ WEB_INTENT_CAPABILITY = {
     "play": "playback.request",
     "play_now": "playback.request",
     "queue_request": "playback.request",
+    "play_playlist": "playback.request",
     "queue": "queue.read",
     "skip": "playback.vote_skip",
     "pause": "playback.control",
@@ -48,6 +49,21 @@ WEB_INTENT_CAPABILITY = {
     "station_more_like_current": "radio.feedback",
     "station_less_like_current": "radio.feedback",
     "station_ban_current": "radio.feedback",
+    "toggle_pause": "playback.control",
+    "volume_up": "playback.control",
+    "volume_down": "playback.control",
+    "mini_queue_remove": "playback.control",
+    "mini_queue_remove_many": "playback.control",
+    "mini_queue_reorder": "playback.control",
+    "mini_queue_shuffle": "playback.control",
+    "mini_queue_shuffle_requests": "playback.control",
+    "mini_queue_clear": "playback.control",
+    "mini_queue_undo": "playback.control",
+    "mini_playlist_add_current": "playback.request",
+    "remote_playlist_action": "playback.control",
+    "remote_station_action": "radio.control",
+    "remote_settings": "playback.control",
+    "remote_player_role": "playback.control",
 }
 
 
@@ -133,7 +149,7 @@ class AuthenticatedCommandProcessor:
             raise CommandRejected(401, "Unknown or revoked device")
         if identity.device_type != "web" or "state.read" not in identity.capabilities:
             raise CommandRejected(403, "This device cannot read remote player state")
-        authorization = await self.authorize(identity, "queue")
+        authorization = await self.authorize(identity, "state.read")
         if not authorization.allowed:
             raise CommandRejected(403, authorization.reason or "Remote state is not authorized")
         if self.state_provider is None:
@@ -203,6 +219,7 @@ class AuthenticatedCommandProcessor:
             "value": payload.get("value"),
             "confidence": confidence,
             "raw": str(payload.get("raw") or "")[:1000],
+            "payload": payload.get("payload") if isinstance(payload.get("payload"), dict) else {},
         }
         with self._queue_lock:
             append_queue_item(self.queue_path, item)

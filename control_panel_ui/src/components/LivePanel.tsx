@@ -6,6 +6,7 @@ export function LivePanel({ state, send }: PanelProps) {
   const station = playback.station || state.active_station?.name || "No active station";
   const source = playback.source || (state.active_station?.last_track ? "Station memory" : "Idle");
   const hasTrack = title !== "Ready for a song";
+  const canRecover = state.capabilities?.system_management !== false;
 
   return (
     <section className="panel hero">
@@ -32,7 +33,7 @@ export function LivePanel({ state, send }: PanelProps) {
           <button className="btn" onClick={() => void send("queue")}>Queue</button>
           <button className="btn" onClick={() => void send("volume_down")}>Vol -</button>
           <button className="btn" onClick={() => void send("volume_up")}>Vol +</button>
-          <button className="btn danger" onClick={() => void send("reset")}>Reset</button>
+          {canRecover && <button className="btn danger" onClick={() => void send("reset")}>Reset</button>}
         </div>
         <div className="hint-strip">
           <button onClick={() => void send("play_next", { query: "sandstorm" })}>Play Sandstorm</button>

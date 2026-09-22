@@ -123,32 +123,35 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
     }
 
 
-def build_remote_state_snapshot(project_root: Path) -> Dict[str, Any]:
-    """Return the deliberately narrow state exposed to paired web devices."""
+def build_remote_state_snapshot(project_root: Path, *, privileged: bool = False) -> Dict[str, Any]:
+    """Return the shared control state, excluding host-only diagnostics by default."""
     state = build_state_snapshot(project_root)
-    playback = state.get("playback") if isinstance(state.get("playback"), dict) else {}
-    queue = state.get("queue") if isinstance(state.get("queue"), list) else []
-    return {
-        "protocol": 1,
-        "generated_at": time.time(),
-        "playback": {
-            key: playback.get(key)
-            for key in ("title", "artist", "station", "remaining", "queue_count", "requester", "state")
-        },
-        "queue": [
-            {
-                key: item.get(key)
-                for key in ("id", "title", "artist", "requester", "request_type", "duration")
-            }
-            for item in queue[:200]
-            if isinstance(item, dict)
-        ],
-        "capabilities": {
-            "system_management": False,
-            "diagnostics": False,
-            "secrets": False,
-        },
+    state["protocol"] = 2
+    state["generated_at"] = time.time()
+    # Raw process logs can contain machine paths. The readable event timeline and
+    # component health are enough for paired administrators to diagnose remotely.
+    state["logs"] = state.get("logs", {}) if privileged else {}
+    if not privileged:
+        gaming = state.get("gaming") if isinstance(state.get("gaming"), dict) else {}
+        gaming["profiles"] = []
+        _remove_private_track_sources(state)
+    state["capabilities"] = {
+        "system_management": False,
+        "diagnostics": privileged,
+        "library_management": privileged,
+        "settings_management": privileged,
     }
+    return state
+
+
+def _remove_private_track_sources(value: Any) -> None:
+    if isinstance(value, dict):
+        value.pop("uri", None)
+        for child in value.values():
+            _remove_private_track_sources(child)
+    elif isinstance(value, list):
+        for child in value:
+            _remove_private_track_sources(child)
 
 
 def _diagnostic_timeline(project_root: Path) -> List[Dict[str, str]]:

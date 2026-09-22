@@ -995,3 +995,10 @@ p {
     padding: 12px;
   }
 }
+/* The desktop Mini Player is this same interface in a compact browser shell. */
+.compact-mode { min-height: 100vh; }
+.compact-mode .content { grid-template-columns: minmax(0, 1fr); padding: 10px; }
+.compact-mode .topbar { position: static; padding: 10px 12px; }
+.compact-mode .brand span, .compact-mode .top-actions { display: none; }
+.compact-mode .hero { min-height: 0; }
+.compact-mode .bottom { position: sticky; }

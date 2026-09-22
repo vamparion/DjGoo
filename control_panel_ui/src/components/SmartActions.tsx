@@ -4,16 +4,16 @@ type Props = PanelProps & {
   mode?: "live" | "radio";
 };
 
-export function SmartActions({ send, mode = "live" }: Props) {
+export function SmartActions({ state, send, mode = "live" }: Props) {
   const radioMode = mode === "radio";
   return (
     <section className="smart-row">
-      <div className="smart">
+      {state.capabilities?.system_management !== false && <div className="smart">
         <strong>{radioMode ? "Shape this station" : "One-tap playlist add"}</strong>
         <p>{radioMode ? "Every rating stays local to this station." : "Current track goes to your most-used lists."}</p>
         <button className="btn" onClick={() => void send("save_current", { playlist: "chill" })}>Chill</button>
         <button className="btn" onClick={() => void send("save_current", { playlist: "80s" })}>80s</button>
-      </div>
+      </div>}
       <div className="smart">
         <strong>Fix bad radio</strong>
         <p>Ban current, skip it, and let station mode replace it.</p>

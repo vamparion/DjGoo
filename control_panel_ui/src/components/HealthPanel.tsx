@@ -24,7 +24,7 @@ export function HealthPanel({ state, send }: PanelProps) {
         ))}
       </div>
       <div className="health-actions">
-        <button className="btn danger" onClick={() => void send("reset")}>Reset DjGoo</button>
+        {state.capabilities?.system_management !== false && <button className="btn danger" onClick={() => void send("reset")}>Reset DjGoo</button>}
         <button className="btn" onClick={() => void send("queue")}>Check Queue</button>
       </div>
     </section>

@@ -152,7 +152,7 @@ class DjGooControlCenter(DjGooLauncher):
         ).pack(side=LEFT, padx=(0, 16))
         self._button(
             row,
-            "Mini player",
+            "Open DjGoo",
             self.open_mini_player,
         ).pack(side=LEFT, padx=(0, 7))
         self._button(
@@ -191,12 +191,6 @@ class DjGooControlCenter(DjGooLauncher):
             tool_row,
             "Check for updates",
             self.check_updates,
-        ).pack(side=LEFT, padx=(0, 7))
-        self._button(
-            tool_row,
-            "Radio & Library",
-            self.open_radio_library,
-            accent=True,
         ).pack(side=LEFT, padx=(0, 7))
 
         coach = Frame(
@@ -413,7 +407,7 @@ class DjGooControlCenter(DjGooLauncher):
             )
             self.log("Opened Mini Player.")
             return
-        source = self.layout.root / "launcher" / "djgoo_overlay.py"
+        source = self.layout.root / "launcher" / "djgoo_web_shell.py"
         if source.exists():
             subprocess.Popen(
                 [str(self.layout.runtime_pythonw), str(source)],

@@ -14,10 +14,9 @@ def main() -> int:
     os.environ["DJGOO_APP_ROOT"] = str(app)
     cleanup_legacy_layout(root)
 
-    import launcher.djgoo_overlay as overlay
+    from launcher.djgoo_web_shell import main as open_compact_player
 
-    overlay.application_root = lambda: root
-    return int(overlay.main())
+    return int(open_compact_player())
 
 
 if __name__ == "__main__":

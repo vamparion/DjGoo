@@ -122,7 +122,7 @@ def build_launcher(output: Path) -> Path:
 def build_mini_player(output: Path) -> Path:
     return build_gui_executable(
         output,
-        source=PROJECT_ROOT / "launcher" / "djgoo_overlay.py",
+        source=PROJECT_ROOT / "launcher" / "djgoo_web_shell.py",
         name="DjGoo Mini Player",
     )
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { createProfile, getState, resetDjGoo, savedProfile, sendCommand } from "./api";
+import { createProfile, getState, isRemoteSession, resetDjGoo, savedProfile, sendCommand } from "./api";
 import { CommandBar } from "./components/CommandBar";
 import { HealthPanel } from "./components/HealthPanel";
 import { LivePanel } from "./components/LivePanel";
@@ -20,15 +20,21 @@ const views = ["Live", "Find", "Radio", "Lists", "Players", "Settings", "Logs"] 
 type View = (typeof views)[number];
 
 export function App() {
+  const compact = new URLSearchParams(window.location.search).get("view") === "compact";
   const [state, setState] = useState<ControlState | null>(null);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("Ready");
   const [activeView, setActiveView] = useState<View>("Live");
   const [profile, setProfile] = useState<DjGooProfile | null>(() => savedProfile());
+  const role = state?.session?.role || profile?.role || "guest";
+  const canManage = role === "host" || role === "moderator";
+  const visibleViews = views.filter((view) => canManage || !["Players", "Settings", "Logs"].includes(view));
 
   async function refresh() {
     try {
-      setState(await getState());
+      const next = await getState();
+      setState(next);
+      if (next.session) setProfile({ id: next.session.discord_user_id || "remote", token: "", username: next.session.display_name, role: next.session.role });
       setError("");
     } catch (err) {
       setError(String((err as Error).message || err));
@@ -37,8 +43,14 @@ export function App() {
 
   useEffect(() => {
     void refresh();
-    const timer = window.setInterval(refresh, 3000);
-    return () => window.clearInterval(timer);
+    let timer = 0;
+    const schedule = () => {
+      window.clearInterval(timer);
+      if (!document.hidden) timer = window.setInterval(refresh, isRemoteSession() ? 15000 : 3000);
+    };
+    document.addEventListener("visibilitychange", schedule);
+    schedule();
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", schedule); };
   }, []);
 
   async function send(action: string, payload: Record<string, unknown> = {}) {
@@ -97,17 +109,17 @@ export function App() {
     );
   }
 
-  if (!profile) {
+  if (!profile && !isRemoteSession()) {
     return <Onboarding submit={async (username) => setProfile(await createProfile(username))} />;
   }
 
   return (
-    <div className={`app ${state.gaming.settings.ranked_mode ? "ranked-mode" : ""}`}>
+    <div className={`app ${state.gaming.settings.ranked_mode ? "ranked-mode" : ""} ${isRemoteSession() ? "remote-mode" : ""} ${compact ? "compact-mode" : ""}`}>
       <CommandBar send={send} />
       {error && <div className="banner error">{error}</div>}
       <main className="content">
-        <nav className="rail" aria-label="DjGoo tools">
-          {views.map((view) => (
+        {!compact && <nav className="rail" aria-label="DjGoo tools">
+          {visibleViews.map((view) => (
             <button
               className={activeView === view ? "active" : ""}
               key={view}
@@ -117,15 +129,15 @@ export function App() {
               {view}
             </button>
           ))}
-        </nav>
+        </nav>}
         <section className="stack">
-          {renderView()}
+          {compact ? <><LivePanel state={state} send={send} /><QueuePanel state={state} send={send} /></> : renderView()}
         </section>
-        <aside className="side">
+        {!compact && <aside className="side">
           <HealthPanel state={state} send={send} />
           <PlaylistPanel state={state} send={send} compact />
-          <LogsPanel state={state} send={send} />
-        </aside>
+          {canManage && <LogsPanel state={state} send={send} />}
+        </aside>}
       </main>
       <PersistentFooter state={state} send={send} status={status} />
     </div>

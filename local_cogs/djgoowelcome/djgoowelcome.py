@@ -68,6 +68,10 @@ DESTRUCTIVE_REMOTE_INTENTS = {
     "volume",
     "volume_up",
     "volume_down",
+    "remote_playlist_action",
+    "remote_station_action",
+    "remote_settings",
+    "remote_player_role",
 }
 JOINING_REMOTE_INTENTS = {
     "play",
@@ -201,14 +205,14 @@ class DjGooWelcome(commands.Cog):
             return AuthorizationResult(False, "The paired Discord member is not available")
         voice_state = getattr(member, "voice", None)
         member_channel = getattr(voice_state, "channel", None)
-        if member_channel is None:
+        if member_channel is None and intent != "state.read":
             return AuthorizationResult(False, "Join a Discord voice channel before using DjGoo Voice")
 
         voice_client = getattr(guild, "voice_client", None)
         bot_channel = getattr(voice_client, "channel", None)
-        if bot_channel is not None and int(bot_channel.id) != int(member_channel.id):
+        if bot_channel is not None and member_channel is not None and int(bot_channel.id) != int(member_channel.id):
             return AuthorizationResult(False, "Join the same voice channel as DjGoo")
-        if bot_channel is None and intent not in JOINING_REMOTE_INTENTS:
+        if bot_channel is None and intent != "state.read" and intent not in JOINING_REMOTE_INTENTS:
             return AuthorizationResult(False, "Start a song or radio station before using that control")
 
         permissions = getattr(member, "guild_permissions", None)
@@ -224,7 +228,6 @@ class DjGooWelcome(commands.Cog):
         )
 
     async def _remote_state(self, identity: DeviceIdentity) -> Dict[str, Any]:
-        state = await asyncio.to_thread(build_remote_state_snapshot, PROJECT_ROOT)
         guild = self.bot.get_guild(identity.guild_id)
         member = guild.get_member(identity.user_id) if guild is not None else None
         permissions = getattr(member, "guild_permissions", None)
@@ -234,6 +237,11 @@ class DjGooWelcome(commands.Cog):
             and int(member.id) == int(guild.owner_id)
         )
         is_manager = is_owner or bool(getattr(permissions, "manage_guild", False))
+        state = await asyncio.to_thread(
+            build_remote_state_snapshot,
+            PROJECT_ROOT,
+            privileged=is_manager,
+        )
         state["session"] = {
             "role": "host" if is_owner else ("moderator" if is_manager else "member"),
             "display_name": str(getattr(member, "display_name", "") or "Discord member"),

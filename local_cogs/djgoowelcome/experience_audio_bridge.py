@@ -118,6 +118,8 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
 
     async def _handle_with_context(self, item: dict[str, Any]) -> Any:
         intent = str(item.get("intent") or "")
+        if intent.startswith("remote_"):
+            return self._handle_remote_management(item)
         if intent in {
             "mini_search",
             "mini_queue_remove",
@@ -183,6 +185,51 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                         ),
                     )
         return result
+
+    def _handle_remote_management(self, item: dict[str, Any]) -> dict[str, Any]:
+        intent = str(item.get("intent") or "")
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        role = str(item.get("actor_role") or "member")
+        if role not in {"host", "moderator"}:
+            return {"status": "failed", "message": "DjGoo moderator access is required."}
+        if intent == "remote_settings":
+            result = self.gaming.update_settings(0, payload.get("settings") or {}, actor_role=role)
+            return {"status": "completed", "message": "Gaming settings saved.", "settings": result}
+        if intent == "remote_player_role":
+            if role != "host":
+                return {"status": "failed", "message": "Only the DjGoo host can change player roles."}
+            result = self.gaming.set_role(0, str(payload.get("profile_id") or ""), str(payload.get("role") or "member"), actor_role=role)
+            return {"status": "completed", "message": "Player permissions saved.", "profile": result}
+        if intent == "remote_station_action":
+            action = str(payload.get("action") or "")
+            seed = str(payload.get("seed") or "")
+            if action == "settings": result = self.stations.update_settings(seed, payload.get("settings") or {})
+            elif action == "undo": result = self.stations.undo_feedback(seed, str(payload.get("feedback") or ""))
+            elif action == "snapshot": result = self.stations.create_snapshot(seed, str(payload.get("name") or ""))
+            elif action == "restore": result = self.stations.restore_snapshot(seed, str(payload.get("snapshot_id") or ""))
+            elif action == "clone": result = self.stations.clone(seed, str(payload.get("new_seed") or ""))
+            elif action == "merge": result = self.stations.merge([str(value) for value in payload.get("seeds", [])], str(payload.get("new_seed") or ""))
+            else: return {"status": "failed", "message": "Unknown station action."}
+            return {"status": "completed", "message": "Station updated.", "result": result}
+        if intent == "remote_playlist_action":
+            action = str(payload.get("action") or "")
+            name = str(payload.get("playlist") or "")
+            if action == "metadata": result = self.playlists.update_metadata(name, payload.get("metadata") or {})
+            elif action == "reorder": result = {"name": self.playlists.reorder_tracks(name, [str(value) for value in payload.get("track_ids", [])])}
+            elif action == "cleanup": result = self.playlists.cleanup(name)
+            elif action == "replace": result = {"name": self.playlists.replace_track(name, str(payload.get("track_id") or ""), payload.get("replacement") or {})}
+            elif action == "remove": result = dict(zip(("name", "removed"), self.playlists.remove_tracks(name, [str(value) for value in payload.get("track_ids", [])])))
+            elif action == "import":
+                reviewed = [value for value in payload.get("tracks", []) if isinstance(value, dict)]
+                changes = [self.playlists.add_track(name, value) for value in reviewed]
+                result = {"name": name, "added": sum(int(value.added) for value in changes), "duplicates": sum(int(not value.added) for value in changes)}
+            elif action == "from-history":
+                cutoff = time.time() - max(60, int(payload.get("seconds") or 3600))
+                changes = [self.playlists.add_track(name, value) for value in reversed(self.mini_history.entries()) if float(value.get("played_at") or 0) >= cutoff]
+                result = {"name": name, "added": sum(int(value.added) for value in changes), "duplicates": sum(int(not value.added) for value in changes)}
+            else: return {"status": "failed", "message": "Unknown playlist action."}
+            return {"status": "completed", "message": "Playlist updated.", "result": result}
+        return {"status": "failed", "message": "Unknown DjGoo management action."}
 
     def _operation(self) -> dict[str, Any]:
         return dict(_EXPERIENCE_COMMAND.get() or {})
