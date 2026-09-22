@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from voice import secure_store
+from voice.command_gateway import AuthorizationResult
 from voice.remote_transport import (
     RemoteCredential,
     load_credential,
@@ -14,6 +15,11 @@ from voice.remote_transport import (
     save_credential,
 )
 from voice.tls_identity import certificate_fingerprint, ensure_tls_identity
+
+
+def test_gateway_authorization_carries_server_derived_role() -> None:
+    result = AuthorizationResult(True, voice_channel_id=42, actor_role="host")
+    assert result.actor_role == "host"
 
 
 def test_gateway_requires_https() -> None:

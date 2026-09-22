@@ -70,7 +70,12 @@ export function App() {
   }
 
   if (!state) {
-    return <main className="loading">Loading DjGoo...</main>;
+    return (
+      <main className="loading loading-state">
+        <strong>{error ? "DjGoo could not load" : "Loading DjGoo..."}</strong>
+        {error && <><p>{error}</p><button className="btn primary" onClick={() => void refresh()}>Retry</button></>}
+      </main>
+    );
   }
 
   function renderView() {

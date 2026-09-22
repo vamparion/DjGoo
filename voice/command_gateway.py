@@ -30,6 +30,7 @@ class AuthorizationResult:
     allowed: bool
     reason: str = ""
     voice_channel_id: int | None = None
+    actor_role: str = "member"
 
 
 AuthorizeCallback = Callable[[DeviceIdentity, str], Awaitable[AuthorizationResult]]
