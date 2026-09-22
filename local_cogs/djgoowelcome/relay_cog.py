@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import aiohttp
 from redbot.core import commands
 
 from voice.command_acceptance import AuthenticatedCommandProcessor
@@ -341,9 +342,8 @@ class DjGooRelay(commands.Cog):
         self,
         ctx: commands.Context,
     ) -> PairingEndpoint | None:
-        if not self.discord_webhook_url:
-            if not await self._ensure_discord_webhook(ctx):
-                return None
+        if not await self._ensure_discord_webhook(ctx):
+            return None
         return PairingEndpoint(
             transport="discord",
             endpoint=self.discord_webhook_url,
@@ -354,7 +354,7 @@ class DjGooRelay(commands.Cog):
         )
 
     async def web_invite(self, ctx: commands.Context) -> PairingInvite | None:
-        if not self.discord_webhook_url and not await self._ensure_discord_webhook(ctx):
+        if not await self._ensure_discord_webhook(ctx):
             return None
         capabilities = (
             "state.read", "queue.read", "playback.request", "playback.vote_skip",

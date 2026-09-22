@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from local_cogs.djgoowelcome.relay_cog import DjGooRelay
 
 
@@ -65,3 +67,37 @@ def test_saving_discord_bridge_preserves_existing_secrets(tmp_path: Path) -> Non
         "enabled": True,
         "webhook_url": webhook,
     }
+
+
+@pytest.mark.asyncio
+async def test_web_invite_revalidates_saved_discord_route() -> None:
+    relay = DjGooRelay.__new__(DjGooRelay)
+    relay.discord_webhook_url = "https://discord.com/api/webhooks/123/stale"
+    checked = False
+
+    async def ensure(_ctx) -> bool:
+        nonlocal checked
+        checked = True
+        return False
+
+    relay._ensure_discord_webhook = ensure
+
+    assert await relay.web_invite(SimpleNamespace()) is None
+    assert checked
+
+
+@pytest.mark.asyncio
+async def test_voice_invite_revalidates_saved_discord_route() -> None:
+    relay = DjGooRelay.__new__(DjGooRelay)
+    relay.discord_webhook_url = "https://discord.com/api/webhooks/123/stale"
+    checked = False
+
+    async def ensure(_ctx) -> bool:
+        nonlocal checked
+        checked = True
+        return False
+
+    relay._ensure_discord_webhook = ensure
+
+    assert await relay._discord_endpoint(SimpleNamespace()) is None
+    assert checked
