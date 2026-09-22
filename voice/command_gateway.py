@@ -237,6 +237,7 @@ class VoiceCommandGateway:
             "user_id": identity.user_id,
             "guild_id": identity.guild_id,
             "voice_channel_id": authorization.voice_channel_id,
+            "actor_role": authorization.actor_role,
             "intent": intent,
             "query": str(payload.get("query") or "")[:500],
             "playlist": str(payload.get("playlist") or "")[:200],

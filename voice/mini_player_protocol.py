@@ -30,6 +30,7 @@ def mini_player_command(
     return {
         "type": "command",
         "source": "mini_player",
+        "actor_role": "host",
         "protocol": PROTOCOL_VERSION,
         "created_at": time.time(),
         "command_id": identifier,

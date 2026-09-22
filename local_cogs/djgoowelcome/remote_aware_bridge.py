@@ -34,7 +34,7 @@ class RemoteAwareDjGooAudioBridge(GamingDjGooAudioBridge):
 
     def _context(self):
         item = _CURRENT_COMMAND.get()
-        if item and item.get("source") == "voice_remote":
+        if item and item.get("source") in {"voice_remote", "web_remote"}:
             try:
                 guild_id = int(item.get("guild_id") or 0)
                 user_id = int(item.get("user_id") or 0)

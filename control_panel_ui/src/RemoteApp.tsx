@@ -10,6 +10,7 @@ type RemoteState = {
   generated_at?: number;
   playback?: { title?: string; artist?: string; station?: string; remaining?: string; queue_count?: number; requester?: string; state?: string };
   queue?: RemoteTrack[];
+  session?: { role?: string; display_name?: string };
 };
 
 export function RemoteApp({ invite }: { invite: string }) {
@@ -47,7 +48,7 @@ export function RemoteApp({ invite }: { invite: string }) {
 
   return <main className="remote-shell">
     <header className="remote-header">
-      <div className="remote-brand"><div className="remote-brand-mark"><img src="./djgoo-mark.svg" alt=""/></div><div><strong>DjGoo</strong><small>Game session remote</small></div></div>
+      <div className="remote-brand"><div className="remote-brand-mark"><img src="./djgoo-mark.svg" alt=""/></div><div><strong>DjGoo</strong><small>{state?.session?.display_name || "Game session"} · {state?.session?.role || "remote"}</small></div></div>
       <button className="remote-icon-button" onClick={refresh} aria-label="Refresh" title="Refresh"><RefreshCw size={18}/></button>
     </header>
     {error && <div className="remote-alert">{error}</div>}

@@ -25,6 +25,7 @@ class AuthorizationResult:
     allowed: bool
     reason: str = ""
     voice_channel_id: int | None = None
+    actor_role: str = "member"
 
 
 AuthorizeCallback = Callable[[DeviceIdentity, str], Awaitable[AuthorizationResult]]
@@ -195,6 +196,7 @@ class AuthenticatedCommandProcessor:
             "user_id": identity.user_id,
             "guild_id": identity.guild_id,
             "voice_channel_id": authorization.voice_channel_id,
+            "actor_role": authorization.actor_role,
             "intent": intent,
             "query": str(payload.get("query") or "")[:500],
             "playlist": str(payload.get("playlist") or "")[:200],

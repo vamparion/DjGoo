@@ -212,13 +212,36 @@ class DjGooWelcome(commands.Cog):
             return AuthorizationResult(False, "Start a song or radio station before using that control")
 
         permissions = getattr(member, "guild_permissions", None)
-        is_manager = bool(getattr(permissions, "manage_guild", False)) or int(member.id) == int(guild.owner_id)
+        is_owner = int(member.id) == int(guild.owner_id)
+        is_manager = bool(getattr(permissions, "manage_guild", False)) or is_owner
+        actor_role = "host" if is_owner else ("moderator" if is_manager else "member")
         if intent in DESTRUCTIVE_REMOTE_INTENTS and not is_manager:
             return AuthorizationResult(False, "That command requires Manage Server or server ownership")
-        return AuthorizationResult(True, voice_channel_id=int(member_channel.id))
+        return AuthorizationResult(
+            True,
+            voice_channel_id=int(member_channel.id),
+            actor_role=actor_role,
+        )
 
-    async def _remote_state(self, _identity: DeviceIdentity) -> Dict[str, Any]:
-        return await asyncio.to_thread(build_remote_state_snapshot, PROJECT_ROOT)
+    async def _remote_state(self, identity: DeviceIdentity) -> Dict[str, Any]:
+        state = await asyncio.to_thread(build_remote_state_snapshot, PROJECT_ROOT)
+        guild = self.bot.get_guild(identity.guild_id)
+        member = guild.get_member(identity.user_id) if guild is not None else None
+        permissions = getattr(member, "guild_permissions", None)
+        is_owner = bool(
+            guild is not None
+            and member is not None
+            and int(member.id) == int(guild.owner_id)
+        )
+        is_manager = is_owner or bool(getattr(permissions, "manage_guild", False))
+        state["session"] = {
+            "role": "host" if is_owner else ("moderator" if is_manager else "member"),
+            "display_name": str(getattr(member, "display_name", "") or "Discord member"),
+            "discord_user_id": str(identity.user_id),
+            "guild_id": str(identity.guild_id),
+            "device_id": identity.device_id,
+        }
+        return state
 
     def _cooldown_key(self, member, channel) -> Tuple[int, int]:
         return (int(member.id), int(channel.id))
