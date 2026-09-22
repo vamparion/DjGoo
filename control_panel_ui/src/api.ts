@@ -140,6 +140,22 @@ export async function resetDjGoo() {
   return request<{ ok: true }>("/api/system/reset", { method: "POST", body: "{}" });
 }
 
+export type AudioInput = { id: number; name: string; available: boolean; default: boolean; error?: string };
+
+export async function getAudioInputs() {
+  if (remoteCredential) return { ok: true as const, devices: [] as AudioInput[], selected: "" };
+  return request<{ ok: true; devices: AudioInput[]; default_id: number }>("/api/audio-inputs");
+}
+
+export async function saveAudioInput(name: string) {
+  if (remoteCredential) throw new Error("Microphone selection is available on the host control panel.");
+  const profile = savedProfile();
+  return request<{ ok: true; input_device: string }>("/api/audio-input", {
+    method: "POST",
+    body: JSON.stringify({ token: profile?.token || "", name }),
+  });
+}
+
 function remoteIntent(action: string) {
   const mapped: Record<string, string> = {
     play_next: "play",

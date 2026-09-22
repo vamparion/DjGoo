@@ -4,6 +4,8 @@ import argparse
 import json
 import mimetypes
 import socket
+import subprocess
+import os
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -45,6 +47,13 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
             return 200, ok({"service": "djgoo-control-panel"})
         if parsed.path == "/api/state":
             return 200, ok({"state": build_state_snapshot(cls.root)})
+        if parsed.path == "/api/audio-inputs":
+            python = cls.root / ".voice-venv" / "Scripts" / "python.exe"
+            helper = cls.root / "tools" / "list_audio_inputs.py"
+            result = subprocess.run([str(python), str(helper)], cwd=cls.root, capture_output=True, text=True, timeout=20)
+            if result.returncode != 0:
+                return 503, error((result.stderr or "Voice input scan failed")[-500:], status=503)
+            return 200, ok(json.loads(result.stdout))
         if parsed.path == "/api/search":
             query = _query_param(parsed.query, "q")
             if not query.strip():
@@ -87,6 +96,22 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
             actor_role = str((profile or {}).get("role") or ("host" if is_local else "guest"))
             if path == "/api/settings":
                 return 200, ok({"settings": gaming.update_settings(0, payload.get("settings") or {}, actor_role=actor_role)})
+            if path == "/api/audio-input":
+                if not is_local or actor_role != "host":
+                    raise PermissionError("Only the local DjGoo host can change the microphone")
+                name = str(payload.get("name") or "").strip()
+                if not name:
+                    raise ValueError("Choose an available microphone")
+                secrets_path = cls.root / "config" / "secrets.json"
+                secrets = json.loads(secrets_path.read_text(encoding="utf-8-sig"))
+                voice = secrets.setdefault("voice", {})
+                voice["input_device"] = name
+                temporary = secrets_path.with_suffix(".json.tmp")
+                temporary.write_text(json.dumps(secrets, indent=2) + "\n", encoding="utf-8")
+                os.replace(temporary, secrets_path)
+                from tools.djgoo_stack import control_request
+                recovery = control_request("reset", timeout=2.0)
+                return 200, ok({"input_device": name, "recovery": recovery})
             if path == "/api/profile/role":
                 return 200, ok({"profile": gaming.set_role(0, str(payload.get("profile_id") or ""), str(payload.get("role") or "member"), actor_role=actor_role)})
             if path == "/api/command":

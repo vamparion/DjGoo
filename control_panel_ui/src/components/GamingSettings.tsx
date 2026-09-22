@@ -1,12 +1,23 @@
-import { useState } from "react";
-import { saveGamingSettings } from "../api";
+import { useEffect, useState } from "react";
+import { getAudioInputs, isRemoteSession, saveAudioInput, saveGamingSettings, type AudioInput } from "../api";
 import type { ControlState } from "../types";
 
 type Props = { state: ControlState; refresh: () => Promise<void>; host: boolean };
 
 export function GamingSettings({ state, refresh, host }: Props) {
   const [busy, setBusy] = useState(false);
+  const [inputs, setInputs] = useState<AudioInput[]>([]);
+  const [microphone, setMicrophone] = useState("");
+  const [voiceStatus, setVoiceStatus] = useState("");
   const settings = state.gaming.settings;
+  useEffect(() => {
+    if (isRemoteSession() || !host) return;
+    void getAudioInputs().then((data) => {
+      setInputs(data.devices);
+      const preferred = data.devices.find((item) => item.available && item.name.includes("Arctis Nova 7")) || data.devices.find((item) => item.available);
+      if (preferred) setMicrophone(preferred.name);
+    }).catch((error) => setVoiceStatus(String(error.message || error)));
+  }, [host]);
   async function update(key: string, value: unknown) {
     setBusy(true);
     try { await saveGamingSettings({ [key]: value }); await refresh(); } finally { setBusy(false); }
@@ -18,6 +29,7 @@ export function GamingSettings({ state, refresh, host }: Props) {
     <section className="panel settings-panel">
       <div className="panel-title-row"><div><h2>Gaming Policy</h2><p>Host controls applied to Discord, voice, desktop, and phones.</p></div><span className="role-badge">{host ? "Host" : "View only"}</span></div>
       <div className="settings-grid">
+        {!isRemoteSession() && <label className="wide-setting"><span>Voice control input</span><select value={microphone} disabled={!host || busy} onChange={(event) => setMicrophone(event.target.value)}><option value="">Choose a microphone</option>{inputs.map((item) => <option key={`${item.id}-${item.name}`} value={item.name} disabled={!item.available}>{item.name}{item.default ? " (Windows default)" : ""}{!item.available ? " (unavailable)" : ""}</option>)}</select><button className="btn primary" disabled={!microphone || busy} onClick={async () => { setBusy(true); setVoiceStatus("Applying microphone..."); try { await saveAudioInput(microphone); setVoiceStatus("Saved. DjGoo is reconnecting Voice Control."); } catch (error) { setVoiceStatus(String((error as Error).message || error)); } finally { setBusy(false); } }}>Use Microphone</button>{voiceStatus && <small>{voiceStatus}</small>}</label>}
         <label><span>Ranked mode</span><input type="checkbox" checked={settings.ranked_mode} disabled={!host || busy} onChange={(e) => void update("ranked_mode", e.target.checked)} /></label>
         <label><span>Fair rotation</span><input type="checkbox" checked={settings.round_robin} disabled={!host || busy} onChange={(e) => void update("round_robin", e.target.checked)} /></label>
         <label><span>Requests per player</span><input type="number" min={1} max={25} value={settings.per_user_queue_limit} disabled={!host || busy} onChange={(e) => void update("per_user_queue_limit", Number(e.target.value))} /></label>
