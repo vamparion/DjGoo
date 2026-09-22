@@ -66,6 +66,11 @@ class DiscordLinkHostProcessor:
                     str(payload.get("device_token") or "")
                 )
                 status = 200
+            elif action == "web/state":
+                result = await self.commands.remote_state(
+                    str(payload.get("device_token") or "")
+                )
+                status = 200
             else:
                 raise CommandRejected(
                     400,

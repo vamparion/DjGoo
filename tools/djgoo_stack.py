@@ -399,7 +399,7 @@ def build_specs() -> list[ComponentSpec]:
                 "--project-root",
                 str(PROJECT_ROOT),
                 "--host",
-                "0.0.0.0",
+                "127.0.0.1",
                 "--port",
                 "8765",
                 "--tls",

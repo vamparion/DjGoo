@@ -5,6 +5,7 @@ import contextlib
 import logging
 import os
 import socket
+from urllib.parse import quote
 import sys
 import time
 from pathlib import Path
@@ -24,6 +25,7 @@ from voice.command_queue import command_to_queue_item, drain_queue
 from voice.mini_player_protocol import CommandReceiptStore
 from voice.operational_log import log_event
 from voice.pairing_store import DeviceIdentity, PairingStore
+from control_panel.state import build_remote_state_snapshot
 from voice.tls_identity import ensure_tls_identity
 
 from .audio_bridge import PlaybackControlsView
@@ -214,6 +216,9 @@ class DjGooWelcome(commands.Cog):
         if intent in DESTRUCTIVE_REMOTE_INTENTS and not is_manager:
             return AuthorizationResult(False, "That command requires Manage Server or server ownership")
         return AuthorizationResult(True, voice_channel_id=int(member_channel.id))
+
+    async def _remote_state(self, _identity: DeviceIdentity) -> Dict[str, Any]:
+        return await asyncio.to_thread(build_remote_state_snapshot, PROJECT_ROOT)
 
     def _cooldown_key(self, member, channel) -> Tuple[int, int]:
         return (int(member.id), int(channel.id))
@@ -492,6 +497,35 @@ class DjGooWelcome(commands.Cog):
         await ctx.send("Pairing details were sent to you privately.", delete_after=12)
         log_event("voice.pairing.code_created", user_id=ctx.author.id, guild_id=ctx.guild.id)
 
+    @djgoo_group.command(name="web")
+    @commands.guild_only()
+    async def djgoo_web(self, ctx: commands.Context) -> None:
+        """Privately pair this Discord member with the DjGoo web controls."""
+        relay = self.bot.get_cog("DjGooRelay")
+        if relay is None:
+            await ctx.send("DjGoo web access is not ready on this Host.", delete_after=12)
+            return
+        invite = await relay.web_invite(ctx)
+        if invite is None:
+            return
+        settings = self._gateway_settings().get("web", {})
+        settings = settings if isinstance(settings, dict) else {}
+        public_url = str(settings.get("public_url") or "https://vamparion.github.io/DjGoo/").strip().rstrip("/") + "/"
+        link = public_url + "#pair=" + quote(invite.to_uri(), safe="")
+        message = (
+            "**DjGoo Web private invitation**\n\n"
+            f"[Open DjGoo Web]({link})\n\n"
+            "This one-time invitation expires in five minutes and is tied to your "
+            "Discord account and this server. The Host accepts no inbound Internet connection."
+        )
+        try:
+            await ctx.author.send(message)
+        except Exception:
+            await ctx.send("I could not DM your private web invitation. Enable server DMs and try again.", delete_after=12)
+            return
+        await ctx.send("Your private DjGoo Web invitation was sent.", delete_after=12)
+        log_event("web.pairing.invite_created", user_id=ctx.author.id, guild_id=ctx.guild.id)
+
     @djgoo_group.command(name="devices")
     @commands.guild_only()
     async def djgoo_devices(self, ctx: commands.Context) -> None:
@@ -505,7 +539,7 @@ class DjGooWelcome(commands.Cog):
             await ctx.send("You do not have any active DjGoo Voice devices.")
             return
         lines = [
-            f"`{device.device_id}` — {device.device_name} — last seen <t:{int(device.last_seen_at)}:R>"
+            f"`{device.device_id}` — {device.device_name} ({device.device_type}) — last seen <t:{int(device.last_seen_at)}:R>"
             for device in devices
         ]
         await ctx.author.send("Your DjGoo Voice devices:\n" + "\n".join(lines))

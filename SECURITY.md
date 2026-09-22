@@ -43,6 +43,36 @@ Windows Firewall rules are intentionally narrow:
 
 Do not forward TCP `47632` or UDP `47631` directly from a residential router to the public internet.
 
+### Browser recipients
+
+DjGoo Web is a static PWA. The Host opens only its existing outbound Discord
+connection; it does not publish the local administrative server, disclose a LAN
+or residential address, or require router forwarding. Port 8765 remains
+loopback-only by default and must not be forwarded.
+
+Discord is an opaque transport capability, not authorization. Every browser
+message remains end-to-end encrypted to the pinned Host identity and requires a
+hashed, revocable, `web`-typed device credential. The Host derives the Discord
+user, guild, live voice-channel membership, and capabilities from that record
+and current Discord state. Browser-provided role, username, guild, and admin
+claims are not authoritative. Remote web state is purpose-built and excludes
+logs, paths, process controls, updates, configuration, tokens, and keys.
+
+Browser credentials are lower trust than DPAPI-protected Windows Voice
+credentials. They are session-scoped by default; persistent storage requires an
+explicit **Remember this device** choice and does not grant local-administrator
+authority. A leaked browser token can exercise only that device's Host-granted
+music capabilities until it is revoked. Revoke the individual device with
+`djgoo revoke <device-id>`; revoke all affected sessions and replace the Discord
+webhook if both token and transport capability may have leaked. A leaked webhook
+alone cannot authenticate a command, but it should still be replaced.
+
+Pairing invitations are private, single-use, expire after five minutes, and use
+URL fragments so the static host does not receive the invitation. The PWA
+erases the fragment immediately, has no analytics, does not cache Discord/API
+responses, backs off transport polling, and stops automatic refresh while the
+tab is hidden.
+
 ## Application and runtime boundaries
 
 Alpha.25 stores active code in `app/<version>` and selects it through `current.json`. User state remains under package-root `data/`, `config/`, `.localappdata/`, and `logs/`. Large runtime layers remain under `runtime/`.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import secrets
 import sqlite3
 import time
@@ -12,6 +13,9 @@ def _create_route_safe_pairing_code(
     user_id: int,
     guild_id: int,
     ttl_seconds: int = 300,
+    *,
+    device_type: str = "voice",
+    capabilities: tuple[str, ...] = (),
 ) -> str:
     """Create an independent short-lived route code without revoking siblings.
 
@@ -30,14 +34,16 @@ def _create_route_safe_pairing_code(
             code = "".join(secrets.choice(PAIRING_ALPHABET) for _ in range(8))
             try:
                 connection.execute(
-                    "INSERT INTO pairing_codes(code_hash, user_id, guild_id, created_at, expires_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO pairing_codes(code_hash, user_id, guild_id, created_at, expires_at, device_type, capabilities) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (
                         self._digest(code),
                         int(user_id),
                         int(guild_id),
                         now,
                         expires,
+                        self._device_type(device_type),
+                        json.dumps(sorted(set(capabilities))),
                     ),
                 )
                 return code

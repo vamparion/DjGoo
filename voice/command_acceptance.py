@@ -28,6 +28,26 @@ class AuthorizationResult:
 
 
 AuthorizeCallback = Callable[[DeviceIdentity, str], Awaitable[AuthorizationResult]]
+StateCallback = Callable[[DeviceIdentity], Awaitable[dict[str, Any]]]
+
+WEB_INTENT_CAPABILITY = {
+    "play": "playback.request",
+    "play_now": "playback.request",
+    "queue_request": "playback.request",
+    "queue": "queue.read",
+    "skip": "playback.vote_skip",
+    "pause": "playback.control",
+    "resume": "playback.control",
+    "stop": "playback.control",
+    "volume": "playback.control",
+    "radio": "radio.control",
+    "start_radio": "radio.control",
+    "stop_radio": "radio.control",
+    "station_like_current": "radio.feedback",
+    "station_more_like_current": "radio.feedback",
+    "station_less_like_current": "radio.feedback",
+    "station_ban_current": "radio.feedback",
+}
 
 
 class CommandRejected(Exception):
@@ -60,10 +80,12 @@ class AuthenticatedCommandProcessor:
         pairing_store: PairingStore,
         queue_path: Path,
         authorize: AuthorizeCallback,
+        state_provider: StateCallback | None = None,
     ) -> None:
         self.pairing_store = pairing_store
         self.queue_path = queue_path
         self.authorize = authorize
+        self.state_provider = state_provider
         self._queue_lock = threading.Lock()
         self._limiter = DeviceRateLimiter()
 
@@ -82,6 +104,8 @@ class AuthenticatedCommandProcessor:
             "device_token": token,
             "discord_user_id": str(identity.user_id),
             "guild_id": str(identity.guild_id),
+            "device_type": identity.device_type,
+            "capabilities": list(identity.capabilities),
         }
 
     async def status(self, token: str) -> dict[str, Any]:
@@ -98,7 +122,22 @@ class AuthenticatedCommandProcessor:
             "guild_id": str(identity.guild_id),
             "last_seen_at": identity.last_seen_at,
             "end_to_end_encrypted": True,
+            "device_type": identity.device_type,
+            "capabilities": list(identity.capabilities),
         }
+
+    async def remote_state(self, token: str) -> dict[str, Any]:
+        identity = await asyncio.to_thread(self.pairing_store.authenticate, token)
+        if identity is None:
+            raise CommandRejected(401, "Unknown or revoked device")
+        if identity.device_type != "web" or "state.read" not in identity.capabilities:
+            raise CommandRejected(403, "This device cannot read remote player state")
+        authorization = await self.authorize(identity, "queue")
+        if not authorization.allowed:
+            raise CommandRejected(403, authorization.reason or "Remote state is not authorized")
+        if self.state_provider is None:
+            raise CommandRejected(503, "Remote player state is unavailable")
+        return await self.state_provider(identity)
 
     async def accept(self, token: str, payload: dict[str, Any]) -> dict[str, Any]:
         identity = await asyncio.to_thread(self.pairing_store.authenticate, token)
@@ -118,6 +157,10 @@ class AuthenticatedCommandProcessor:
             raise CommandRejected(400, "A valid intent is required")
         if str(payload.get("guild_id") or identity.guild_id) != str(identity.guild_id):
             raise CommandRejected(403, "Device is not paired to that server")
+        if identity.device_type == "web":
+            required = WEB_INTENT_CAPABILITY.get(intent)
+            if required is None or required not in identity.capabilities:
+                raise CommandRejected(403, "That action is not enabled for this web device")
 
         now = time.time()
         try:
@@ -145,7 +188,7 @@ class AuthenticatedCommandProcessor:
 
         item = {
             "type": "command",
-            "source": "voice_remote",
+            "source": "web_remote" if identity.device_type == "web" else "voice_remote",
             "created_at": created_at,
             "command_id": command_id,
             "device_id": identity.device_id,

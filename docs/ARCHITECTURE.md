@@ -135,3 +135,19 @@ An application rollback restores the previous app directory and `current.json`. 
 - Relays are transport only and must not become playback authority.
 - Public contributor code never executes on the self-hosted AEGIS runner.
 - Runtime dependencies remain visible, independently verifiable, and replaceable rather than hidden inside opaque one-file executables.
+
+## Remote web recipient
+
+`/djgoo web` creates a web-typed pairing code tied to the requesting Discord
+member and guild, then DMs a five-minute static-PWA link. Its fragment contains
+the existing Discord Link endpoint and pinned Host encryption identity. The
+browser removes the fragment, performs X25519/HKDF-SHA256/ChaCha20-Poly1305
+through bundled audited Noble libraries, and exchanges opaque messages through
+Discord webhook message create/read/edit/delete operations.
+
+The Host authenticates and authorizes every request through
+`AuthenticatedCommandProcessor`. `web/state` is a separate sanitized schema;
+the local `/api` administrative surface is never tunneled or serialized to the
+browser. Web capabilities are stored on the Host device record. Live Discord
+membership and same-voice-channel policy are rechecked for each command and
+state refresh. The browser never connects to the Host or port 8765.

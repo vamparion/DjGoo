@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import secrets
 import sqlite3
@@ -24,6 +25,8 @@ class DeviceIdentity:
     device_name: str
     created_at: float
     last_seen_at: float
+    device_type: str = "voice"
+    capabilities: tuple[str, ...] = ()
 
 
 class PairingStore:
@@ -68,7 +71,9 @@ class PairingStore:
                     user_id INTEGER NOT NULL,
                     guild_id INTEGER NOT NULL,
                     created_at REAL NOT NULL,
-                    expires_at REAL NOT NULL
+                    expires_at REAL NOT NULL,
+                    device_type TEXT NOT NULL DEFAULT 'voice',
+                    capabilities TEXT NOT NULL DEFAULT '[]'
                 );
 
                 CREATE TABLE IF NOT EXISTS devices (
@@ -79,7 +84,9 @@ class PairingStore:
                     device_name TEXT NOT NULL,
                     created_at REAL NOT NULL,
                     last_seen_at REAL NOT NULL,
-                    revoked_at REAL
+                    revoked_at REAL,
+                    device_type TEXT NOT NULL DEFAULT 'voice',
+                    capabilities TEXT NOT NULL DEFAULT '[]'
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_devices_user_guild
@@ -93,6 +100,15 @@ class PairingStore:
                 );
                 """
             )
+            for table, column, declaration in (
+                ("pairing_codes", "device_type", "TEXT NOT NULL DEFAULT 'voice'"),
+                ("pairing_codes", "capabilities", "TEXT NOT NULL DEFAULT '[]'"),
+                ("devices", "device_type", "TEXT NOT NULL DEFAULT 'voice'"),
+                ("devices", "capabilities", "TEXT NOT NULL DEFAULT '[]'"),
+            ):
+                names = {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")}
+                if column not in names:
+                    connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
 
     def _digest(self, value: str) -> str:
         return hmac.new(self._secret, value.encode("utf-8"), hashlib.sha256).hexdigest()
@@ -101,7 +117,7 @@ class PairingStore:
     def _normalize_code(code: str) -> str:
         return "".join(character for character in code.upper() if character in PAIRING_ALPHABET)
 
-    def create_pairing_code(self, user_id: int, guild_id: int, ttl_seconds: int = 300) -> str:
+    def create_pairing_code(self, user_id: int, guild_id: int, ttl_seconds: int = 300, *, device_type: str = "voice", capabilities: tuple[str, ...] = ()) -> str:
         now = time.time()
         expires = now + max(60, min(int(ttl_seconds), 900))
         with self._lock, self._connect() as connection:
@@ -114,9 +130,9 @@ class PairingStore:
                 code = "".join(secrets.choice(PAIRING_ALPHABET) for _ in range(8))
                 try:
                     connection.execute(
-                        "INSERT INTO pairing_codes(code_hash, user_id, guild_id, created_at, expires_at) "
-                        "VALUES (?, ?, ?, ?, ?)",
-                        (self._digest(code), int(user_id), int(guild_id), now, expires),
+                        "INSERT INTO pairing_codes(code_hash, user_id, guild_id, created_at, expires_at, device_type, capabilities) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (self._digest(code), int(user_id), int(guild_id), now, expires, self._device_type(device_type), json.dumps(sorted(set(capabilities)))),
                     )
                     return code
                 except sqlite3.IntegrityError:
@@ -133,7 +149,7 @@ class PairingStore:
         with self._lock, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT user_id, guild_id, expires_at FROM pairing_codes WHERE code_hash = ?",
+                "SELECT user_id, guild_id, expires_at, device_type, capabilities FROM pairing_codes WHERE code_hash = ?",
                 (code_hash,),
             ).fetchone()
             if row is None or float(row["expires_at"]) <= now:
@@ -144,8 +160,8 @@ class PairingStore:
             device_id = str(uuid.uuid4())
             token = secrets.token_urlsafe(40)
             connection.execute(
-                "INSERT INTO devices(device_id, token_hash, user_id, guild_id, device_name, created_at, last_seen_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO devices(device_id, token_hash, user_id, guild_id, device_name, created_at, last_seen_at, device_type, capabilities) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     device_id,
                     self._digest(token),
@@ -154,6 +170,8 @@ class PairingStore:
                     clean_name,
                     now,
                     now,
+                    self._device_type(str(row["device_type"])),
+                    str(row["capabilities"] or "[]"),
                 ),
             )
             connection.commit()
@@ -165,6 +183,8 @@ class PairingStore:
                 device_name=clean_name,
                 created_at=now,
                 last_seen_at=now,
+                device_type=self._device_type(str(row["device_type"])),
+                capabilities=self._capabilities(row["capabilities"]),
             ),
             token,
         )
@@ -176,7 +196,7 @@ class PairingStore:
         now = time.time()
         with self._lock, self._connect() as connection:
             row = connection.execute(
-                "SELECT device_id, user_id, guild_id, device_name, created_at, last_seen_at "
+                "SELECT device_id, user_id, guild_id, device_name, created_at, last_seen_at, device_type, capabilities "
                 "FROM devices WHERE token_hash = ? AND revoked_at IS NULL",
                 (token_hash,),
             ).fetchone()
@@ -193,6 +213,8 @@ class PairingStore:
             device_name=str(row["device_name"]),
             created_at=float(row["created_at"]),
             last_seen_at=now,
+            device_type=self._device_type(str(row["device_type"])),
+            capabilities=self._capabilities(row["capabilities"]),
         )
 
     def claim_command(self, command_id: str, device_id: str) -> bool:
@@ -215,7 +237,7 @@ class PairingStore:
     def list_devices(self, user_id: int, guild_id: int) -> list[DeviceIdentity]:
         with self._lock, self._connect() as connection:
             rows = connection.execute(
-                "SELECT device_id, user_id, guild_id, device_name, created_at, last_seen_at "
+                "SELECT device_id, user_id, guild_id, device_name, created_at, last_seen_at, device_type, capabilities "
                 "FROM devices WHERE user_id = ? AND guild_id = ? AND revoked_at IS NULL "
                 "ORDER BY last_seen_at DESC",
                 (int(user_id), int(guild_id)),
@@ -228,6 +250,8 @@ class PairingStore:
                 device_name=str(row["device_name"]),
                 created_at=float(row["created_at"]),
                 last_seen_at=float(row["last_seen_at"]),
+                device_type=self._device_type(str(row["device_type"])),
+                capabilities=self._capabilities(row["capabilities"]),
             )
             for row in rows
         ]
@@ -240,6 +264,27 @@ class PairingStore:
                 (time.time(), device_id, int(user_id), int(guild_id)),
             )
         return cursor.rowcount > 0
+
+    def revoke_web_devices(self, user_id: int, guild_id: int) -> int:
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE devices SET revoked_at = ? WHERE user_id = ? AND guild_id = ? "
+                "AND device_type = 'web' AND revoked_at IS NULL",
+                (time.time(), int(user_id), int(guild_id)),
+            )
+        return int(cursor.rowcount)
+
+    @staticmethod
+    def _device_type(value: str) -> str:
+        return value if value in {"voice", "web"} else "voice"
+
+    @staticmethod
+    def _capabilities(value: object) -> tuple[str, ...]:
+        try:
+            parsed = json.loads(str(value or "[]"))
+        except json.JSONDecodeError:
+            return ()
+        return tuple(str(item) for item in parsed if isinstance(item, str)) if isinstance(parsed, list) else ()
 
     def delete_user(self, user_id: int) -> None:
         with self._lock, self._connect() as connection:

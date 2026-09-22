@@ -123,6 +123,34 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
     }
 
 
+def build_remote_state_snapshot(project_root: Path) -> Dict[str, Any]:
+    """Return the deliberately narrow state exposed to paired web devices."""
+    state = build_state_snapshot(project_root)
+    playback = state.get("playback") if isinstance(state.get("playback"), dict) else {}
+    queue = state.get("queue") if isinstance(state.get("queue"), list) else []
+    return {
+        "protocol": 1,
+        "generated_at": time.time(),
+        "playback": {
+            key: playback.get(key)
+            for key in ("title", "artist", "station", "remaining", "queue_count", "requester", "state")
+        },
+        "queue": [
+            {
+                key: item.get(key)
+                for key in ("id", "title", "artist", "requester", "request_type", "duration")
+            }
+            for item in queue[:200]
+            if isinstance(item, dict)
+        ],
+        "capabilities": {
+            "system_management": False,
+            "diagnostics": False,
+            "secrets": False,
+        },
+    }
+
+
 def _diagnostic_timeline(project_root: Path) -> List[Dict[str, str]]:
     events = read_recent_log_lines(project_root / "logs" / "djgoo-events.jsonl", limit=120)
     result: List[Dict[str, str]] = []

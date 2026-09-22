@@ -43,6 +43,7 @@ class DjGooRelay(commands.Cog):
             djgoo_cog._pairing_store,
             djgoo_cog._remote_queue_path(),
             djgoo_cog._authorize_remote,
+            djgoo_cog._remote_state,
         )
         self.discord_webhook_url = self._discord_webhook_url()
         self.discord_webhook_id = (
@@ -320,6 +321,33 @@ class DjGooRelay(commands.Cog):
             room_id=self.identity.room_id,
             host_public_key=self.identity.encryption_public_b64,
         )
+
+    async def web_invite(self, ctx: commands.Context) -> PairingInvite | None:
+        if not self.discord_webhook_url and not await self._ensure_discord_webhook(ctx):
+            return None
+        capabilities = (
+            "state.read", "queue.read", "playback.request", "playback.vote_skip",
+            "playback.control", "radio.control", "radio.feedback",
+        )
+        code = await asyncio.to_thread(
+            self.djgoo_cog._pairing_store.create_pairing_code,
+            int(ctx.author.id), int(ctx.guild.id), 300,
+            device_type="web", capabilities=capabilities,
+        )
+        endpoint = PairingEndpoint(
+            transport="discord",
+            endpoint=self.discord_webhook_url,
+            security=self.identity.encryption_fingerprint_sha256,
+            code=code,
+            room_id=self.identity.room_id,
+            host_public_key=self.identity.encryption_public_b64,
+        )
+        invite = PairingInvite(
+            code="", endpoints=(endpoint,), expires_at=time.time() + 300,
+            host_name="DjGoo Host", guild_name=getattr(ctx.guild, "name", ""),
+        )
+        invite.validate(allow_expired=True)
+        return invite
 
     async def _relay_endpoint(
         self,
