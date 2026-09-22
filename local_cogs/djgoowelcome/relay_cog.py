@@ -135,9 +135,40 @@ class DjGooRelay(commands.Cog):
         )
         os.replace(temporary, path)
 
+    async def _discord_webhook_is_alive(self) -> bool:
+        if not self.discord_webhook_url:
+            return False
+        timeout = aiohttp.ClientTimeout(total=6, connect=3)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(self.discord_webhook_url) as response:
+                    return response.status == 200
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            return False
+
+    def _forget_discord_webhook(self) -> None:
+        path = self.djgoo_cog._secrets_path()
+        payload = self._raw_secrets()
+        gateway = payload.get("voice_gateway")
+        if isinstance(gateway, dict):
+            settings = gateway.get("discord_relay")
+            if isinstance(settings, dict):
+                settings.pop("webhook_url", None)
+        # The legacy top-level value is also a transport capability and must not
+        # keep reviving a revoked route.
+        payload.pop("webhook_url", None)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+        self.discord_webhook_url = ""
+        self.discord_webhook_id = 0
+
     async def _ensure_discord_webhook(self, ctx: commands.Context) -> bool:
         if self.discord_webhook_url:
-            return True
+            if await self._discord_webhook_is_alive():
+                return True
+            await asyncio.to_thread(self._forget_discord_webhook)
+            log_event("voice.discord_relay.revoked_route_removed")
         channel = getattr(ctx, "channel", None)
         guild = getattr(ctx, "guild", None)
         create_webhook = getattr(channel, "create_webhook", None)

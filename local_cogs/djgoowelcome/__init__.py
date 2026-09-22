@@ -253,9 +253,32 @@ _install_gateway_firewall_repair()
 _install_timed_chat_routing()
 
 
+async def _ensure_djgoo_slash_command(bot: Red) -> None:
+    """Publish DjGoo's hybrid group once; later starts reuse Red's saved ID."""
+    await bot.wait_until_red_ready()
+    try:
+        enabled = await bot.list_enabled_app_commands()
+        if "djgoo" in enabled.get("slash", set()):
+            return
+        await bot.enable_app_command("djgoo")
+        await bot.tree.red_check_enabled()
+        synced = await bot.tree.sync()
+        log_event(
+            "discord.slash.djgoo_synced",
+            command_count=len(synced),
+        )
+    except Exception as exc:
+        log_event(
+            "discord.slash.djgoo_sync_failed",
+            error=type(exc).__name__,
+            detail=str(exc),
+        )
+
+
 async def setup(bot: Red) -> None:
     djgoo = DjGooWelcome(bot)
     await bot.add_cog(djgoo)
     _install_native_play_routing(bot, djgoo)
     await bot.add_cog(DjGooGuide())
     await bot.add_cog(DjGooRelay(bot, djgoo, PROJECT_ROOT))
+    bot.loop.create_task(_ensure_djgoo_slash_command(bot))
