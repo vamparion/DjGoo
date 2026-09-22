@@ -85,5 +85,7 @@ def test_remote_frontend_erases_fragment_and_reuses_shared_app() -> None:
     assert "document.hidden" in app and "visibilitychange" in app
     assert "/api/system" not in remote and "/api/system" not in transport
     assert "actor_role" not in transport and "is_admin" not in transport
-    assert 'url.origin === "https://discord.com"' in worker
+    assert "url.origin !== self.location.origin" in worker
+    assert "self.skipWaiting()" in worker and "self.clients.claim()" in worker
+    assert "discordJson(created" in transport and "discordJson(response" in transport
     assert "device_token" not in worker and "#pair=" not in worker

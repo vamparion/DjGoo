@@ -17,6 +17,18 @@ const b64d = (s: string) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_
 const b64e = (b: Uint8Array) => btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const hex = (b: Uint8Array) => [...b].map(x => x.toString(16).padStart(2, "0")).join("");
 
+async function discordJson(response: Response, operation: string): Promise<Record<string, any>> {
+  const text = await response.text();
+  try {
+    const value = JSON.parse(text);
+    if (value && typeof value === "object") return value;
+  } catch {
+    // Convert proxy, captive-portal, and stale-cache HTML into a useful error.
+  }
+  const received = text.trimStart().startsWith("<") ? "a webpage" : "an invalid response";
+  throw new Error(`Discord returned ${received} while ${operation}. Refresh DjGoo and try the newest link.`);
+}
+
 function parseInvite(uri: string): { endpoint: Endpoint; expires_at: number; guild_name: string } {
   if (uri.length > 16384) throw new Error("Pairing invitation is too large");
   const url = new URL(uri);
@@ -53,7 +65,8 @@ async function exchange(endpoint: Pick<WebCredential, "webhook_url" | "room_id" 
     await new Promise(resolve => setTimeout(resolve, retrySeconds * 1000));
   }
   if (!created?.ok) throw new Error(`Discord is busy (${created?.status || "offline"}). DjGoo will retry when you tap Retry.`);
-  const messageId = String((await created.json()).id || "");
+  const messageId = String((await discordJson(created, "opening the secure connection")).id || "");
+  if (!messageId) throw new Error("Discord did not return a secure message ID. Try the newest DjGoo link.");
   const messageUrl = `${endpoint.webhook_url}/messages/${messageId}`;
   try {
     const deadline = Date.now() + 25000;
@@ -62,7 +75,7 @@ async function exchange(endpoint: Pick<WebCredential, "webhook_url" | "room_id" 
       const response = await fetch(messageUrl, { cache: "no-store" });
       if (response.status === 429) { await new Promise(r => setTimeout(r, delay = Math.min(delay * 2, 4000))); continue; }
       if (response.ok) {
-        const message = await response.json();
+        const message = await discordJson(response, "waiting for DjGoo Host");
         let responseContent = String(message.content || "");
         if (responseContent.startsWith(RESPONSE_ATTACHMENT)) {
           const attachmentUrl = String(message.attachments?.[0]?.url || "");
