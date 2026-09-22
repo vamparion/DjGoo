@@ -250,7 +250,11 @@ def heartbeat_ready(
         age = time.time() - float(heartbeat.get("timestamp") or 0)
     except (TypeError, ValueError):
         return False
-    if expected_pid <= 0 or not heartbeat_pid_owned_by(expected_pid, heartbeat_pid):
+    if expected_pid <= 0 or not heartbeat_pid_owned_by(
+        expected_pid,
+        heartbeat_pid,
+        command=record.get("command"),
+    ):
         return False
     if age < -5 or age > max_age_seconds:
         return False
@@ -262,7 +266,12 @@ def heartbeat_ready(
     return True
 
 
-def heartbeat_pid_owned_by(expected_pid: int, heartbeat_pid: int) -> bool:
+def heartbeat_pid_owned_by(
+    expected_pid: int,
+    heartbeat_pid: int,
+    *,
+    command: object = None,
+) -> bool:
     """Confirm a heartbeat belongs to the recorded process or its child.
 
     On Windows a virtual-environment ``python.exe`` can remain as a launcher
@@ -282,10 +291,12 @@ def heartbeat_pid_owned_by(expected_pid: int, heartbeat_pid: int) -> bool:
         cmdline = " ".join(child.cmdline()).lower()
     except psutil.Error:
         return False
-    return (
-        "start_redbot_selector.py" in cmdline
-        and str(PROJECT_ROOT).lower() in cmdline
-    )
+    expected_arguments = [
+        str(argument).lower()
+        for argument in (command if isinstance(command, (list, tuple)) else [])
+        if str(argument).strip()
+    ][1:]
+    return bool(expected_arguments) and all(argument in cmdline for argument in expected_arguments)
 
 
 def write_component_record(spec: ComponentSpec, process: subprocess.Popen[Any]) -> None:

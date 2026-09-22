@@ -26,14 +26,49 @@ def test_heartbeat_accepts_verified_redbot_child(monkeypatch):
     )
     monkeypatch.setattr(djgoo_stack.psutil, "Process", lambda pid: child)
 
-    assert djgoo_stack.heartbeat_pid_owned_by(100, 200) is True
+    assert djgoo_stack.heartbeat_pid_owned_by(
+        100,
+        200,
+        command=("python.exe", str(djgoo_stack.PROJECT_ROOT / "tools" / "start_redbot_selector.py")),
+    ) is True
 
 
 def test_heartbeat_rejects_unrelated_or_wrong_command(monkeypatch):
     unrelated = FakeProcess(200, parents=(999,), cmdline=("start_redbot_selector.py",))
     monkeypatch.setattr(djgoo_stack.psutil, "Process", lambda pid: unrelated)
-    assert djgoo_stack.heartbeat_pid_owned_by(100, 200) is False
+    assert djgoo_stack.heartbeat_pid_owned_by(
+        100, 200, command=("python.exe", "start_redbot_selector.py")
+    ) is False
 
     wrong_command = FakeProcess(200, parents=(100,), cmdline=("python.exe", "other.py"))
     monkeypatch.setattr(djgoo_stack.psutil, "Process", lambda pid: wrong_command)
-    assert djgoo_stack.heartbeat_pid_owned_by(100, 200) is False
+    assert djgoo_stack.heartbeat_pid_owned_by(
+        100, 200, command=("python.exe", "start_redbot_selector.py")
+    ) is False
+
+
+def test_heartbeat_accepts_verified_voice_child(monkeypatch):
+    child = FakeProcess(
+        300,
+        parents=(250,),
+        cmdline=(
+            r"C:\Python311\python.exe",
+            "-m",
+            "voice.djgoo_voice_listener",
+            "--project-root",
+            str(djgoo_stack.PROJECT_ROOT),
+        ),
+    )
+    monkeypatch.setattr(djgoo_stack.psutil, "Process", lambda pid: child)
+
+    assert djgoo_stack.heartbeat_pid_owned_by(
+        250,
+        300,
+        command=(
+            "python.exe",
+            "-m",
+            "voice.djgoo_voice_listener",
+            "--project-root",
+            str(djgoo_stack.PROJECT_ROOT),
+        ),
+    ) is True
