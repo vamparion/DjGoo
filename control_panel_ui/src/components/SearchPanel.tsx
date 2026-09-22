@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { searchNuclear } from "../api";
+import { searchLibrary, searchNuclear } from "../api";
 import type { PanelProps } from "./types";
 
 const quickSearches = ["sandstorm", "80s hits", "rocket league edm", "white girl music", "linkin park", "chill radio"];
@@ -8,6 +8,7 @@ export function SearchPanel({ send }: PanelProps) {
   const [query, setQuery] = useState("");
   const [result, setResult] = useState("");
   const [busy, setBusy] = useState(false);
+  const [library, setLibrary] = useState<Array<Record<string, unknown>>>([]);
 
   async function preview(text = query) {
     const q = text.trim();
@@ -22,6 +23,7 @@ export function SearchPanel({ send }: PanelProps) {
       setBusy(false);
     }
   }
+  async function findEverywhere() { const q = query.trim(); if (!q) return; const data = await searchLibrary(q); setLibrary(data.results); }
 
   async function submit(action: "play" | "play_next" | "start_radio") {
     const q = query.trim();
@@ -53,6 +55,7 @@ export function SearchPanel({ send }: PanelProps) {
         <button className="btn primary" onClick={() => void submit("play_next")}>Play Next</button>
         <button className="btn" onClick={() => void submit("play")}>Play Now</button>
         <button className="btn amber" onClick={() => void submit("start_radio")}>Radio</button>
+        <button className="btn" onClick={() => void findEverywhere()}>My Library</button>
       </div>
       {result && (
         <div className="result-box">
@@ -60,6 +63,7 @@ export function SearchPanel({ send }: PanelProps) {
           <strong>{result}</strong>
         </div>
       )}
+      {library.length > 0 && <div className="list">{library.slice(0, 20).map((item, index) => <div className="row" key={`${String(item.uri)}-${index}`}><div><strong>{String(item.title || "Untitled")}</strong><span>{String(item.kind)} · {String(item.group)}</span></div><button className="btn" onClick={() => void send("play_next", { query: String(item.uri || item.title) })}>Next</button></div>)}</div>}
       <div className="chip-row">
         {quickSearches.map((item) => (
           <button

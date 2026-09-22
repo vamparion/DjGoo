@@ -192,6 +192,12 @@ class DjGooControlCenter(DjGooLauncher):
             "Check for updates",
             self.check_updates,
         ).pack(side=LEFT, padx=(0, 7))
+        self._button(
+            tool_row,
+            "Radio & Library",
+            self.open_radio_library,
+            accent=True,
+        ).pack(side=LEFT, padx=(0, 7))
 
         coach = Frame(
             self.root,
@@ -424,6 +430,9 @@ class DjGooControlCenter(DjGooLauncher):
             APP_NAME,
             "The DjGoo Mini Player is missing from this package.",
         )
+
+    def open_radio_library(self) -> None:
+        webbrowser.open("https://127.0.0.1:8765/")
 
 
 def main() -> int:

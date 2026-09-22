@@ -4,6 +4,7 @@ import argparse
 import json
 import mimetypes
 import socket
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, Tuple
@@ -14,6 +15,9 @@ from control_panel.models import error, ok
 from control_panel.state import build_state_snapshot
 from voice.nuclear_resolver import NuclearResolver
 from voice.gaming_session import GamingSessionStore
+from voice.djgoo_playlists import DjGooPlaylists
+from voice.sqlite_stations import SqliteDjGooStations
+from voice.mini_player_protocol import MiniPlayerHistory
 from voice.tls_identity import ensure_tls_identity
 
 
@@ -47,6 +51,23 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                 return 400, error("Missing search query")
             resolved = NuclearResolver().resolve_track_query(query)
             return 200, ok({"query": query, "result": resolved})
+        if parsed.path == "/api/backup":
+            snapshot = build_state_snapshot(cls.root)
+            return 200, ok({"backup": {key: snapshot.get(key) for key in ("playlists", "stations", "gaming", "timeline")}})
+        if parsed.path == "/api/library/search":
+            query = _query_param(parsed.query, "q").casefold().strip()
+            state = build_state_snapshot(cls.root)
+            matches = []
+            for playlist in state.get("playlists", []):
+                for track in playlist.get("tracks", []):
+                    if query in f"{track.get('title', '')} {track.get('artist', '')} {playlist.get('name', '')}".casefold():
+                        matches.append({"kind": "playlist", "group": playlist.get("name"), **track})
+            for station in state.get("stations", []):
+                for bucket in ("liked", "more_like", "less_like", "banned", "played"):
+                    for track in station.get(bucket, []):
+                        if query in f"{track.get('title', '')} {track.get('artist', '')} {station.get('name', '')}".casefold():
+                            matches.append({"kind": bucket, "group": station.get("name"), **track})
+            return 200, ok({"results": matches[:100]})
         return 404, error("Not found", status=404)
 
     @classmethod
@@ -78,6 +99,42 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                     }
                 )
                 return 200, ok({"item": enqueue_panel_command(cls.root, command)})
+            if path.startswith("/api/station/"):
+                if actor_role not in {"host", "moderator"}:
+                    raise PermissionError("A DjGoo moderator is required")
+                seed = str(payload.get("seed") or "")
+                stations = SqliteDjGooStations(cls.root / "data" / "djgoo-stations.sqlite3", legacy_json_path=cls.root / "data" / "djgoo-stations.json")
+                action = path.rsplit("/", 1)[-1]
+                if action == "settings": result = stations.update_settings(seed, payload.get("settings") or {})
+                elif action == "undo": result = stations.undo_feedback(seed, str(payload.get("feedback") or ""))
+                elif action == "snapshot": result = stations.create_snapshot(seed, str(payload.get("name") or ""))
+                elif action == "restore": result = stations.restore_snapshot(seed, str(payload.get("snapshot_id") or ""))
+                elif action == "clone": result = stations.clone(seed, str(payload.get("new_seed") or ""))
+                elif action == "merge": result = stations.merge([str(value) for value in payload.get("seeds", [])], str(payload.get("new_seed") or ""))
+                else: return 404, error("Unknown station action", status=404)
+                return 200, ok({"result": result})
+            if path.startswith("/api/playlist/"):
+                if actor_role not in {"host", "moderator"}:
+                    raise PermissionError("A DjGoo moderator is required")
+                name = str(payload.get("playlist") or "")
+                playlists = DjGooPlaylists(cls.root / "data" / "djgoo-playlists.json")
+                action = path.rsplit("/", 1)[-1]
+                if action == "metadata": result = playlists.update_metadata(name, payload.get("metadata") or {})
+                elif action == "reorder": result = {"name": playlists.reorder_tracks(name, [str(value) for value in payload.get("track_ids", [])])}
+                elif action == "cleanup": result = playlists.cleanup(name)
+                elif action == "replace": result = {"name": playlists.replace_track(name, str(payload.get("track_id") or ""), payload.get("replacement") or {})}
+                elif action == "remove": result = dict(zip(("name", "removed"), playlists.remove_tracks(name, [str(value) for value in payload.get("track_ids", [])])))
+                elif action == "import":
+                    reviewed = [item for item in payload.get("tracks", []) if isinstance(item, dict)]
+                    results = [playlists.add_track(name, item) for item in reviewed]
+                    result = {"name": name, "added": sum(int(item.added) for item in results), "duplicates": sum(int(not item.added) for item in results)}
+                elif action == "from-history":
+                    seconds = max(60, int(payload.get("seconds") or 3600)); cutoff = time.time() - seconds
+                    history = MiniPlayerHistory(cls.root / "data" / "djgoo-mini-history.json").entries()
+                    results = [playlists.add_track(name, item) for item in reversed(history) if float(item.get("played_at") or 0) >= cutoff]
+                    result = {"name": name, "added": sum(int(item.added) for item in results), "duplicates": sum(int(not item.added) for item in results)}
+                else: return 404, error("Unknown playlist action", status=404)
+                return 200, ok({"result": result})
             if path == "/api/system/reset":
                 return 200, ok(run_project_script(cls.root, "Reset-DjGoo.command.ps1"))
             if path == "/api/system/start-voice":

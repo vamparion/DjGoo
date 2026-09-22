@@ -11,6 +11,7 @@ export type Playlist = {
   name: string;
   track_count: number;
   tracks: Track[];
+  description?: string; artwork_url?: string; folder?: string; tags?: string[]; smart_query?: string;
 };
 
 export type Station = {
@@ -28,6 +29,12 @@ export type Station = {
   less_like: Track[];
   banned: Track[];
   skipped: Track[];
+  played: Track[]; recent: Track[];
+  feedback_history: Array<{ id: string; action: string; track: Track; created_at: string }>;
+  snapshots: Array<{ id: string; name: string; created_at: string }>;
+  familiar_percent: number; balanced_percent: number; discovery_percent: number;
+  artist_spacing: number; song_spacing: number; seed_type: string; seed_examples: string[];
+  last_selection_reason?: string; last_drift_score?: number;
 };
 
 export type HealthItem = {
@@ -53,6 +60,8 @@ export type ControlState = {
   active_station: Station | null;
   health: Record<string, HealthItem>;
   logs: Record<string, string[]>;
+  timeline: Array<{ time: string; title: string; detail: string }>;
+  history: Array<Track & { played_at: number; mode: string; station: string }>;
   gaming: {
     settings: {
       ranked_mode: boolean;

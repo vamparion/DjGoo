@@ -52,6 +52,18 @@ class DjGooPlaylistsTests(unittest.TestCase):
             self.assertEqual(store.delete("workout"), "workout")
             self.assertEqual(store.summaries(), [])
 
+    def test_metadata_cleanup_and_source_replacement_preserve_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DjGooPlaylists(Path(temp_dir) / "playlists.json")
+            store.add_track("night", {"title": "One", "uri": "track:one"})
+            track = store.get_tracks("night")[0]
+            store.update_metadata("night", {"folder": "Sessions", "tags": ["game", "edm"], "description": "Tonight"})
+            store.replace_track("night", track["id"], {"title": "One", "artist": "Artist", "uri": "track:new"})
+            summary = store.summaries()[0]
+            self.assertEqual(summary["folder"], "Sessions")
+            self.assertEqual(summary["tracks"][0]["id"], track["id"])
+            self.assertEqual(summary["tracks"][0]["uri"], "track:new")
+
 
 if __name__ == "__main__":
     unittest.main()

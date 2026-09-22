@@ -267,16 +267,16 @@ def score_radio_candidate(candidate: MediaCandidate, station: Mapping[str, Any])
         if isinstance(track, Mapping)
     }
     recent = [track for track in station.get("recent", []) if isinstance(track, Mapping)]
-    if identity in banned or identity in {track_identity(track) for track in recent}:
+    song_spacing = max(1, int(station.get("song_spacing") or 50))
+    artist_spacing = max(1, int(station.get("artist_spacing") or 4))
+    if identity in banned or identity in {track_identity(track) for track in recent[-song_spacing:]}:
         return float("-inf")
 
     score = 100.0 - min(25.0, candidate.result_index * 2.0)
     artist = track_artist(candidate_data)
-    recent_artists = [track_artist(track) for track in recent[-6:]]
+    recent_artists = [track_artist(track) for track in recent[-artist_spacing:]]
     if artist and artist in recent_artists:
-        score -= 42
-    if artist and recent_artists and artist == recent_artists[-1]:
-        score -= 65
+        return float("-inf")
 
     for bucket, weight in (("liked", 22), ("more_like", 30), ("less_like", -38), ("skipped", -15)):
         for feedback in station.get(bucket, []):
@@ -312,7 +312,17 @@ def pick_radio_candidate(
     scored = [item for item in scored if item[0] >= 70]
     if not scored:
         return None
-    shortlist = scored[: min(5, len(scored))]
+    familiar = max(0, min(100, int(station.get("familiar_percent") or 55)))
+    discovery = max(0, min(100 - familiar, int(station.get("discovery_percent") or 20)))
+    roll = (rng or random).randrange(100)
+    if roll < familiar:
+        shortlist = scored[: min(4, len(scored))]
+    elif roll < familiar + (100 - familiar - discovery):
+        shortlist = scored[: min(8, len(scored))]
+    else:
+        shortlist = scored[min(2, len(scored) - 1) : min(12, len(scored))]
+        if not shortlist:
+            shortlist = scored
     floor = shortlist[-1][0]
     weights = [max(1.0, score - floor + 1.0) ** 1.4 for score, _ in shortlist]
     chooser = rng or random

@@ -62,3 +62,20 @@ def test_seed_track_does_not_count_as_played(tmp_path: Path) -> None:
     assert station["seed_track"]["uri"] == "media:seed"
     assert station["played"] == []
     assert station["recent"] == []
+
+
+def test_station_tuning_feedback_undo_snapshot_clone_and_merge(tmp_path: Path) -> None:
+    store = SqliteDjGooStations(tmp_path / "stations.sqlite3")
+    store.add_feedback("Rock", "liked", {"title": "One", "artist": "Band", "uri": "track:one"})
+    tuned = store.update_settings("Rock", {"familiar_percent": 70, "artist_spacing": 6, "seed_type": "genre"})
+    snapshot = store.create_snapshot("Rock", "Good mix")
+    store.update_settings("Rock", {"familiar_percent": 10})
+    restored = store.restore_snapshot("Rock", snapshot["id"])
+    clone = store.clone("Rock", "Rock Copy")
+    store.add_feedback("90s", "banned", {"title": "Two", "uri": "track:two"})
+    merged = store.merge(["Rock", "90s"], "Rock 90s")
+    assert tuned["artist_spacing"] == 6
+    assert restored["familiar_percent"] == 70
+    assert clone["played"] == [] and len(clone["liked"]) == 1
+    assert len(merged["liked"]) == 1 and len(merged["banned"]) == 1
+    assert store.undo_feedback("Rock", "liked")["liked"] == []

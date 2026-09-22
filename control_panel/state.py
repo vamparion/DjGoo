@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from voice.gaming_session import GamingSessionStore
+from voice.sqlite_stations import SqliteDjGooStations
+from voice.mini_player_protocol import MiniPlayerHistory
 
 
 CORE_COMPONENTS = ("redbot", "lavalink", "voice", "web")
@@ -41,13 +43,17 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
         project_root / "data" / "djgoo-playlists.json",
         {"playlists": {}},
     )
-    stations_data = read_json_file(
-        project_root / "data" / "djgoo-stations.json",
-        {"active": {}, "stations": {}},
-    )
     playlists = _playlist_summaries(playlists_data)
-    stations = _station_summaries(stations_data)
-    active_station = _active_station(stations_data)
+    station_db = project_root / "data" / "djgoo-stations.sqlite3"
+    if station_db.exists():
+        station_store = SqliteDjGooStations(station_db, legacy_json_path=project_root / "data" / "djgoo-stations.json")
+        station_values = station_store.all_stations()
+        stations = _station_summaries({"stations": {str(item.get("id")): item for item in station_values}})
+        active_station = next((station_store.get_active(guild_id) for guild_id in station_store.active_guild_ids()), None)
+    else:
+        stations_data = read_json_file(project_root / "data" / "djgoo-stations.json", {"active": {}, "stations": {}})
+        stations = _station_summaries(stations_data)
+        active_station = _active_station(stations_data)
     last_track = active_station.get("last_track") if active_station else None
     last_title = last_track.get("title", "") if isinstance(last_track, dict) else ""
     health = build_health(project_root)
@@ -59,6 +65,7 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
     current = now_playing.get("current") if isinstance(now_playing.get("current"), dict) else {}
     live_queue = now_playing.get("queue") if isinstance(now_playing.get("queue"), list) else []
     gaming = GamingSessionStore(project_root / "data" / "djgoo-gaming-session.json")
+    history = MiniPlayerHistory(project_root / "data" / "djgoo-mini-history.json").entries()
     return {
         "playback": {
             "title": str(current.get("title") or last_title),
@@ -111,7 +118,35 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
                 limit=30,
             ),
         },
+        "timeline": _diagnostic_timeline(project_root),
+        "history": history,
     }
+
+
+def _diagnostic_timeline(project_root: Path) -> List[Dict[str, str]]:
+    events = read_recent_log_lines(project_root / "logs" / "djgoo-events.jsonl", limit=120)
+    result: List[Dict[str, str]] = []
+    labels = {
+        "playback.lifecycle": "Playback changed",
+        "gaming.vote": "Player vote recorded",
+        "radio.recommendation.ranked": "Radio selected a track",
+        "radio.recommendation.ranked_empty": "Radio could not find a clean match",
+        "request.native_discord.detected": "Discord request accepted",
+        "request.native_discord.limit_rejected": "Player request limit reached",
+    }
+    for line in reversed(events):
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        event = str(item.get("event") or "")
+        if event not in labels:
+            continue
+        detail = str(item.get("reason") or item.get("message") or item.get("station") or "")
+        result.append({"time": str(item.get("ts") or ""), "title": labels[event], "detail": detail})
+        if len(result) >= 30:
+            break
+    return result
 
 
 def _integer(value: object) -> int:
@@ -304,6 +339,19 @@ def _station_summaries(data: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "less_like": station.get("less_like", []),
                 "banned": station.get("banned", []),
                 "skipped": station.get("skipped", []),
+                "played": station.get("played", []),
+                "recent": station.get("recent", []),
+                "feedback_history": station.get("feedback_history", []),
+                "snapshots": station.get("snapshots", []),
+                "familiar_percent": station.get("familiar_percent", 55),
+                "discovery_percent": station.get("discovery_percent", 20),
+                "balanced_percent": max(0, 100 - int(station.get("familiar_percent", 55)) - int(station.get("discovery_percent", 20))),
+                "artist_spacing": station.get("artist_spacing", 4),
+                "song_spacing": station.get("song_spacing", 50),
+                "seed_type": station.get("seed_type", "auto"),
+                "seed_examples": station.get("seed_examples", []),
+                "last_selection_reason": station.get("last_selection_reason", ""),
+                "last_drift_score": station.get("last_drift_score", 0),
             }
         )
     return sorted(result, key=lambda item: str(item.get("name", "")).lower())

@@ -65,6 +65,26 @@ export async function setPlayerRole(profileId: string, role: string) {
   });
 }
 
+export async function stationAction(action: string, payload: Record<string, unknown>) {
+  const profile = savedProfile();
+  return request<{ ok: true; result: unknown }>(`/api/station/${action}`, { method: "POST", body: JSON.stringify({ token: profile?.token || "", ...payload }) });
+}
+
+export async function playlistAction(action: string, payload: Record<string, unknown>) {
+  const profile = savedProfile();
+  return request<{ ok: true; result: unknown }>(`/api/playlist/${action}`, { method: "POST", body: JSON.stringify({ token: profile?.token || "", ...payload }) });
+}
+
+export async function searchLibrary(query: string) {
+  return request<{ ok: true; results: Array<Record<string, unknown>> }>(`/api/library/search?q=${encodeURIComponent(query)}`);
+}
+
+export async function downloadBackup() {
+  const data = await request<{ ok: true; backup: unknown }>("/api/backup");
+  const blob = new Blob([JSON.stringify(data.backup, null, 2)], { type: "application/json" });
+  const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `djgoo-backup-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(link.href);
+}
+
 export async function searchNuclear(query: string) {
   return request<{ ok: true; query: string; result: string | null }>(`/api/search?q=${encodeURIComponent(query)}`);
 }

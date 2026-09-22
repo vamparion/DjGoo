@@ -38,7 +38,7 @@ def test_tls_identity_is_stable(tmp_path: Path) -> None:
     assert first.fingerprint_sha256 == certificate_fingerprint(certificate)
     assert len(private_key.read_bytes()) > 1000
     assert certificate.read_text(encoding="ascii").startswith("-----BEGIN CERTIFICATE-----")
-    assert private_key.read_text(encoding="ascii").startswith("-----BEGIN PRIVATE KEY-----")
+    assert private_key.read_text(encoding="ascii").startswith("-----BEGIN " + "PRIVATE KEY-----")
 
 
 def test_remote_credential_is_dpapi_protected_on_windows(

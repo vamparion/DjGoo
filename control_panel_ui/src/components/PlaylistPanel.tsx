@@ -1,48 +1,23 @@
+import { useEffect, useState } from "react";
+import { playlistAction } from "../api";
 import type { PanelProps } from "./types";
 
-type Props = PanelProps & {
-  compact?: boolean;
-  expanded?: boolean;
-};
+type Props = PanelProps & { compact?: boolean; expanded?: boolean };
 
 export function PlaylistPanel({ state, send, compact = false, expanded = false }: Props) {
-  const visiblePlaylists = state.playlists.slice(0, compact ? 4 : 12);
-  return (
-    <section className={`panel ${expanded ? "wide-panel" : ""}`}>
-      <div className="panel-title-row">
-        <div>
-          <h2>{compact ? "Playlists" : "Playlist Workshop"}</h2>
-          <p>{expanded ? "Save the current song, launch a list, or use simple names that match how you talk." : "Fast access to saved lists."}</p>
-        </div>
-        {!compact && <button className="btn" onClick={() => void send("save_current", { playlist: "favorites" })}>Save Current</button>}
-      </div>
-      {!compact && (
-        <div className="chip-row">
-          {["favorites", "chill", "80s", "edm", "white girl music", "rock"].map((playlist) => (
-            <button className="chip" key={playlist} onClick={() => void send("save_current", { playlist })}>
-              Add to {playlist}
-            </button>
-          ))}
-        </div>
-      )}
-      <div className="list">
-        {visiblePlaylists.map((playlist) => (
-          <div className="row" key={playlist.name}>
-            <div>
-              <strong>{playlist.name}</strong>
-              <span>{playlist.track_count} tracks</span>
-            </div>
-            <button className="btn" onClick={() => void send("play_playlist", { playlist: playlist.name })}>Play</button>
-          </div>
-        ))}
-        {!state.playlists.length && (
-          <div className="empty-state">
-            <strong>No saved playlists yet</strong>
-            <p>Use Save on the live player or one of the playlist chips to start building lists.</p>
-            <button className="btn" onClick={() => void send("save_current", { playlist: "chill" })}>Save</button>
-          </div>
-        )}
-      </div>
-    </section>
-  );
+  const [name, setName] = useState(state.playlists[0]?.name || "");
+  const [drag, setDrag] = useState("");
+  const [bulk, setBulk] = useState("");
+  const playlist = state.playlists.find((item) => item.name === name) || state.playlists[0];
+  useEffect(() => { if (!name && state.playlists[0]) setName(state.playlists[0].name); }, [name, state.playlists]);
+  async function action(kind: string, payload: Record<string, unknown> = {}) { if (!playlist) return; await playlistAction(kind, { playlist: playlist.name, ...payload }); await send("queue"); }
+  async function drop(beforeId: string) { if (!playlist || !drag || drag === beforeId) return; const ids = playlist.tracks.map((track) => track.id || "").filter(Boolean); const from = ids.indexOf(drag); const to = ids.indexOf(beforeId); ids.splice(to, 0, ids.splice(from, 1)[0]); setDrag(""); await action("reorder", { track_ids: ids }); }
+  if (compact) return <section className="panel"><div className="panel-title-row"><div><h2>Playlists</h2><p>Fast access to saved lists.</p></div></div><div className="list">{state.playlists.slice(0, 4).map((item) => <div className="row" key={item.name}><div><strong>{item.name}</strong><span>{item.track_count} tracks</span></div><button className="btn" onClick={() => void send("play_playlist", { playlist: item.name })}>Play</button></div>)}</div></section>;
+  return <section className={`panel ${expanded ? "wide-panel" : ""}`}>
+    <div className="panel-title-row"><div><h2>Playlist Workshop</h2><p>Drag songs into order, clean duplicates, and keep playlist identity when replacing sources.</p></div>{playlist && <div className="inline-actions"><button className="btn" onClick={() => void action("cleanup")}>Clean Up</button><button className="btn primary" onClick={() => void send("play_playlist", { playlist: playlist.name })}>Play</button></div>}</div>
+    <div className="editor-row"><select value={playlist?.name || ""} onChange={(event) => setName(event.target.value)}>{state.playlists.map((item) => <option key={item.name}>{item.name}</option>)}</select>{playlist && <><input defaultValue={playlist.folder} placeholder="Folder" onBlur={(event) => void action("metadata", { metadata: { folder: event.target.value } })} /><input defaultValue={(playlist.tags || []).join(", ")} placeholder="Tags" onBlur={(event) => void action("metadata", { metadata: { tags: event.target.value.split(",") } })} /></>}</div>
+    {playlist && <textarea defaultValue={playlist.description} placeholder="Playlist description" onBlur={(event) => void action("metadata", { metadata: { description: event.target.value } })} />}
+    {expanded && playlist && <><div className="inline-actions"><button className="btn" onClick={() => void action("from-history", { seconds: 3600 })}>Save Last Hour</button><button className="btn" onClick={() => void action("from-history", { seconds: 43200 })}>Create From Tonight</button></div><div className="import-review"><textarea value={bulk} onChange={(event) => setBulk(event.target.value)} placeholder="Paste one song URL or title per line. Review below before importing." /><div className="subpanel"><h3>Import review · {bulk.split(/\n/).filter((line) => line.trim()).length} tracks</h3>{bulk.split(/\n/).filter((line) => line.trim()).slice(0, 12).map((line) => <div className="compact-row" key={line}><strong>{line}</strong><span>Pending</span></div>)}<button className="btn primary" disabled={!bulk.trim()} onClick={() => void action("import", { tracks: bulk.split(/\n/).filter((line) => line.trim()).map((line) => ({ title: line.trim(), uri: line.trim().startsWith("http") ? line.trim() : "" })) }).then(() => setBulk(""))}>Import Reviewed Tracks</button></div></div></>}
+    <div className="list draggable-list">{playlist?.tracks.map((track, index) => <div className="row" draggable key={track.id} onDragStart={() => setDrag(track.id || "")} onDragOver={(event) => event.preventDefault()} onDrop={() => void drop(track.id || "")}><div className="drag-handle">⋮⋮</div><div><strong>{track.title}</strong><span>{track.artist || `Track ${index + 1}`}</span></div><div className="inline-actions"><button className="btn" onClick={() => { const uri = window.prompt("Replacement song URL", track.uri || ""); if (uri) void action("replace", { track_id: track.id, replacement: { ...track, uri } }); }}>Replace Source</button><button className="btn danger" onClick={() => void action("remove", { track_ids: [track.id] })}>Remove</button></div></div>)}{!playlist && <div className="empty-state"><strong>No playlists yet</strong><p>Create one from the Mini Player, then organize it here.</p></div>}</div>
+  </section>;
 }

@@ -199,6 +199,53 @@ class DjGooPlaylists:
             self._write(data)
             return matched
 
+    def update_metadata(self, playlist_name: str, values: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            data = self._read(); playlists = data["playlists"]
+            matched = self._match_name(playlist_name, playlists)
+            if matched not in playlists:
+                raise ValueError(f"Playlist not found: {playlist_name}")
+            playlist = playlists[matched]
+            for key in ("description", "artwork_url", "folder"):
+                if key in values:
+                    playlist[key] = str(values[key]).strip()[:1000]
+            if "tags" in values and isinstance(values["tags"], list):
+                playlist["tags"] = list(dict.fromkeys(str(value).strip().lower() for value in values["tags"] if str(value).strip()))[:20]
+            if "smart_query" in values:
+                playlist["smart_query"] = str(values["smart_query"]).strip()[:300]
+            self._write(data)
+            return {"name": matched, **playlist}
+
+    def replace_track(self, playlist_name: str, track_id: str, replacement: Dict[str, Any]) -> str:
+        with self._lock:
+            data = self._read(); playlists = data["playlists"]
+            matched = self._match_name(playlist_name, playlists)
+            tracks = playlists.get(matched, {}).get("tracks", [])
+            for index, track in enumerate(tracks):
+                if isinstance(track, dict) and playlist_track_id(track) == str(track_id):
+                    preserved_id = playlist_track_id(track)
+                    tracks[index] = {"id": preserved_id, "title": str(replacement.get("title") or "").strip(), "artist": str(replacement.get("artist") or "").strip(), "uri": str(replacement.get("uri") or "").strip(), "artwork_url": str(replacement.get("artwork_url") or "").strip(), "duration_seconds": int(replacement.get("duration_seconds") or 0)}
+                    self._write(data); return matched
+            raise ValueError("Playlist track was not found")
+
+    def cleanup(self, playlist_name: str) -> Dict[str, Any]:
+        with self._lock:
+            data = self._read(); playlists = data["playlists"]
+            matched = self._match_name(playlist_name, playlists)
+            if matched not in playlists:
+                raise ValueError(f"Playlist not found: {playlist_name}")
+            tracks = playlists[matched].setdefault("tracks", [])
+            seen: set[str] = set(); retained = []; removed = 0
+            for track in tracks:
+                if not isinstance(track, dict) or not str(track.get("uri") or track.get("title") or "").strip():
+                    removed += 1; continue
+                identity = str(track.get("uri") or f"{track.get('artist')}|{track.get('title')}").strip().casefold()
+                if identity in seen:
+                    removed += 1; continue
+                seen.add(identity); retained.append(track)
+            playlists[matched]["tracks"] = retained; self._write(data)
+            return {"name": matched, "removed": removed, "remaining": len(retained)}
+
     def summaries(self) -> List[Dict[str, Any]]:
         with self._lock:
             playlists = self._read().get("playlists", {})
@@ -215,6 +262,11 @@ class DjGooPlaylists:
                         for track in data.get("tracks", [])
                         if isinstance(track, dict)
                     ],
+                    "description": str(data.get("description") or ""),
+                    "artwork_url": str(data.get("artwork_url") or ""),
+                    "folder": str(data.get("folder") or ""),
+                    "tags": list(data.get("tags") or []),
+                    "smart_query": str(data.get("smart_query") or ""),
                 }
                 for name, data in sorted(playlists.items())
                 if isinstance(data, dict)

@@ -141,6 +141,14 @@ class DjGooStationsTests(unittest.TestCase):
                     "less_like",
                     "skipped",
                     "last_track",
+                    "familiar_percent",
+                    "discovery_percent",
+                    "artist_spacing",
+                    "song_spacing",
+                    "seed_type",
+                    "seed_examples",
+                    "snapshots",
+                    "feedback_history",
                 },
             )
 

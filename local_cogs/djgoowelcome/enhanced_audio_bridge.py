@@ -20,6 +20,7 @@ from voice.media_policy import (
     score_search_candidate,
     search_match_is_confident,
     title_is_rejected,
+    track_artist,
     track_identity,
 )
 from voice.operational_log import log_event
@@ -445,6 +446,21 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
             "uri": selected.uri,
             "duration_seconds": str(selected.duration_seconds or 0),
         }
+        feedback_artist = any(
+            track_artist(item) == track_artist(result)
+            for bucket in ("liked", "more_like")
+            for item in station.get(bucket, [])
+            if isinstance(item, dict)
+        )
+        drift_score = 20 if feedback_artist else 45 if selected.result_index < 5 else 70
+        reason = (
+            "Matches an artist you encouraged on this station"
+            if feedback_artist
+            else f"{mode.title()} pick near the {station.get('seed', 'station')} seed"
+        )
+        station_store = getattr(self, "stations", None)
+        if station_store is not None:
+            station_store.set_selection_reason(str(station.get("seed") or ""), reason, drift_score=drift_score)
         log_event(
             "radio.recommendation.ranked",
             station=station.get("name"),
@@ -455,6 +471,8 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
         return result
 
     def _station_reason(self, station: Dict[str, Any]) -> str:
+        if station.get("last_selection_reason"):
+            return str(station["last_selection_reason"])
         mode = str(station.get("mode") or "").strip().lower()
         if mode not in RADIO_MODES:
             mode, _actual_seed = self._split_radio_mode(str(station.get("seed", "")))

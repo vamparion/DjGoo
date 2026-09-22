@@ -4,6 +4,8 @@ import json
 import random
 import re
 import sqlite3
+import copy
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +18,7 @@ RECENT_LIMIT = 50
 PLAYED_LIMIT = 2_000
 FEEDBACK_BUCKETS = {"liked", "banned", "more_like", "less_like", "skipped"}
 RADIO_MODES = {"bangers", "balanced", "discovery", "throwbacks"}
+STATION_DEFAULTS = {"familiar_percent": 55, "discovery_percent": 20, "artist_spacing": 4, "song_spacing": 50, "seed_type": "auto", "seed_examples": [], "snapshots": [], "feedback_history": []}
 
 
 class SqliteDjGooStations:
@@ -122,7 +125,11 @@ class SqliteDjGooStations:
             station = json.loads(row["payload"])
         except json.JSONDecodeError:
             return None
-        return station if isinstance(station, dict) else None
+        if not isinstance(station, dict):
+            return None
+        for key, value in STATION_DEFAULTS.items():
+            station.setdefault(key, copy.deepcopy(value))
+        return station
 
     def _save_station(self, connection: sqlite3.Connection, station: Dict[str, Any]) -> None:
         station["updated_at"] = self._now()
@@ -152,6 +159,7 @@ class SqliteDjGooStations:
                     "less_like": [],
                     "skipped": [],
                     "last_track": None,
+                    **copy.deepcopy(STATION_DEFAULTS),
                 }
                 self._save_station(connection, station)
             return station
@@ -216,6 +224,8 @@ class SqliteDjGooStations:
             existing_keys = {track_key(item) for item in tracks if isinstance(item, dict)}
             if track_key(cleaned) not in existing_keys:
                 tracks.append(cleaned)
+                station.setdefault("feedback_history", []).append({"id": uuid.uuid4().hex, "action": feedback_type, "track": cleaned, "created_at": self._now()})
+                del station["feedback_history"][:-500]
                 del tracks[:-PLAYED_LIMIT]
                 self._save_station(connection, station)
             return station
@@ -235,6 +245,101 @@ class SqliteDjGooStations:
             ]
             self._save_station(connection, station)
             return station
+
+    def undo_feedback(self, seed: str, feedback_type: str) -> Dict[str, Any]:
+        if feedback_type not in FEEDBACK_BUCKETS:
+            raise ValueError(f"Unknown feedback bucket: {feedback_type}")
+        identifier = self.get_or_create(seed)["id"]
+        with self._transaction() as connection:
+            station = self._load_station(connection, identifier)
+            history = station.setdefault("feedback_history", [])
+            match = next((item for item in reversed(history) if item.get("action") == feedback_type), None)
+            if match is None:
+                raise ValueError(f"No recent {feedback_type.replace('_', ' ')} feedback to undo")
+            key = track_key(match.get("track") or {})
+            station[feedback_type] = [item for item in station.get(feedback_type, []) if track_key(item) != key]
+            history.remove(match)
+            self._save_station(connection, station)
+            return station
+
+    def update_settings(self, seed: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+        identifier = self.get_or_create(seed)["id"]
+        with self._transaction() as connection:
+            station = self._load_station(connection, identifier)
+            for key in ("familiar_percent", "discovery_percent", "artist_spacing", "song_spacing"):
+                if key in updates:
+                    station[key] = max(0, min(100 if "percent" in key else 200, int(updates[key])))
+            for key in ("seed_type", "description"):
+                if key in updates:
+                    station[key] = str(updates[key]).strip()[:500]
+            if "seed_examples" in updates and isinstance(updates["seed_examples"], list):
+                station["seed_examples"] = [str(value).strip()[:200] for value in updates["seed_examples"] if str(value).strip()][:20]
+            self._save_station(connection, station)
+            return station
+
+    def set_selection_reason(self, seed: str, reason: str, *, drift_score: int = 0) -> None:
+        identifier = self.get_or_create(seed)["id"]
+        with self._transaction() as connection:
+            station = self._load_station(connection, identifier)
+            station["last_selection_reason"] = str(reason).strip()[:300]
+            station["last_drift_score"] = max(0, min(100, int(drift_score)))
+            self._save_station(connection, station)
+
+    def create_snapshot(self, seed: str, name: str = "") -> Dict[str, Any]:
+        identifier = self.get_or_create(seed)["id"]
+        with self._transaction() as connection:
+            station = self._load_station(connection, identifier)
+            snapshot = {"id": uuid.uuid4().hex, "name": str(name).strip()[:80] or f"Snapshot {len(station.get('snapshots', [])) + 1}", "created_at": self._now(), "state": {key: copy.deepcopy(value) for key, value in station.items() if key not in {"snapshots", "played", "recent", "last_track"}}}
+            station.setdefault("snapshots", []).append(snapshot)
+            del station["snapshots"][:-20]
+            self._save_station(connection, station)
+            return snapshot
+
+    def restore_snapshot(self, seed: str, snapshot_id: str) -> Dict[str, Any]:
+        identifier = self.get_or_create(seed)["id"]
+        with self._transaction() as connection:
+            station = self._load_station(connection, identifier)
+            snapshot = next((item for item in station.get("snapshots", []) if str(item.get("id")) == str(snapshot_id)), None)
+            if not isinstance(snapshot, dict):
+                raise ValueError("Station snapshot was not found")
+            preserved = {key: station.get(key) for key in ("played", "recent", "last_track", "snapshots")}
+            station.update(copy.deepcopy(snapshot.get("state") or {}))
+            station.update(preserved)
+            self._save_station(connection, station)
+            return station
+
+    def clone(self, seed: str, new_seed: str) -> Dict[str, Any]:
+        source = self.get_station(seed)
+        identifier = station_id(new_seed)
+        if source is None:
+            raise ValueError(f"Station not found: {seed}")
+        with self._transaction() as connection:
+            if self._load_station(connection, identifier):
+                raise ValueError(f"Station already exists: {new_seed}")
+            clone = copy.deepcopy(source)
+            clone.update({"id": identifier, "name": display_station_name(new_seed), "seed": self._clean_seed(new_seed), "created_at": self._now(), "played": [], "recent": [], "last_track": None, "snapshots": []})
+            self._save_station(connection, clone)
+            return clone
+
+    def merge(self, seeds: List[str], new_seed: str) -> Dict[str, Any]:
+        sources = [self.get_station(seed) for seed in seeds]
+        sources = [item for item in sources if item]
+        if len(sources) < 2:
+            raise ValueError("Choose at least two existing stations to merge")
+        target = self.get_or_create(new_seed)
+        with self._transaction() as connection:
+            merged = self._load_station(connection, target["id"])
+            for bucket in FEEDBACK_BUCKETS:
+                merged[bucket] = list({track_key(item): item for source in sources for item in source.get(bucket, []) if isinstance(item, dict)}.values())
+            merged["seed_examples"] = list(dict.fromkeys([source.get("seed", "") for source in sources] + [example for source in sources for example in source.get("seed_examples", [])]))[:20]
+            merged["played"], merged["recent"], merged["last_track"] = [], [], None
+            self._save_station(connection, merged)
+            return merged
+
+    def all_stations(self) -> List[Dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT id FROM stations ORDER BY updated_at DESC").fetchall()
+            return [station for row in rows if (station := self._load_station(connection, row["id"])) is not None]
 
     def mark_played(self, seed: str, track: Dict[str, Any]) -> Dict[str, Any]:
         identifier = self.get_or_create(seed)["id"]
