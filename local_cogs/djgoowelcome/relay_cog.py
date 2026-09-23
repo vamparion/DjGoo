@@ -394,29 +394,72 @@ class DjGooRelay(commands.Cog):
             host_public_key=self.identity.encryption_public_b64,
         )
 
-    async def web_invite(self, ctx: commands.Context) -> PairingInvite | None:
-        if not await self._ensure_discord_webhook(ctx):
+    async def _new_web_pairing_code(
+        self,
+        ctx: commands.Context,
+        capabilities: tuple[str, ...],
+    ) -> str:
+        return await asyncio.to_thread(
+            self.djgoo_cog._pairing_store.create_pairing_code,
+            int(ctx.author.id),
+            int(ctx.guild.id),
+            300,
+            device_type="web",
+            capabilities=capabilities,
+        )
+
+    async def _web_relay_endpoint(
+        self,
+        ctx: commands.Context,
+        capabilities: tuple[str, ...],
+    ) -> PairingEndpoint | None:
+        client = getattr(self, "client", None)
+        if client is None:
             return None
+        task = client._task
+        if task is None or task.done():
+            return None
+        return PairingEndpoint(
+            transport="relay",
+            endpoint=client.relay_url.rstrip("/"),
+            security=client.encryption_fingerprint,
+            code=await self._new_web_pairing_code(ctx, capabilities),
+            room_id=client.room_id,
+            host_public_key=client.encryption_public_key,
+        )
+
+    async def web_invite(self, ctx: commands.Context) -> PairingInvite | None:
         capabilities = (
             "state.read", "queue.read", "playback.request", "playback.vote_skip",
             "playback.control", "radio.control", "radio.feedback",
         )
-        code = await asyncio.to_thread(
-            self.djgoo_cog._pairing_store.create_pairing_code,
-            int(ctx.author.id), int(ctx.guild.id), 300,
-            device_type="web", capabilities=capabilities,
-        )
-        endpoint = PairingEndpoint(
-            transport="discord",
-            endpoint=self.discord_webhook_url,
-            security=self.identity.encryption_fingerprint_sha256,
-            code=code,
-            room_id=self.identity.room_id,
-            host_public_key=self.identity.encryption_public_b64,
-        )
+        endpoints: list[PairingEndpoint] = []
+
+        relay_endpoint = await self._web_relay_endpoint(ctx, capabilities)
+        if relay_endpoint is not None:
+            endpoints.append(relay_endpoint)
+
+        if await self._ensure_discord_webhook(ctx):
+            endpoints.append(
+                PairingEndpoint(
+                    transport="discord",
+                    endpoint=self.discord_webhook_url,
+                    security=self.identity.encryption_fingerprint_sha256,
+                    code=await self._new_web_pairing_code(ctx, capabilities),
+                    room_id=self.identity.room_id,
+                    host_public_key=self.identity.encryption_public_b64,
+                )
+            )
+
+        if not endpoints:
+            return None
+
         invite = PairingInvite(
-            code="", endpoints=(endpoint,), expires_at=time.time() + 300,
-            host_name="DjGoo Host", guild_name=getattr(ctx.guild, "name", ""),
+            code="",
+            endpoints=tuple(endpoints),
+            expires_at=time.time() + 300,
+            host_name="DjGoo Host",
+            guild_name=getattr(ctx.guild, "name", ""),
         )
         invite.validate(allow_expired=True)
         return invite

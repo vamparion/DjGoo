@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import secrets
+import ipaddress
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
@@ -33,9 +34,21 @@ class SlidingWindowLimiter:
         self.limit = int(limit)
         self.window_seconds = float(window_seconds)
         self._events: dict[str, deque[float]] = defaultdict(deque)
+        self._last_prune = 0.0
+
+    def _prune(self, now: float) -> None:
+        if now - self._last_prune < max(5.0, self.window_seconds):
+            return
+        self._last_prune = now
+        for key, events in list(self._events.items()):
+            while events and now - events[0] > self.window_seconds:
+                events.popleft()
+            if not events:
+                self._events.pop(key, None)
 
     def allow(self, key: str) -> bool:
         now = time.monotonic()
+        self._prune(now)
         events = self._events[key]
         while events and now - events[0] > self.window_seconds:
             events.popleft()
@@ -114,6 +127,28 @@ CLEANUP_TASK_KEY: web.AppKey[asyncio.Task] = web.AppKey("cleanup_task", asyncio.
 
 def relay_state(request: web.Request) -> RelayState:
     return request.app[STATE_KEY]
+
+
+def _normalized_client_ip(value: str) -> str:
+    candidate = value.strip()
+    if not candidate:
+        return ""
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return ""
+
+
+def client_rate_key(request: web.Request) -> str:
+    if os.environ.get("DJGOO_RELAY_TRUST_PROXY", "").strip() == "1":
+        cloudflare = _normalized_client_ip(request.headers.get("CF-Connecting-IP", ""))
+        if cloudflare:
+            return cloudflare
+        forwarded = request.headers.get("X-Forwarded-For", "").split(",", 1)[0]
+        normalized = _normalized_client_ip(forwarded)
+        if normalized:
+            return normalized
+    return _normalized_client_ip(request.remote or "") or "unknown"
 
 
 @web.middleware
@@ -226,7 +261,7 @@ async def client_socket(request: web.Request) -> web.WebSocketResponse:
         compress=False,
     )
     await websocket.prepare(request)
-    remote_key = request.remote or "unknown"
+    remote_key = client_rate_key(request)
     try:
         async for message in websocket:
             if message.type == WSMsgType.TEXT:
