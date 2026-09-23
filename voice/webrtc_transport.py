@@ -9,6 +9,7 @@ from typing import Any
 
 from voice.command_acceptance import AuthenticatedCommandProcessor, CommandRejected
 from voice.operational_log import log_event
+from tools.runtime_layers import activate_host_webrtc_layer
 
 
 DEFAULT_ICE_SERVERS = ("stun:stun.l.google.com:19302",)
@@ -378,7 +379,10 @@ class WebRtcSignalManager:
 
     @staticmethod
     def _aiortc():
+        activate_host_webrtc_layer()
         try:
+            import av  # noqa: F401
+            import pylibsrtp  # noqa: F401
             from aiortc import (  # type: ignore
                 RTCConfiguration,
                 RTCIceServer,

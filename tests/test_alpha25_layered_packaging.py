@@ -202,6 +202,10 @@ def test_alpha25_update_adds_webrtc_layer_and_preserves_user_state(tmp_path: Pat
     extract_verified_bundle(bundle, staging, expected)
     apply_staged_update(installed, staging, manifest, tmp_path / "backup")
 
+    installed_payload = json.loads(
+        (installed / "data" / "installed-version.json").read_text(encoding="utf-8")
+    )
+    assert installed_payload["version"] == "0.3.0-alpha.26"
     assert (installed / "runtime" / "webrtc" / "Lib" / "site-packages" / "aiortc" / "__init__.py").is_file()
     assert (installed / "config" / "secrets.json").read_text() == "paired-secret"
     assert (installed / "data" / "djgoo-pairing.db").read_bytes() == b"paired-database"

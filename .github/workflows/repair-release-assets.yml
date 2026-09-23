@@ -191,7 +191,7 @@ jobs:
                       assert any(name.startswith(prefix + "runtime/webrtc/Lib/site-packages/aiortc/") for name in names)
                   assert not any("_MEI" in name for name in names)
 
-          print("Layered alpha.25 release assets verified")
+          print("Layered release assets verified")
           '@.Replace("__VERSION__", $env:DJGOO_VERSION) | Set-Content -Encoding UTF8 verify_layered_release.py
           python verify_layered_release.py
           if ($LASTEXITCODE -ne 0) { throw "Layered release verification failed" }

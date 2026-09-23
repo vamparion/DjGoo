@@ -146,10 +146,15 @@ jobs:
           python -c "import json,zipfile; from pathlib import Path; root=Path('build/trusted-layered'); h=json.loads((root/'DjGoo-Host-update.json').read_text()); v=json.loads((root/'DjGoo-Voice-update.json').read_text()); assert h['package_layout']=='versioned-app-v1'; assert v['package_layout']=='versioned-app-v1'; assert h['runtime_generation']==4 and v['runtime_generation']==4; assert any(x['path'].startswith('runtime/webrtc/') for x in h['files']); assert not any(x['path'].startswith('runtime/') for x in v['files']); assert (root/'launchers/DjGoo.exe').stat().st_size < 524288; assert (root/'launchers/DjGoo Voice.exe').stat().st_size < 524288; assert zipfile.ZipFile(root/'DjGoo-Host-update.zip').testzip() is None; assert zipfile.ZipFile(root/'DjGoo-Voice-update.zip').testzip() is None; print('Windows layered fast-release smoke test passed')"
           if ($LASTEXITCODE -ne 0) { throw "Layered updater contract smoke test failed" }
 
-      - name: Smoke-test the shipped Host Python with WebRTC layer
+      - name: Smoke-test alpha.25 runtime upgrading to alpha.26 WebRTC
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
+          $version = (Get-Content VERSION -Raw).Trim().TrimStart("v")
+          if ($version -ne "0.3.0-alpha.26") {
+            Write-Host "Alpha.25 to alpha.26 migration smoke is not applicable to $version."
+            exit 0
+          }
           $cacheBase = if ($env:RUNNER_TOOL_CACHE) { Join-Path $env:RUNNER_TOOL_CACHE "DjGoo" } else { Join-Path $env:USERPROFILE ".cache\DjGoo" }
           python tools/prepare_runtime_layers.py `
             --cache-root $cacheBase `
@@ -157,13 +162,12 @@ jobs:
             --python-embed-md5 $env:PYTHON_EMBED_MD5 `
             --output-json build/trusted-layered/runtime-layers.json
           $runtime = Get-Content build/trusted-layered/runtime-layers.json -Raw | ConvertFrom-Json
-          $root = (Resolve-Path build/trusted-layered/host-root).Path
-          New-Item -ItemType Directory -Force "$root/runtime" | Out-Null
-          Copy-Item $runtime.bot_python "$root/runtime/python-bot" -Recurse -Force
-          $env:DJGOO_HOME = $root
-          $env:DJGOO_APP_ROOT = Join-Path $root "app\$((Get-Content VERSION -Raw).Trim().TrimStart('v'))"
-          & "$root/runtime/python-bot/python.exe" -c "import aiortc,av,pylibsrtp; from voice.webrtc_transport import WebRtcSignalManager; assert WebRtcSignalManager; print('Packaged Host WebRTC imports OK')"
-          if ($LASTEXITCODE -ne 0) { throw "Packaged Host WebRTC import smoke test failed" }
+          python tools/smoke_alpha25_webrtc_upgrade.py `
+            --runtime-layer $runtime.bot_python `
+            --bundle build/trusted-layered/DjGoo-Host-update.zip `
+            --manifest build/trusted-layered/DjGoo-Host-update.json `
+            --output build/trusted-layered/alpha25-upgraded
+          if ($LASTEXITCODE -ne 0) { throw "Alpha.25 to alpha.26 WebRTC migration smoke test failed" }
 
       - name: Publish trusted CI commit status
         if: always()
