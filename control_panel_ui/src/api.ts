@@ -56,7 +56,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
     ...init,
   });
-  const data = await response.json();
+  const text = await response.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(text.trimStart().startsWith("<")
+      ? "DjGoo received a webpage instead of control data. Reload the app and try again."
+      : `DjGoo received an invalid control response (${response.status}).`);
+  }
   if (!response.ok || data.ok === false) {
     throw new Error(data.error || `Request failed: ${response.status}`);
   }

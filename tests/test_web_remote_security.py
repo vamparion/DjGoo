@@ -108,6 +108,9 @@ def test_remote_frontend_erases_fragment_and_reuses_shared_app() -> None:
     transport = (root / "src" / "remoteTransport.ts").read_text(encoding="utf-8")
     worker = (root / "public" / "service-worker.js").read_text(encoding="utf-8")
     assert "history.replaceState" in main
+    assert "getRegistrations" in main and "registration.unregister()" in main
+    assert "djgoo-pending-web-invite" in main
+    assert '!remoteMode && "serviceWorker"' in main
     assert "<App />" in remote
     assert "inviteMatchesCredential(invite, stored)" in remote
     assert "useState(true)" in remote
