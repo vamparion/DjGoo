@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { App } from "./App";
 import { configureRemote } from "./api";
@@ -6,6 +6,13 @@ import { inviteMatchesCredential, pairWeb, type WebCredential } from "./remoteTr
 
 const SESSION_KEY = "djgoo-web-session";
 const REMEMBER_KEY = "djgoo-web-remembered";
+const PENDING_INVITE = "djgoo-pending-web-invite";
+
+function completeInvitation() {
+  sessionStorage.removeItem(PENDING_INVITE);
+  localStorage.removeItem(PENDING_INVITE);
+  if (window.location.hash) history.replaceState(null, "", window.location.pathname + window.location.search);
+}
 
 function storedCredential(): WebCredential | null {
   try {
@@ -24,6 +31,10 @@ export function RemoteApp({ invite }: { invite: string }) {
   });
   const [remember, setRemember] = useState(true);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (credential) completeInvitation();
+  }, [credential]);
 
   if (credential) {
     configureRemote(credential);
@@ -51,6 +62,7 @@ export function RemoteApp({ invite }: { invite: string }) {
       if (remember) localStorage.setItem(REMEMBER_KEY, JSON.stringify(paired.credential));
       else localStorage.removeItem(REMEMBER_KEY);
       configureRemote(paired.credential);
+      completeInvitation();
       setCredential(paired.credential);
     } catch (err) {
       setError(String((err as Error).message || err));

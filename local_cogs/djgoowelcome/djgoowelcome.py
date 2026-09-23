@@ -571,7 +571,7 @@ class DjGooWelcome(commands.Cog):
         settings = self._gateway_settings().get("web", {})
         settings = settings if isinstance(settings, dict) else {}
         public_url = str(settings.get("public_url") or "https://vamparion.github.io/DjGoo/").strip().rstrip("/") + "/"
-        link = public_url + "#pair=" + quote(invite.to_uri(), safe="")
+        link = public_url + f"?connect={int(time.time())}#pair=" + quote(invite.to_uri(), safe="")
         message = (
             "**DjGoo Web private invitation**\n\n"
             f"[Open DjGoo Web]({link})\n\n"

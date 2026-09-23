@@ -8,9 +8,11 @@ const PENDING_INVITE = "djgoo-pending-web-invite";
 const REMOTE_CACHE_RELOAD = "djgoo-remote-cache-reload";
 const fragment = window.location.hash;
 const fragmentInvitation = fragment.startsWith("#pair=") ? decodeURIComponent(fragment.slice(6)) : "";
-const invitation = fragmentInvitation || sessionStorage.getItem(PENDING_INVITE) || "";
-sessionStorage.removeItem(PENDING_INVITE);
-if (fragment) history.replaceState(null, "", window.location.pathname + window.location.search);
+if (fragmentInvitation) {
+  sessionStorage.setItem(PENDING_INVITE, fragmentInvitation);
+  localStorage.setItem(PENDING_INVITE, fragmentInvitation);
+}
+const invitation = fragmentInvitation || sessionStorage.getItem(PENDING_INVITE) || localStorage.getItem(PENDING_INVITE) || "";
 const publicWebHost = window.location.hostname === "vamparion.github.io";
 const remoteMode = Boolean(publicWebHost || invitation || sessionStorage.getItem("djgoo-web-session") || localStorage.getItem("djgoo-web-remembered"));
 
@@ -24,7 +26,10 @@ async function start() {
     }
     if (navigator.serviceWorker.controller && !sessionStorage.getItem(REMOTE_CACHE_RELOAD)) {
       sessionStorage.setItem(REMOTE_CACHE_RELOAD, "1");
-      if (invitation) sessionStorage.setItem(PENDING_INVITE, invitation);
+      if (invitation) {
+        sessionStorage.setItem(PENDING_INVITE, invitation);
+        localStorage.setItem(PENDING_INVITE, invitation);
+      }
       window.location.replace(`${window.location.pathname}${window.location.search}${window.location.search ? "&" : "?"}djgoo_refresh=${Date.now()}`);
       return;
     }
