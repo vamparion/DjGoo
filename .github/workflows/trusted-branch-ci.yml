@@ -5,6 +5,7 @@ on:
     branches:
       - "agent/**"
       - "release/**"
+      - "codex/browser-webrtc-remote-control-pr"
   workflow_dispatch:
 
 concurrency:
@@ -14,6 +15,10 @@ concurrency:
 permissions:
   contents: read
   statuses: write
+
+env:
+  PYTHON_VERSION: "3.11.9"
+  PYTHON_EMBED_MD5: "6d9aa08531d48fcc261ba667e2df17c4"
 
 jobs:
   test:
@@ -33,6 +38,14 @@ jobs:
           cache-dependency-path: |
             requirements-dev.txt
             requirements-voice.txt
+            requirements-webrtc.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: control_panel_ui/package-lock.json
 
       - name: Install test dependencies
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
@@ -42,6 +55,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed with exit $LASTEXITCODE" }
           python -m pip install --requirement requirements-dev.txt
           if ($LASTEXITCODE -ne 0) { throw "Test dependency installation failed with exit $LASTEXITCODE" }
+          python -m pip install --requirement requirements-webrtc.txt
+          if ($LASTEXITCODE -ne 0) { throw "WebRTC test dependency installation failed with exit $LASTEXITCODE" }
+
+      - name: Run browser transport tests
+        working-directory: control_panel_ui
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          npm ci
+          npm test
+          npm run build
 
       - name: Audit public-release safety
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
@@ -87,12 +111,15 @@ jobs:
           python tools/build_thin_launchers.py `
             --output build/trusted-layered/launchers
           if ($LASTEXITCODE -ne 0) { throw "Thin launcher build failed" }
+          python tools/build_webrtc_runtime.py --output build/trusted-layered/webrtc-layer
+          if ($LASTEXITCODE -ne 0) { throw "Host WebRTC layer build failed" }
 
           python tools/build_layered_update_root.py `
             --product host `
             --version $version `
             --app-layer build/trusted-layered/host-app `
             --launchers build/trusted-layered/launchers `
+            --webrtc-layer build/trusted-layered/webrtc-layer `
             --output build/trusted-layered/host-root
           if ($LASTEXITCODE -ne 0) { throw "Host update root build failed" }
           python tools/build_layered_update_root.py `
@@ -116,8 +143,27 @@ jobs:
             --version $version
           if ($LASTEXITCODE -ne 0) { throw "Layered Voice updater build failed" }
 
-          python -c "import json,zipfile; from pathlib import Path; root=Path('build/trusted-layered'); h=json.loads((root/'DjGoo-Host-update.json').read_text()); v=json.loads((root/'DjGoo-Voice-update.json').read_text()); assert h['package_layout']=='versioned-app-v1'; assert v['package_layout']=='versioned-app-v1'; assert h['runtime_generation']==4 and v['runtime_generation']==4; assert not any(x['path'].startswith('runtime/') for x in h['files']+v['files']); assert (root/'launchers/DjGoo.exe').stat().st_size < 524288; assert (root/'launchers/DjGoo Voice.exe').stat().st_size < 524288; assert zipfile.ZipFile(root/'DjGoo-Host-update.zip').testzip() is None; assert zipfile.ZipFile(root/'DjGoo-Voice-update.zip').testzip() is None; print('Windows layered fast-release smoke test passed')"
+          python -c "import json,zipfile; from pathlib import Path; root=Path('build/trusted-layered'); h=json.loads((root/'DjGoo-Host-update.json').read_text()); v=json.loads((root/'DjGoo-Voice-update.json').read_text()); assert h['package_layout']=='versioned-app-v1'; assert v['package_layout']=='versioned-app-v1'; assert h['runtime_generation']==4 and v['runtime_generation']==4; assert any(x['path'].startswith('runtime/webrtc/') for x in h['files']); assert not any(x['path'].startswith('runtime/') for x in v['files']); assert (root/'launchers/DjGoo.exe').stat().st_size < 524288; assert (root/'launchers/DjGoo Voice.exe').stat().st_size < 524288; assert zipfile.ZipFile(root/'DjGoo-Host-update.zip').testzip() is None; assert zipfile.ZipFile(root/'DjGoo-Voice-update.zip').testzip() is None; print('Windows layered fast-release smoke test passed')"
           if ($LASTEXITCODE -ne 0) { throw "Layered updater contract smoke test failed" }
+
+      - name: Smoke-test the shipped Host Python with WebRTC layer
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cacheBase = if ($env:RUNNER_TOOL_CACHE) { Join-Path $env:RUNNER_TOOL_CACHE "DjGoo" } else { Join-Path $env:USERPROFILE ".cache\DjGoo" }
+          python tools/prepare_runtime_layers.py `
+            --cache-root $cacheBase `
+            --python-version $env:PYTHON_VERSION `
+            --python-embed-md5 $env:PYTHON_EMBED_MD5 `
+            --output-json build/trusted-layered/runtime-layers.json
+          $runtime = Get-Content build/trusted-layered/runtime-layers.json -Raw | ConvertFrom-Json
+          $root = (Resolve-Path build/trusted-layered/host-root).Path
+          New-Item -ItemType Directory -Force "$root/runtime" | Out-Null
+          Copy-Item $runtime.bot_python "$root/runtime/python-bot" -Recurse -Force
+          $env:DJGOO_HOME = $root
+          $env:DJGOO_APP_ROOT = Join-Path $root "app\$((Get-Content VERSION -Raw).Trim().TrimStart('v'))"
+          & "$root/runtime/python-bot/python.exe" -c "import aiortc,av,pylibsrtp; from voice.webrtc_transport import WebRtcSignalManager; assert WebRtcSignalManager; print('Packaged Host WebRTC imports OK')"
+          if ($LASTEXITCODE -ne 0) { throw "Packaged Host WebRTC import smoke test failed" }
 
       - name: Publish trusted CI commit status
         if: always()

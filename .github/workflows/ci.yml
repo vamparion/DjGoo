@@ -30,6 +30,7 @@ jobs:
           cache-dependency-path: |
             requirements-dev.txt
             requirements-voice.txt
+            requirements-webrtc.txt
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -45,6 +46,8 @@ jobs:
           $ErrorActionPreference = "Stop"
           npm ci
           if ($LASTEXITCODE -ne 0) { throw "npm ci failed with exit $LASTEXITCODE" }
+          npm test
+          if ($LASTEXITCODE -ne 0) { throw "Web transport tests failed with exit $LASTEXITCODE" }
           npm run build
           if ($LASTEXITCODE -ne 0) { throw "Web build failed with exit $LASTEXITCODE" }
 
@@ -56,6 +59,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed with exit $LASTEXITCODE" }
           python -m pip install --requirement requirements-dev.txt
           if ($LASTEXITCODE -ne 0) { throw "Test dependency installation failed with exit $LASTEXITCODE" }
+          python -m pip install --requirement requirements-webrtc.txt
+          if ($LASTEXITCODE -ne 0) { throw "WebRTC test dependency installation failed with exit $LASTEXITCODE" }
 
       - name: Audit public-release safety
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"

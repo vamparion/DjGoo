@@ -139,6 +139,10 @@ def speech_site_packages(root: Path) -> Path:
     return root.resolve() / RUNTIME_DIRECTORY / "speech" / "Lib" / "site-packages"
 
 
+def webrtc_site_packages(root: Path) -> Path:
+    return root.resolve() / RUNTIME_DIRECTORY / "webrtc" / "Lib" / "site-packages"
+
+
 def speech_runtime_ready(root: Path) -> bool:
     site_packages = speech_site_packages(root)
     return bool(
@@ -159,6 +163,9 @@ def layered_environment(
     env["DJGOO_APP_ROOT"] = str(app_root)
 
     python_paths = [str(app_root)]
+    webrtc = webrtc_site_packages(root)
+    if webrtc.is_dir():
+        python_paths.append(str(webrtc))
     speech = speech_site_packages(root)
     if speech.is_dir():
         python_paths.append(str(speech))

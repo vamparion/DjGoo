@@ -130,6 +130,7 @@ jobs:
           python tools/build_app_layer.py --product host --version $env:DJGOO_VERSION --output build/fast-release/host-app
           python tools/build_app_layer.py --product voice --version $env:DJGOO_VERSION --output build/fast-release/voice-app
           python tools/build_thin_launchers.py --output build/fast-release/launchers
+          python tools/build_webrtc_runtime.py --output build/fast-release/webrtc-layer
 
       - name: Stage migration-safe update roots
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
@@ -140,6 +141,7 @@ jobs:
             --version $env:DJGOO_VERSION `
             --app-layer build/fast-release/host-app `
             --launchers build/fast-release/launchers `
+            --webrtc-layer build/fast-release/webrtc-layer `
             --output build/fast-release/host-root
           python tools/build_layered_update_root.py `
             --product voice `
@@ -171,7 +173,7 @@ jobs:
             $hash = (Get-FileHash "build/$_" -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $_"
           } | Set-Content -Encoding ASCII build/SHA256SUMS-updates.txt
-          python -c "import json; from pathlib import Path; h=json.loads(Path('build/DjGoo-Host-update.json').read_text()); v=json.loads(Path('build/DjGoo-Voice-update.json').read_text()); assert h['package_layout']=='versioned-app-v1'; assert v['package_layout']=='versioned-app-v1'; assert not any(x['path'].startswith('runtime/') for x in h['files']+v['files']); print('application-only updater manifests verified')"
+          python -c "import json; from pathlib import Path; h=json.loads(Path('build/DjGoo-Host-update.json').read_text()); v=json.loads(Path('build/DjGoo-Voice-update.json').read_text()); assert h['package_layout']=='versioned-app-v1'; assert v['package_layout']=='versioned-app-v1'; assert any(x['path'].startswith('runtime/webrtc/') for x in h['files']); assert not any(x['path'].startswith('runtime/') for x in v['files']); print('versioned WebRTC updater layer verified')"
 
       - name: Publish updater-visible prerelease
         if: steps.version.outputs.publish == 'true'

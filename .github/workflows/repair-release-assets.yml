@@ -137,7 +137,11 @@ jobs:
               assert manifest["bundle_sha256"] == sha256(bundle.read_bytes())
               listed = {item["path"]: item for item in manifest["files"]}
               assert listed
-              assert not any(path.startswith("runtime/") for path in listed)
+              if product == "DjGoo Host":
+                  assert any(path.startswith("runtime/webrtc/") for path in listed)
+                  assert not any(path.startswith("runtime/") and not path.startswith("runtime/webrtc/") for path in listed)
+              else:
+                  assert not any(path.startswith("runtime/") for path in listed)
               assert f"app/{version}/app-layer.json" in listed
               assert "current.json" in listed
               with zipfile.ZipFile(bundle) as archive:
@@ -183,6 +187,8 @@ jobs:
                       name.startswith(prefix + f"runtime/{python_dir}/")
                       for name in names
                   )
+                  if executable == "DjGoo.exe":
+                      assert any(name.startswith(prefix + "runtime/webrtc/Lib/site-packages/aiortc/") for name in names)
                   assert not any("_MEI" in name for name in names)
 
           print("Layered alpha.25 release assets verified")

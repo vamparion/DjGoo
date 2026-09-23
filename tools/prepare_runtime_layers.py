@@ -20,6 +20,10 @@ ACTIVE_APP_PTH_LINE = (
     "'runtime','speech','Lib','site-packages')) "
     "if os.path.isdir(os.path.join(os.environ.get('DJGOO_HOME',''),"
     "'runtime','speech','Lib','site-packages')) else None; "
+    "sys.path.insert(0,os.path.join(os.environ.get('DJGOO_HOME',''),"
+    "'runtime','webrtc','Lib','site-packages')) "
+    "if os.path.isdir(os.path.join(os.environ.get('DJGOO_HOME',''),"
+    "'runtime','webrtc','Lib','site-packages')) else None; "
     "sys.path.insert(0,os.environ['DJGOO_APP_ROOT']) "
     "if os.path.isdir(os.environ.get('DJGOO_APP_ROOT','')) else None"
 )
@@ -140,7 +144,7 @@ def _extract_python(archive: Path, destination: Path) -> None:
     _install_tk_runtime(destination)
 
 
-def _pip_install(target: Path, requirements: Path) -> None:
+def _pip_install(target: Path, requirements: Path, *, no_deps: bool = False) -> None:
     command = [
         sys.executable,
         "-m",
@@ -153,6 +157,8 @@ def _pip_install(target: Path, requirements: Path) -> None:
         "--requirement",
         str(requirements),
     ]
+    if no_deps:
+        command.insert(-2, "--no-deps")
     subprocess.run(command, cwd=PROJECT_ROOT, check=True)
 
 
@@ -189,26 +195,30 @@ def prepare(
     bot_requirements = PROJECT_ROOT / "requirements-bot.txt"
     voice_requirements = PROJECT_ROOT / "requirements-voice-base.txt"
     speech_requirements = PROJECT_ROOT / "requirements-speech.txt"
+    webrtc_requirements = PROJECT_ROOT / "requirements-webrtc.txt"
 
-    # v4 adds the optional shared speech layer under DJGOO_HOME to sys.path.
+    # v5 adds the optional Host WebRTC layer under DJGOO_HOME to sys.path.
     # Windows embeddable Python ignores PYTHONPATH in ._pth mode, so both the
     # active app and speech paths must be installed through site processing.
     bot_key = _digest(
         [
-            b"python-bot-v4-tk-active-app-speech",
+            b"python-bot-v5-tk-active-app-speech-webrtc",
             python_version.encode(),
             _file_bytes(bot_requirements),
         ]
     )
     voice_key = _digest(
         [
-            b"python-voice-v4-tk-active-app-speech",
+            b"python-voice-v5-tk-active-app-speech-webrtc",
             python_version.encode(),
             _file_bytes(voice_requirements),
         ]
     )
     speech_key = _digest(
         [b"speech-v1", python_version.encode(), _file_bytes(speech_requirements)]
+    )
+    webrtc_key = _digest(
+        [b"webrtc-v1", python_version.encode(), _file_bytes(webrtc_requirements)]
     )
 
     def build_python(requirements: Path):
@@ -235,13 +245,24 @@ def prepare(
         cache_root / "speech" / f"speech-{speech_key}",
         build_speech,
     )
+    def build_webrtc(destination: Path) -> None:
+        target = destination / "Lib" / "site-packages"
+        target.mkdir(parents=True, exist_ok=True)
+        _pip_install(target, webrtc_requirements, no_deps=True)
+
+    webrtc = _atomic_cache(
+        cache_root / "webrtc" / f"webrtc-{webrtc_key}",
+        build_webrtc,
+    )
     return {
         "bot_python": str(bot),
         "voice_python": str(voice),
         "speech": str(speech),
+        "webrtc": str(webrtc),
         "bot_key": bot_key,
         "voice_key": voice_key,
         "speech_key": speech_key,
+        "webrtc_key": webrtc_key,
     }
 
 

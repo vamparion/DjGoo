@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import shutil
 import zipfile
 from pathlib import Path
 
 from tools.app_layout import active_app_root, write_current
 from tools.build_app_layer import build as build_app_layer
 from tools.build_update_bundle import build_update_bundle
+from tools.apply_update import apply_staged_update, extract_verified_bundle, validate_bundle
 from tools.build_voice_update_bundle import build_voice_update_bundle
 from tools.cleanup_legacy_layout import cleanup_legacy_layout
 
@@ -37,6 +39,10 @@ def _layered_host_root(tmp_path: Path, version: str = VERSION) -> Path:
     _write(root / "tools" / "djgoo_stack.py")
     _write(root / "runtime" / "python-bot" / "python.exe", b"runtime-must-not-ship")
     _write(root / "runtime" / "java" / "bin" / "java.exe", b"runtime-must-not-ship")
+    _write(root / "runtime" / "webrtc" / "layer-manifest.json", "{}")
+    _write(root / "runtime" / "webrtc" / "Lib" / "site-packages" / "aiortc" / "__init__.py")
+    _write(root / "runtime" / "webrtc" / "Lib" / "site-packages" / "av" / "_core.pyd", b"native")
+    _write(root / "runtime" / "webrtc" / "Lib" / "site-packages" / "pylibsrtp" / "_binding.pyd", b"native")
     _write(root / "config" / "secrets.json", "private")
     _write(root / "logs" / "session.log", "private")
     return root
@@ -95,7 +101,8 @@ def test_alpha25_host_update_contains_only_app_layer_and_migration_launchers(tmp
     assert "current.json" in names
     assert "tools/pending_launchers/DjGoo.exe" in names
     assert "tools/pending_launchers/DjGoo Mini Player.exe" in names
-    assert not any(name.startswith("runtime/") for name in names)
+    assert "runtime/webrtc/Lib/site-packages/aiortc/__init__.py" in names
+    assert not any(name.startswith("runtime/python") or name.startswith("runtime/java") for name in names)
     assert "config/secrets.json" not in names
     assert not any(name.startswith("logs/") for name in names)
 
@@ -115,7 +122,8 @@ def test_future_host_update_replaces_unlocked_thin_launchers_directly(tmp_path: 
     assert "DjGoo.exe" in names
     assert "DjGoo Mini Player.exe" in names
     assert not any(name.startswith("tools/pending_launchers/") for name in names)
-    assert not any(name.startswith("runtime/") for name in names)
+    assert "runtime/webrtc/Lib/site-packages/aiortc/__init__.py" in names
+    assert not any(name.startswith("runtime/python") or name.startswith("runtime/java") for name in names)
 
 
 def test_layered_voice_update_never_contains_python_or_speech_runtime(tmp_path: Path) -> None:
@@ -178,3 +186,22 @@ def test_legacy_flat_sources_are_removed_once_but_runtime_is_preserved(tmp_path:
     assert (root / "runtime" / "python" / "python.exe").is_file()
     assert (root / "data" / "user.json").is_file()
     assert cleanup_legacy_layout(root) == []
+
+
+def test_alpha25_update_adds_webrtc_layer_and_preserves_user_state(tmp_path: Path) -> None:
+    package = _layered_host_root(tmp_path / "release", "0.3.0-alpha.26")
+    bundle = tmp_path / "update.zip"
+    manifest_path = tmp_path / "update.json"
+    manifest = build_update_bundle(package, bundle, manifest_path, "0.3.0-alpha.26")
+    installed = _layered_host_root(tmp_path / "installed", VERSION)
+    shutil.rmtree(installed / "runtime" / "webrtc", ignore_errors=True)
+    _write(installed / "config" / "secrets.json", "paired-secret")
+    _write(installed / "data" / "djgoo-pairing.db", b"paired-database")
+    staging = tmp_path / "staging"
+    expected = validate_bundle(bundle, manifest)
+    extract_verified_bundle(bundle, staging, expected)
+    apply_staged_update(installed, staging, manifest, tmp_path / "backup")
+
+    assert (installed / "runtime" / "webrtc" / "Lib" / "site-packages" / "aiortc" / "__init__.py").is_file()
+    assert (installed / "config" / "secrets.json").read_text() == "paired-secret"
+    assert (installed / "data" / "djgoo-pairing.db").read_bytes() == b"paired-database"

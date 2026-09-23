@@ -36,6 +36,7 @@ def build(
     version: str,
     app_layer: Path,
     launchers: Path,
+    webrtc_layer: Path | None = None,
 ) -> Path:
     normalized_product = product.strip().lower()
     if normalized_product not in {"host", "voice"}:
@@ -55,6 +56,9 @@ def build(
     )
 
     if normalized_product == "host":
+        if webrtc_layer is None or not webrtc_layer.is_dir():
+            raise LayeredUpdateRootError("Host WebRTC runtime layer is missing")
+        shutil.copytree(webrtc_layer, output / "runtime" / "webrtc", dirs_exist_ok=True)
         for name in ("DjGoo.exe", "DjGoo Mini Player.exe"):
             _copy(launchers / name, output / name)
         # Alpha.24's updater resumes through this root-level adapter before the
@@ -112,6 +116,7 @@ def main() -> int:
     parser.add_argument("--version", required=True)
     parser.add_argument("--app-layer", type=Path, required=True)
     parser.add_argument("--launchers", type=Path, required=True)
+    parser.add_argument("--webrtc-layer", type=Path)
     args = parser.parse_args()
     build(
         output=args.output,
@@ -119,6 +124,7 @@ def main() -> int:
         version=args.version,
         app_layer=args.app_layer,
         launchers=args.launchers,
+        webrtc_layer=args.webrtc_layer,
     )
     return 0
 

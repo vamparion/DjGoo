@@ -165,7 +165,10 @@ def collect_layered_update_files(
         if not path.is_file():
             return
         relative = path.relative_to(root)
-        if not _eligible(relative) or relative.parts[:1] == ("runtime",):
+        if not _eligible(relative) or (
+            relative.parts[:1] == ("runtime",)
+            and relative.parts[:2] != ("runtime", "webrtc")
+        ):
             return
         collected[relative.as_posix()] = path
 
@@ -174,7 +177,7 @@ def collect_layered_update_files(
             add(root / name)
     for name in ("current.json", "data/installed-version.json"):
         add(root / name)
-    for directory in (f"app/{version}", "tools"):
+    for directory in (f"app/{version}", "tools", "runtime/webrtc"):
         for path in _directory_files(root, directory):
             add(path)
 
@@ -186,14 +189,18 @@ def collect_layered_update_files(
         f"app/{version}/tools/apply_update.py",
         "tools/apply_update.py",
         "tools/djgoo_stack.py",
+        "runtime/webrtc/layer-manifest.json",
     }
     if include_launchers:
         required.update(LAUNCHER_FILES)
     missing = sorted(required.difference(collected))
     if missing:
         raise UpdateBundleError(f"Layered Host update is incomplete: {missing}")
-    if any(name.startswith("runtime/") for name in collected):
-        raise UpdateBundleError("Application-only Host update unexpectedly contains a runtime")
+    if any(
+        name.startswith("runtime/") and not name.startswith("runtime/webrtc/")
+        for name in collected
+    ):
+        raise UpdateBundleError("Host update contains an unapproved runtime layer")
     return [collected[name] for name in sorted(collected)]
 
 
