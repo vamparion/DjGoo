@@ -52,6 +52,30 @@ async function pollDiscordMessage(url: string): Promise<Response | null> {
   return null;
 }
 
+async function createDiscordMessage(url: string, body: string): Promise<Response | null> {
+  let lastResponse: Response | null = null;
+  for (const candidate of discordUrlCandidates(url)) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const response = await fetch(candidate + (candidate.includes("?") ? "&wait=true" : "?wait=true"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+          cache: "no-store",
+        });
+        lastResponse = response;
+        if (response.status !== 429 && response.status < 500) return response;
+        const limited = await response.clone().json().catch(() => ({}));
+        const retrySeconds = Math.max(0.5, Math.min(8, Number(limited.retry_after || 1)));
+        await new Promise(resolve => setTimeout(resolve, retrySeconds * 1000));
+      } catch {
+        await new Promise(resolve => setTimeout(resolve, 350 * (attempt + 1)));
+      }
+    }
+  }
+  return lastResponse;
+}
+
 function parseInvite(uri: string, allowExpired = false): { endpoint: Endpoint; expires_at: number; guild_name: string } {
   if (uri.length > 16384) throw new Error("Pairing invitation is too large");
   const url = new URL(uri);
@@ -90,14 +114,10 @@ async function exchange(endpoint: Pick<WebCredential, "webhook_url" | "room_id" 
   const envelope = { protocol: 1, room_id: endpoint.room_id, request_id: requestId, client_public_key: b64e(clientPublic), nonce: b64e(nonce), ciphertext: b64e(ciphertext) };
   const content = REQUEST + b64e(enc.encode(JSON.stringify(envelope)));
   if (content.length > MAX_CONTENT) throw new Error("Encrypted request is too large");
-  let created: Response | null = null;
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    created = await fetch(endpoint.webhook_url + "?wait=true", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content, flags: 4096, allowed_mentions: { parse: [] } }) });
-    if (created.status !== 429) break;
-    const limited = await created.clone().json().catch(() => ({}));
-    const retrySeconds = Math.max(0.5, Math.min(15, Number(limited.retry_after || 1)));
-    await new Promise(resolve => setTimeout(resolve, retrySeconds * 1000));
-  }
+  const created = await createDiscordMessage(
+    endpoint.webhook_url,
+    JSON.stringify({ content, flags: 4096, allowed_mentions: { parse: [] } }),
+  );
   if (!created?.ok) throw new Error(`Discord is busy (${created?.status || "offline"}). DjGoo will retry when you tap Retry.`);
   const messageId = String((await discordJson(created, "opening the secure connection")).id || "");
   if (!messageId) throw new Error("Discord did not return a secure message ID. Try the newest DjGoo link.");
