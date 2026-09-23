@@ -126,7 +126,7 @@ def test_remote_frontend_erases_fragment_and_reuses_shared_app() -> None:
     assert "discordJson(created" in transport and "discordJson(response" in transport
     assert "pollDiscordMessage" in transport and '"discordapp.com"' in transport
     assert "new WebSocket" in transport and "credentialWithInviteRoutes" in transport
-    assert 'endpoint.transport === "relay"' in transport
+    assert 'transport === "relay"' in transport and "RelaySocketSession" in transport
     assert "stateRefreshIntervalMs()" in app
     assert 'remoteTransportKind(remoteCredential) === "relay" ? 3000 : 12000' in api
     assert "device_token" not in worker and "#pair=" not in worker
