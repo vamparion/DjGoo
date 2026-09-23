@@ -108,7 +108,7 @@ def test_remote_frontend_erases_fragment_and_reuses_shared_app() -> None:
     transport = (root / "src" / "remoteTransport.ts").read_text(encoding="utf-8")
     api = (root / "src" / "api.ts").read_text(encoding="utf-8")
     worker = (root / "public" / "service-worker.js").read_text(encoding="utf-8")
-    assert "history.replaceState" in main
+    assert "history.replaceState" in remote
     assert 'window.location.hostname === "vamparion.github.io"' in main
     assert "getRegistrations" in main and "registration.unregister()" in main
     assert "djgoo-pending-web-invite" in main
