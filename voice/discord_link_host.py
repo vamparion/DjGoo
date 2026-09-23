@@ -71,6 +71,9 @@ class DiscordLinkHostProcessor:
                     str(payload.get("device_token") or "")
                 )
                 status = 200
+            elif action == "webrtc/signal":
+                result = await self.commands.webrtc_signal(payload)
+                status = 200
             else:
                 raise CommandRejected(
                     400,

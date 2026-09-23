@@ -383,6 +383,161 @@ class RelaySocketSession {
 }
 
 const relaySessions = new Map<string, RelaySocketSession>();
+type PendingDirectRequest = {
+  resolve: (value: any) => void;
+  reject: (error: Error) => void;
+  timer: number;
+};
+
+class WebRTCControlSession {
+  private peer: RTCPeerConnection | null = null;
+  private channel: RTCDataChannel | null = null;
+  private opening: Promise<void> | null = null;
+  private retryTimer = 0;
+  private pending = new Map<string, PendingDirectRequest>();
+  private lastRevision = 0;
+
+  constructor(private credential: WebCredential) {}
+
+  get connected() {
+    return this.channel?.readyState === "open";
+  }
+
+  async open(): Promise<void> {
+    if (this.connected) return;
+    if (this.opening) return this.opening;
+    this.opening = this.negotiate().finally(() => {
+      this.opening = null;
+    });
+    return this.opening;
+  }
+
+  async command(intent: string, values: Record<string, unknown>) {
+    await this.open();
+    return await this.request("command", {
+      command: {
+        ...values,
+        intent,
+        command_id: crypto.randomUUID(),
+        created_at: Date.now() / 1000,
+        confidence: 1,
+        device_id: this.credential.device_id,
+        guild_id: this.credential.guild_id,
+      },
+    });
+  }
+
+  async state() {
+    await this.open();
+    const result = await this.request("reconcile", { last_revision: this.lastRevision });
+    this.rememberRevision(result);
+    return result;
+  }
+
+  private async negotiate() {
+    this.closePeer();
+    const peer = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+    const channel = peer.createDataChannel("djgoo-control", { ordered: true });
+    this.peer = peer;
+    this.channel = channel;
+    channel.onmessage = event => this.handleMessage(event);
+    channel.onclose = () => this.scheduleReconnect();
+    channel.onerror = () => this.scheduleReconnect();
+    peer.onconnectionstatechange = () => {
+      if (["failed", "closed", "disconnected"].includes(peer.connectionState)) this.scheduleReconnect();
+    };
+    const offer = await peer.createOffer();
+    await peer.setLocalDescription(offer);
+    await waitForIceGathering(peer, 2500);
+    const sessionId = crypto.randomUUID();
+    const answer = await exchangeCredential(this.credential, "webrtc/signal", {
+      type: "offer",
+      session_id: sessionId,
+      device_token: this.credential.device_token,
+      device_id: this.credential.device_id,
+      guild_id: this.credential.guild_id,
+      offer: peer.localDescription && { type: peer.localDescription.type, sdp: peer.localDescription.sdp },
+    });
+    const description = answer?.answer as RTCSessionDescriptionInit | undefined;
+    if (!description?.sdp) throw new Error("DjGoo Host did not return a direct connection answer");
+    await peer.setRemoteDescription(description);
+    await new Promise<void>((resolve, reject) => {
+      const timer = window.setTimeout(() => reject(new Error("Direct connection timed out")), 8000);
+      channel.onopen = () => {
+        window.clearTimeout(timer);
+        resolve();
+      };
+      if (channel.readyState === "open") {
+        window.clearTimeout(timer);
+        resolve();
+      }
+    });
+  }
+
+  private request(type: string, payload: Record<string, unknown>) {
+    if (!this.connected || !this.channel) throw new Error("Direct connection is not open");
+    const requestId = crypto.randomUUID();
+    return new Promise<any>((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        this.pending.delete(requestId);
+        reject(new Error("Direct connection request timed out"));
+      }, 8000);
+      this.pending.set(requestId, { resolve, reject, timer });
+      this.channel?.send(JSON.stringify({ type, request_id: requestId, ...payload }));
+    });
+  }
+
+  private handleMessage(event: MessageEvent) {
+    let message: Record<string, any>;
+    try {
+      message = JSON.parse(String(event.data || "{}"));
+    } catch {
+      return;
+    }
+    if (message.type === "state" && message.state) {
+      this.rememberRevision(message.state);
+      return;
+    }
+    if (message.type !== "response") return;
+    const request = this.pending.get(String(message.request_id || ""));
+    if (!request) return;
+    window.clearTimeout(request.timer);
+    this.pending.delete(String(message.request_id || ""));
+    if (message.ok) {
+      this.rememberRevision(message.result);
+      request.resolve(message.result);
+    } else {
+      request.reject(new Error(String(message.error || "Direct connection request failed")));
+    }
+  }
+
+  private rememberRevision(value: any) {
+    const revision = Number(value?.revision || 0);
+    if (Number.isFinite(revision) && revision > this.lastRevision) this.lastRevision = revision;
+  }
+
+  private scheduleReconnect() {
+    this.closePeer();
+    window.clearTimeout(this.retryTimer);
+    this.retryTimer = window.setTimeout(() => {
+      void this.open().catch(() => undefined);
+    }, 1500 + Math.floor(Math.random() * 2500));
+  }
+
+  private closePeer() {
+    for (const request of this.pending.values()) {
+      window.clearTimeout(request.timer);
+      request.reject(new Error("Direct connection closed"));
+    }
+    this.pending.clear();
+    try { this.channel?.close(); } catch { /* no-op */ }
+    try { this.peer?.close(); } catch { /* no-op */ }
+    this.channel = null;
+    this.peer = null;
+  }
+}
+
+const webRtcSessions = new Map<string, WebRTCControlSession>();
 
 function relaySession(routeUrl: string, roomId: string, hostPublicKey: string) {
   const key = `${routeUrl}|${roomId}|${hostPublicKey}`;
@@ -392,6 +547,32 @@ function relaySession(routeUrl: string, roomId: string, hostPublicKey: string) {
     relaySessions.set(key, session);
   }
   return session;
+}
+
+function directSession(credential: WebCredential) {
+  const key = `${credential.room_id}|${credential.device_id}|${credential.host_fingerprint}`;
+  let session = webRtcSessions.get(key);
+  if (!session) {
+    session = new WebRTCControlSession(credential);
+    webRtcSessions.set(key, session);
+  }
+  return session;
+}
+
+function waitForIceGathering(peer: RTCPeerConnection, timeoutMs: number): Promise<void> {
+  if (peer.iceGatheringState === "complete") return Promise.resolve();
+  return new Promise(resolve => {
+    const timer = window.setTimeout(done, timeoutMs);
+    function done() {
+      window.clearTimeout(timer);
+      peer.removeEventListener("icegatheringstatechange", changed);
+      resolve();
+    }
+    function changed() {
+      if (peer.iceGatheringState === "complete") done();
+    }
+    peer.addEventListener("icegatheringstatechange", changed);
+  });
 }
 
 async function exchangeRelay(routeUrl: string, roomId: string, hostPublicKey: string, action: string, payload: Record<string, unknown>) {
@@ -448,5 +629,20 @@ export async function pairWeb(invite: string, deviceName: string): Promise<{ cre
   throw lastError || new Error("DjGoo could not pair through any secure route");
 }
 
-export const remoteState = (c: WebCredential) => exchangeCredential(c, "web/state", { device_token: c.device_token, device_id: c.device_id, guild_id: c.guild_id });
-export const remoteCommand = (c: WebCredential, intent: string, values: Record<string, unknown> = {}) => exchangeCredential(c, "command", { ...values, intent, command_id: crypto.randomUUID(), created_at: Date.now() / 1000, confidence: 1, device_token: c.device_token, device_id: c.device_id, guild_id: c.guild_id });
+export async function remoteState(c: WebCredential) {
+  try {
+    return await directSession(c).state();
+  } catch {
+    void directSession(c).open().catch(() => undefined);
+    return await exchangeCredential(c, "web/state", { device_token: c.device_token, device_id: c.device_id, guild_id: c.guild_id });
+  }
+}
+
+export async function remoteCommand(c: WebCredential, intent: string, values: Record<string, unknown> = {}) {
+  try {
+    return await directSession(c).command(intent, values);
+  } catch {
+    void directSession(c).open().catch(() => undefined);
+    return await exchangeCredential(c, "command", { ...values, intent, command_id: crypto.randomUUID(), created_at: Date.now() / 1000, confidence: 1, device_token: c.device_token, device_id: c.device_id, guild_id: c.guild_id });
+  }
+}

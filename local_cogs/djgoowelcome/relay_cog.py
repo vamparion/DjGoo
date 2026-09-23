@@ -29,6 +29,7 @@ from voice.pairing_bundle import PairingEndpoint, PairingInvite
 from voice.relay_crypto import load_or_create_host_identity
 from voice.relay_envelope import handle_host_envelope
 from voice.relay_host import RelayHostClient
+from voice.webrtc_transport import WebRtcSignalManager
 
 
 class DjGooRelay(commands.Cog):
@@ -48,6 +49,11 @@ class DjGooRelay(commands.Cog):
             djgoo_cog._authorize_remote,
             djgoo_cog._remote_state,
         )
+        self.webrtc = WebRtcSignalManager(
+            self.processor,
+            ice_servers=tuple(self._webrtc_ice_servers()),
+        )
+        self.processor.signal_provider = self.webrtc.signal
         self.discord_webhook_url = self._discord_webhook_url()
         self.discord_webhook_id = (
             discord_webhook_id(self.discord_webhook_url)
@@ -76,6 +82,12 @@ class DjGooRelay(commands.Cog):
                 else ""
             ),
         )
+        log_event(
+            "web.remote.transport.webrtc.ready"
+            if self.webrtc.available()
+            else "web.remote.transport.webrtc.unavailable",
+            ice_servers=str(len(self.webrtc.ice_servers)),
+        )
 
     def _raw_secrets(self) -> dict[str, Any]:
         path = self.djgoo_cog._secrets_path()
@@ -91,6 +103,23 @@ class DjGooRelay(commands.Cog):
         gateway = gateway if isinstance(gateway, dict) else {}
         relay = gateway.get("relay", {})
         return relay if isinstance(relay, dict) else {}
+
+    def _webrtc_ice_servers(self) -> list[str]:
+        secrets = self._raw_secrets()
+        gateway = secrets.get("voice_gateway", {})
+        gateway = gateway if isinstance(gateway, dict) else {}
+        webrtc = gateway.get("webrtc", {})
+        webrtc = webrtc if isinstance(webrtc, dict) else {}
+        raw = webrtc.get("ice_servers")
+        if isinstance(raw, list):
+            values = [
+                str(item).strip()
+                for item in raw
+                if str(item).strip().startswith(("stun:", "turn:", "turns:"))
+            ]
+            if values:
+                return values
+        return ["stun:stun.l.google.com:19302"]
 
     def _discord_webhook_url(self) -> str:
         secrets = self._raw_secrets()
