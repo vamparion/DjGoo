@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { createProfile, getState, isRemoteSession, resetDjGoo, savedProfile, sendCommand } from "./api";
+import { createProfile, getState, isRemoteSession, resetDjGoo, savedProfile, sendCommand, stateRefreshIntervalMs } from "./api";
 import { CommandBar } from "./components/CommandBar";
 import { HealthPanel } from "./components/HealthPanel";
 import { LivePanel } from "./components/LivePanel";
@@ -55,7 +55,7 @@ export function App() {
       if (stopped || document.hidden) return;
       await refresh();
       if (!stopped && !document.hidden) {
-        timer = window.setTimeout(poll, isRemoteSession() ? 12000 : 3000);
+        timer = window.setTimeout(poll, stateRefreshIntervalMs());
       }
     };
     const visibilityChanged = () => {
