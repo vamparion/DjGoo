@@ -71,6 +71,23 @@ jobs:
           "tag=v$value" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "publish=$publish" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: control_panel_ui/package-lock.json
+
+      - name: Build web control surface
+        working-directory: control_panel_ui
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw "npm ci failed with exit $LASTEXITCODE" }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { throw "Web build failed with exit $LASTEXITCODE" }
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
