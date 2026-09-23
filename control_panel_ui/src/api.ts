@@ -1,5 +1,5 @@
 import type { ControlState } from "./types";
-import { remoteCommand, remoteState, type WebCredential } from "./remoteTransport";
+import { remoteCommand, remoteState, remoteTransportKind, type WebCredential } from "./remoteTransport";
 
 const API_BASE = import.meta.env.VITE_DJGOO_API_BASE || "";
 const PROFILE_KEY = "djgoo-profile";
@@ -23,6 +23,11 @@ export function updateRemoteProfile(profile: Partial<DjGooProfile>) {
 }
 
 export function isRemoteSession() { return Boolean(remoteCredential); }
+
+export function stateRefreshIntervalMs() {
+  if (!remoteCredential) return 3000;
+  return remoteTransportKind(remoteCredential) === "relay" ? 3000 : 12000;
+}
 
 export function forgetRemoteSession() {
   remoteCredential = null;
