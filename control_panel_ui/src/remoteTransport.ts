@@ -266,38 +266,136 @@ function relayClientUrl(routeUrl: string, roomId: string): string {
   return url.toString();
 }
 
-async function exchangeRelay(routeUrl: string, roomId: string, hostPublicKey: string, action: string, payload: Record<string, unknown>) {
-  const context = prepareExchange(roomId, hostPublicKey, action, payload);
-  return await new Promise<any>((resolve, reject) => {
-    const socket = new WebSocket(relayClientUrl(routeUrl, roomId));
-    let settled = false;
-    const finish = (error?: Error, result?: any) => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timer);
-      try { socket.close(); } catch { /* no-op */ }
-      if (error) reject(error);
-      else resolve(result);
-    };
-    const timer = window.setTimeout(() => finish(new Error("DjGoo hosted relay timed out")), 20000);
-    socket.onopen = () => socket.send(JSON.stringify({ type: "relay_request", envelope: context.envelope }));
-    socket.onerror = () => finish(new Error("DjGoo hosted relay connection failed"));
-    socket.onclose = () => {
-      if (!settled) finish(new Error("DjGoo hosted relay closed before the Host responded"));
-    };
-    socket.onmessage = event => {
-      void (async () => {
-        try {
-          const response = JSON.parse(String(event.data || "{}"));
-          if (response.type === "error") throw new Error(`DjGoo hosted relay: ${String(response.code || "unknown error")}`);
-          if (response.type !== "relay_response" || !response.envelope) return;
-          finish(undefined, await decodeEncryptedResult(response.envelope, context));
-        } catch (error) {
-          finish(error instanceof Error ? error : new Error(String(error)));
+type PendingRelayRequest = {
+  context: ExchangeContext;
+  resolve: (value: any) => void;
+  reject: (error: Error) => void;
+  timer: number;
+};
+
+class RelaySocketSession {
+  private socket: WebSocket | null = null;
+  private opening: Promise<WebSocket> | null = null;
+  private pending = new Map<string, PendingRelayRequest>();
+
+  constructor(
+    private routeUrl: string,
+    private roomId: string,
+    private hostPublicKey: string,
+  ) {}
+
+  private failPending(error: Error) {
+    for (const request of this.pending.values()) {
+      window.clearTimeout(request.timer);
+      request.reject(error);
+    }
+    this.pending.clear();
+  }
+
+  private async open(): Promise<WebSocket> {
+    if (this.socket?.readyState === WebSocket.OPEN) return this.socket;
+    if (this.opening) return this.opening;
+
+    this.opening = new Promise<WebSocket>((resolve, reject) => {
+      const socket = new WebSocket(relayClientUrl(this.routeUrl, this.roomId));
+      let opened = false;
+      const timeout = window.setTimeout(() => {
+        try { socket.close(); } catch { /* no-op */ }
+        reject(new Error("DjGoo hosted relay connection timed out"));
+      }, 12000);
+
+      socket.onopen = () => {
+        opened = true;
+        window.clearTimeout(timeout);
+        this.socket = socket;
+        resolve(socket);
+      };
+      socket.onerror = () => {
+        if (!opened) {
+          window.clearTimeout(timeout);
+          reject(new Error("DjGoo hosted relay connection failed"));
         }
-      })();
-    };
-  });
+      };
+      socket.onclose = () => {
+        window.clearTimeout(timeout);
+        if (this.socket === socket) this.socket = null;
+        this.opening = null;
+        this.failPending(new Error("DjGoo hosted relay disconnected; reconnecting"));
+        if (!opened) reject(new Error("DjGoo hosted relay closed before connecting"));
+      };
+      socket.onmessage = event => {
+        void this.handleMessage(event);
+      };
+    }).finally(() => {
+      this.opening = null;
+    });
+
+    return this.opening;
+  }
+
+  private async handleMessage(event: MessageEvent) {
+    let response: Record<string, any>;
+    try {
+      response = JSON.parse(String(event.data || "{}"));
+    } catch {
+      return;
+    }
+    if (response.type === "error") {
+      const first = this.pending.values().next().value as PendingRelayRequest | undefined;
+      if (first) {
+        window.clearTimeout(first.timer);
+        this.pending.delete(first.context.requestId);
+        first.reject(new Error(`DjGoo hosted relay: ${String(response.code || "unknown error")}`));
+      }
+      return;
+    }
+    const encrypted = response.envelope;
+    const requestId = String(encrypted?.request_id || "");
+    const request = this.pending.get(requestId);
+    if (response.type !== "relay_response" || !request) return;
+    this.pending.delete(requestId);
+    window.clearTimeout(request.timer);
+    try {
+      request.resolve(await decodeEncryptedResult(encrypted, request.context));
+    } catch (error) {
+      request.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  async exchange(action: string, payload: Record<string, unknown>) {
+    const context = prepareExchange(this.roomId, this.hostPublicKey, action, payload);
+    const socket = await this.open();
+    return await new Promise<any>((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        this.pending.delete(context.requestId);
+        reject(new Error("DjGoo hosted relay request timed out"));
+      }, 20000);
+      this.pending.set(context.requestId, { context, resolve, reject, timer });
+      try {
+        socket.send(JSON.stringify({ type: "relay_request", envelope: context.envelope }));
+      } catch (error) {
+        window.clearTimeout(timer);
+        this.pending.delete(context.requestId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+}
+
+const relaySessions = new Map<string, RelaySocketSession>();
+
+function relaySession(routeUrl: string, roomId: string, hostPublicKey: string) {
+  const key = `${routeUrl}|${roomId}|${hostPublicKey}`;
+  let session = relaySessions.get(key);
+  if (!session) {
+    session = new RelaySocketSession(routeUrl, roomId, hostPublicKey);
+    relaySessions.set(key, session);
+  }
+  return session;
+}
+
+async function exchangeRelay(routeUrl: string, roomId: string, hostPublicKey: string, action: string, payload: Record<string, unknown>) {
+  return relaySession(routeUrl, roomId, hostPublicKey).exchange(action, payload);
 }
 
 async function exchangeRoute(route: WebRoute, roomId: string, hostPublicKey: string, action: string, payload: Record<string, unknown>) {
