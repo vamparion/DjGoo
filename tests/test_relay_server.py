@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from relay.server import SlidingWindowLimiter, client_rate_key
@@ -49,3 +50,12 @@ def test_sliding_window_limiter_prunes_expired_keys(monkeypatch) -> None:
 
     assert limiter.allow("current") is True
     assert "stale" not in limiter._events
+
+
+def test_hosted_relay_compose_paths_resolve_from_relay_directory() -> None:
+    root = Path(__file__).resolve().parents[1]
+    compose = (root / "relay" / "compose.yml").read_text(encoding="utf-8")
+
+    assert "context: .." in compose
+    assert "dockerfile: relay/Dockerfile" in compose
+    assert "./Caddyfile:/etc/caddy/Caddyfile:ro" in compose
