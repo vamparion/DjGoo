@@ -11,7 +11,8 @@ const fragmentInvitation = fragment.startsWith("#pair=") ? decodeURIComponent(fr
 const invitation = fragmentInvitation || sessionStorage.getItem(PENDING_INVITE) || "";
 sessionStorage.removeItem(PENDING_INVITE);
 if (fragment) history.replaceState(null, "", window.location.pathname + window.location.search);
-const remoteMode = Boolean(invitation || sessionStorage.getItem("djgoo-web-session") || localStorage.getItem("djgoo-web-remembered"));
+const publicWebHost = window.location.hostname === "vamparion.github.io";
+const remoteMode = Boolean(publicWebHost || invitation || sessionStorage.getItem("djgoo-web-session") || localStorage.getItem("djgoo-web-remembered"));
 
 async function start() {
   if (remoteMode && "serviceWorker" in navigator) {
