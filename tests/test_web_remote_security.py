@@ -123,6 +123,8 @@ def test_remote_frontend_erases_fragment_and_reuses_shared_app() -> None:
     assert "url.origin !== self.location.origin" in worker
     assert "self.skipWaiting()" in worker and "self.clients.claim()" in worker
     assert "discordJson(created" in transport and "discordJson(response" in transport
+    assert "pollDiscordMessage" in transport and '"discordapp.com"' in transport
+    assert "isRemoteSession() ? 30000 : 3000" in app
     assert "device_token" not in worker and "#pair=" not in worker
 
 

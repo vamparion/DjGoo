@@ -29,6 +29,29 @@ async function discordJson(response: Response, operation: string): Promise<Recor
   throw new Error(`Discord returned ${received} while ${operation}. Refresh DjGoo and try the newest link.`);
 }
 
+function discordUrlCandidates(url: string): string[] {
+  const parsed = new URL(url);
+  const hosts = [parsed.hostname, "discord.com", "discordapp.com", "canary.discord.com"];
+  return [...new Set(hosts)].map(host => {
+    const candidate = new URL(parsed.toString());
+    candidate.hostname = host;
+    return candidate.toString();
+  });
+}
+
+async function pollDiscordMessage(url: string): Promise<Response | null> {
+  for (const candidate of discordUrlCandidates(url)) {
+    try {
+      const response = await fetch(candidate, { cache: "no-store" });
+      if (response.status !== 429 && response.status < 500) return response;
+    } catch {
+      // Mobile networks and Discord edges can drop an individual CORS fetch.
+      // Continue polling the same encrypted message through another API edge.
+    }
+  }
+  return null;
+}
+
 function parseInvite(uri: string, allowExpired = false): { endpoint: Endpoint; expires_at: number; guild_name: string } {
   if (uri.length > 16384) throw new Error("Pairing invitation is too large");
   const url = new URL(uri);
@@ -83,7 +106,8 @@ async function exchange(endpoint: Pick<WebCredential, "webhook_url" | "room_id" 
     const deadline = Date.now() + 25000;
     let delay = 400;
     while (Date.now() < deadline) {
-      const response = await fetch(messageUrl, { cache: "no-store" });
+      const response = await pollDiscordMessage(messageUrl);
+      if (!response) { await new Promise(r => setTimeout(r, delay = Math.min(delay * 2, 4000))); continue; }
       if (response.status === 429) { await new Promise(r => setTimeout(r, delay = Math.min(delay * 2, 4000))); continue; }
       if (response.ok) {
         const message = await discordJson(response, "waiting for DjGoo Host");
@@ -110,7 +134,7 @@ async function exchange(endpoint: Pick<WebCredential, "webhook_url" | "room_id" 
       }
       await new Promise(r => setTimeout(r, delay));
     }
-    throw new Error("DjGoo Host did not answer in time");
+    throw new Error("DjGoo could not retrieve the Host response from Discord. Check the connection and tap Retry.");
   } finally { await fetch(messageUrl, { method: "DELETE" }).catch(() => undefined); }
 }
 
