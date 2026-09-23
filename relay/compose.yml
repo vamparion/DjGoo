@@ -1,0 +1,32 @@
+services:
+  relay:
+    build:
+      context: .
+      dockerfile: relay/Dockerfile
+    environment:
+      DJGOO_RELAY_HOST: 0.0.0.0
+      DJGOO_RELAY_PORT: 8080
+      DJGOO_RELAY_TRUST_PROXY: "1"
+    expose:
+      - "8080"
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - relay
+    environment:
+      DJGOO_RELAY_DOMAIN: ${DJGOO_RELAY_DOMAIN:?Set DJGOO_RELAY_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./relay/Caddyfile:/etc/caddy/Caddyfile:ro
+      - djgoo_caddy_data:/data
+      - djgoo_caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  djgoo_caddy_data:
+  djgoo_caddy_config:
