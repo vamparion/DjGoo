@@ -31,6 +31,23 @@ jobs:
             requirements-dev.txt
             requirements-voice.txt
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: control_panel_ui/package-lock.json
+
+      - name: Build web control surface
+        working-directory: control_panel_ui
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw "npm ci failed with exit $LASTEXITCODE" }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { throw "Web build failed with exit $LASTEXITCODE" }
+
       - name: Install test dependencies
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
