@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createProfile, getState, isRemoteSession, resetDjGoo, savedProfile, sendCommand } from "./api";
 import { CommandBar } from "./components/CommandBar";
 import { HealthPanel } from "./components/HealthPanel";
@@ -26,31 +26,45 @@ export function App() {
   const [status, setStatus] = useState("Ready");
   const [activeView, setActiveView] = useState<View>("Live");
   const [profile, setProfile] = useState<DjGooProfile | null>(() => savedProfile());
+  const refreshStarted = useRef(0);
+  const refreshApplied = useRef(0);
   const role = state?.session?.role || profile?.role || "guest";
   const canManage = role === "host" || role === "moderator";
   const visibleViews = views.filter((view) => canManage || !["Players", "Settings", "Logs"].includes(view));
 
   async function refresh() {
+    const requestNumber = ++refreshStarted.current;
     try {
       const next = await getState();
+      if (requestNumber < refreshApplied.current) return next;
+      refreshApplied.current = requestNumber;
       setState(next);
       if (next.session) setProfile({ id: next.session.discord_user_id || "remote", token: "", username: next.session.display_name, role: next.session.role });
       setError("");
     } catch (err) {
       setError(String((err as Error).message || err));
+      return null;
     }
   }
 
   useEffect(() => {
-    void refresh();
     let timer = 0;
-    const schedule = () => {
-      window.clearInterval(timer);
-      if (!document.hidden) timer = window.setInterval(refresh, isRemoteSession() ? 12000 : 3000);
+    let stopped = false;
+    const poll = async () => {
+      window.clearTimeout(timer);
+      if (stopped || document.hidden) return;
+      await refresh();
+      if (!stopped && !document.hidden) {
+        timer = window.setTimeout(poll, isRemoteSession() ? 12000 : 3000);
+      }
     };
-    document.addEventListener("visibilitychange", schedule);
-    schedule();
-    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", schedule); };
+    const visibilityChanged = () => {
+      window.clearTimeout(timer);
+      if (!document.hidden) void poll();
+    };
+    document.addEventListener("visibilitychange", visibilityChanged);
+    void poll();
+    return () => { stopped = true; window.clearTimeout(timer); document.removeEventListener("visibilitychange", visibilityChanged); };
   }, []);
 
   async function send(action: string, payload: Record<string, unknown> = {}) {
@@ -63,6 +77,10 @@ export function App() {
       }
       setStatus(`Sent ${action}`);
       await refresh();
+      if (["play_next", "play_now", "play", "skip", "stop", "start_radio", "radio"].includes(action)) {
+        window.setTimeout(() => void refresh(), 2000);
+        window.setTimeout(() => void refresh(), 6000);
+      }
     } catch (err) {
       setError(String((err as Error).message || err));
       setStatus("Error");
