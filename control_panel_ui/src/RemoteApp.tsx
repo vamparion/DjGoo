@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { App } from "./App";
 import { configureRemote } from "./api";
-import { inviteMatchesCredential, pairWeb, type WebCredential } from "./remoteTransport";
+import { credentialWithInviteRoutes, inviteMatchesCredential, pairWeb, type WebCredential } from "./remoteTransport";
 
 const SESSION_KEY = "djgoo-web-session";
 const REMEMBER_KEY = "djgoo-web-remembered";
@@ -27,13 +27,18 @@ export function RemoteApp({ invite }: { invite: string }) {
   // for a rotated host route still supersedes the remembered credential.
   const [credential, setCredential] = useState<WebCredential | null>(() => {
     const stored = storedCredential();
-    return !invite || (stored && inviteMatchesCredential(invite, stored)) ? stored : null;
+    if (!stored) return null;
+    if (!invite) return stored;
+    return inviteMatchesCredential(invite, stored) ? credentialWithInviteRoutes(invite, stored) : null;
   });
   const [remember, setRemember] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (credential) completeInvitation();
+    if (!credential) return;
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(credential));
+    if (localStorage.getItem(REMEMBER_KEY)) localStorage.setItem(REMEMBER_KEY, JSON.stringify(credential));
+    completeInvitation();
   }, [credential]);
 
   if (credential) {
