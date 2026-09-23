@@ -413,18 +413,19 @@ class DjGooRelay(commands.Cog):
         ctx: commands.Context,
         capabilities: tuple[str, ...],
     ) -> PairingEndpoint | None:
-        if self.client is None:
+        client = getattr(self, "client", None)
+        if client is None:
             return None
-        task = self.client._task
+        task = client._task
         if task is None or task.done():
             return None
         return PairingEndpoint(
             transport="relay",
-            endpoint=self.client.relay_url.rstrip("/"),
-            security=self.client.encryption_fingerprint,
+            endpoint=client.relay_url.rstrip("/"),
+            security=client.encryption_fingerprint,
             code=await self._new_web_pairing_code(ctx, capabilities),
-            room_id=self.client.room_id,
-            host_public_key=self.client.encryption_public_key,
+            room_id=client.room_id,
+            host_public_key=client.encryption_public_key,
         )
 
     async def web_invite(self, ctx: commands.Context) -> PairingInvite | None:
