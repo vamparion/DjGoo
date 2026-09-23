@@ -1,7 +1,7 @@
 services:
   relay:
     build:
-      context: .
+      context: ..
       dockerfile: relay/Dockerfile
     environment:
       DJGOO_RELAY_HOST: 0.0.0.0
@@ -22,7 +22,7 @@ services:
       - "443:443"
       - "443:443/udp"
     volumes:
-      - ./relay/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - djgoo_caddy_data:/data
       - djgoo_caddy_config:/config
     restart: unless-stopped
