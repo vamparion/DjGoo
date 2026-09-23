@@ -106,6 +106,7 @@ def test_remote_frontend_erases_fragment_and_reuses_shared_app() -> None:
     remote = (root / "src" / "RemoteApp.tsx").read_text(encoding="utf-8")
     app = (root / "src" / "App.tsx").read_text(encoding="utf-8")
     transport = (root / "src" / "remoteTransport.ts").read_text(encoding="utf-8")
+    api = (root / "src" / "api.ts").read_text(encoding="utf-8")
     worker = (root / "public" / "service-worker.js").read_text(encoding="utf-8")
     assert "history.replaceState" in main
     assert 'window.location.hostname === "vamparion.github.io"' in main
@@ -124,8 +125,22 @@ def test_remote_frontend_erases_fragment_and_reuses_shared_app() -> None:
     assert "self.skipWaiting()" in worker and "self.clients.claim()" in worker
     assert "discordJson(created" in transport and "discordJson(response" in transport
     assert "pollDiscordMessage" in transport and '"discordapp.com"' in transport
-    assert "isRemoteSession() ? 30000 : 3000" in app
+    assert "new WebSocket" in transport and "credentialWithInviteRoutes" in transport
+    assert 'endpoint.transport === "relay"' in transport
+    assert "stateRefreshIntervalMs()" in app
+    assert 'remoteTransportKind(remoteCredential) === "relay" ? 3000 : 12000' in api
     assert "device_token" not in worker and "#pair=" not in worker
+
+
+def test_hosted_relay_accepts_web_state_and_web_invites_can_offer_relay() -> None:
+    root = Path(__file__).resolve().parents[1]
+    relay_host = (root / "voice" / "relay_host.py").read_text(encoding="utf-8")
+    relay_cog = (root / "local_cogs" / "djgoowelcome" / "relay_cog.py").read_text(encoding="utf-8")
+
+    assert 'action == "web/state"' in relay_host
+    assert "async def _web_relay_endpoint" in relay_cog
+    assert 'transport="relay"' in relay_cog
+    assert "device_type=\"web\"" in relay_cog
 
 
 def test_guest_stop_is_not_admin_only_and_web_retries_are_deduplicated() -> None:
