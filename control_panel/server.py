@@ -20,6 +20,7 @@ from voice.gaming_session import GamingSessionStore
 from voice.djgoo_playlists import DjGooPlaylists
 from voice.sqlite_stations import SqliteDjGooStations
 from voice.mini_player_protocol import MiniPlayerHistory
+from voice.pairing_store import PairingStore
 from voice.tls_identity import ensure_tls_identity
 
 
@@ -114,6 +115,13 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                 return 200, ok({"input_device": name, "recovery": recovery})
             if path == "/api/profile/role":
                 return 200, ok({"profile": gaming.set_role(0, str(payload.get("profile_id") or ""), str(payload.get("role") or "member"), actor_role=actor_role)})
+            if path == "/api/player/revoke":
+                if not is_local or actor_role != "host":
+                    raise PermissionError("Only the local DjGoo host can revoke a player")
+                user_id = int(str(payload.get("discord_user_id") or "0"))
+                guild_id = int(str(payload.get("guild_id") or "1513011181202309290"))
+                pairing = PairingStore(cls.root / "data" / "djgoo-pairing.db", cls.root / "data" / "djgoo-pairing-secret.bin")
+                return 200, ok({"revoked": pairing.revoke_web_devices(user_id, guild_id)})
             if path == "/api/command":
                 command = dict(payload)
                 command.update(

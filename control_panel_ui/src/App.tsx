@@ -46,7 +46,7 @@ export function App() {
     let timer = 0;
     const schedule = () => {
       window.clearInterval(timer);
-      if (!document.hidden) timer = window.setInterval(refresh, isRemoteSession() ? 30000 : 3000);
+      if (!document.hidden) timer = window.setInterval(refresh, isRemoteSession() ? 12000 : 3000);
     };
     document.addEventListener("visibilitychange", schedule);
     schedule();

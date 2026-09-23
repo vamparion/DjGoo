@@ -81,4 +81,5 @@ export type ControlState = {
     };
     profiles: Array<{ id: string; username: string; role: string; last_seen: number }>;
   };
+  players?: Array<{ id: string; discord_user_id: string; username: string; role: string; device_name: string; device_type: string; last_seen: number; online: boolean; device_count?: number }>;
 };

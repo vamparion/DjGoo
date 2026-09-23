@@ -1,6 +1,6 @@
 import type { PanelProps } from "./types";
 import type { DjGooProfile } from "../api";
-import { setPlayerRole } from "../api";
+import { isRemoteSession, revokePlayer } from "../api";
 
 export function GuestPanel({ state, send, profile, refresh }: PanelProps & { profile: DjGooProfile | null; refresh: () => Promise<void> }) {
   const title = state.playback.title || state.active_station?.last_track?.title || "Nothing playing";
@@ -14,14 +14,13 @@ export function GuestPanel({ state, send, profile, refresh }: PanelProps & { pro
         <button className="btn" onClick={() => void send("queue")}>Check Queue</button>
       </div>
       <div className="player-list">
-        {state.gaming.profiles.map((player) => (
+        {(state.players || []).map((player) => (
           <div className="row" key={player.id}>
-            <div><strong>{player.username}</strong><span>{player.role}</span></div>
-            <select disabled={profile?.role !== "host"} value={player.role} onChange={async (event) => { await setPlayerRole(player.id, event.target.value); await refresh(); }}>
-              <option value="member">Member</option><option value="moderator">Moderator</option><option value="guest">Guest</option><option value="host">Host</option>
-            </select>
+            <div><strong>{player.username}</strong><span>{player.online ? "Online now" : `Last active ${new Date(player.last_seen * 1000).toLocaleString()}`} · {player.device_name}{(player.device_count || 0) > 1 ? ` · ${player.device_count} paired devices` : ""}</span></div>
+            <div className="inline-actions"><span className={`status-pill ${player.online ? "online" : ""}`}>{player.role}</span>{profile?.role === "host" && !isRemoteSession() && <button className="btn danger" onClick={async () => { await revokePlayer(player.discord_user_id, state.session?.guild_id); await refresh(); }}>Revoke</button>}</div>
           </div>
         ))}
+        {!(state.players || []).length && <div className="empty-state"><strong>No paired players yet</strong><p>Players appear here after opening their private DjGoo link.</p></div>}
       </div>
       <div className="guest-grid">
         <div className="phone-preview large"><div className="phone-screen"><h3>Now Playing</h3><strong>{title}</strong><button className="btn primary" onClick={() => void send("play_next", { query: title })}>Request Song</button><button className="btn" onClick={() => void send("skip")}>Vote Skip</button><button className="btn good" onClick={() => void send("more_like")}>More Like</button><button className="btn danger" onClick={() => void send("ban")}>Ban Vote</button></div></div>

@@ -109,6 +109,15 @@ export async function setPlayerRole(profileId: string, role: string) {
   });
 }
 
+export async function revokePlayer(discordUserId: string, guildId = "1513011181202309290") {
+  if (remoteCredential) throw new Error("Player revocation is available from the host LAN controls.");
+  const profile = savedProfile();
+  return request<{ ok: true; revoked: number }>("/api/player/revoke", {
+    method: "POST",
+    body: JSON.stringify({ token: profile?.token || "", discord_user_id: discordUserId, guild_id: guildId }),
+  });
+}
+
 export async function stationAction(action: string, payload: Record<string, unknown>) {
   if (remoteCredential) return remoteCommand(remoteCredential, "remote_station_action", { payload: { action, ...payload } });
   const profile = savedProfile();

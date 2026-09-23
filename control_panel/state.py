@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 from voice.gaming_session import GamingSessionStore
 from voice.sqlite_stations import SqliteDjGooStations
 from voice.mini_player_protocol import MiniPlayerHistory
+from voice.pairing_store import PairingStore
 
 
 CORE_COMPONENTS = ("redbot", "lavalink", "voice", "web")
@@ -39,6 +40,7 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
         project_root / "data" / "djgoo-now-playing.json",
         {},
     )
+    now_playing, active_guild_id = _active_playback(now_playing)
     playlists_data = read_json_file(
         project_root / "data" / "djgoo-playlists.json",
         {"playlists": {}},
@@ -66,6 +68,7 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
     live_queue = now_playing.get("queue") if isinstance(now_playing.get("queue"), list) else []
     gaming = GamingSessionStore(project_root / "data" / "djgoo-gaming-session.json")
     history = MiniPlayerHistory(project_root / "data" / "djgoo-mini-history.json").entries()
+    players = _paired_players(project_root, active_guild_id)
     return {
         "playback": {
             "title": str(current.get("title") or last_title),
@@ -92,6 +95,7 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
             ),
         },
         "gaming": gaming.public_state(0),
+        "players": players,
         "logs": {
             "startup": read_recent_log_lines(
                 project_root / "logs" / "startup.log",
@@ -153,6 +157,7 @@ def build_remote_state_snapshot(project_root: Path, *, privileged: bool = False)
         "health": full.get("health") or {},
         "health_summary": full.get("health_summary") or {},
         "gaming": gaming,
+        "players": list(full.get("players") or []) if privileged else [],
         "logs": {},
         "timeline": list(full.get("timeline") or [])[:4] if privileged else [],
         "history": [],
@@ -180,6 +185,47 @@ def build_remote_state_snapshot(project_root: Path, *, privileged: bool = False)
         state["stations"] = [station]
     _remove_private_track_sources(state)
     return state
+
+
+def _active_playback(document: Dict[str, Any]) -> tuple[Dict[str, Any], int]:
+    guilds = document.get("guilds") if isinstance(document, dict) else None
+    if not isinstance(guilds, dict) or not guilds:
+        return document, 0
+    candidates = [(str(key), value) for key, value in guilds.items() if isinstance(value, dict)]
+    if not candidates:
+        return {}, 0
+    guild_id, state = max(candidates, key=lambda item: float(item[1].get("saved_at") or 0))
+    return state, int(guild_id) if guild_id.isdigit() else 0
+
+
+def _paired_players(project_root: Path, guild_id: int) -> List[Dict[str, Any]]:
+    database = project_root / "data" / "djgoo-pairing.db"
+    if not database.exists() or not guild_id:
+        return []
+    try:
+        store = PairingStore(database, project_root / "data" / "djgoo-pairing-secret.bin")
+        devices = store.list_guild_devices(guild_id)
+    except (OSError, ValueError):
+        return []
+    now = time.time()
+    players: Dict[int, Dict[str, Any]] = {}
+    for device in devices:
+        player = players.setdefault(device.user_id, {
+            "id": str(device.user_id), "discord_user_id": str(device.user_id),
+            "username": device.display_name or f"Discord user {device.user_id}",
+            "role": device.role, "device_name": device.device_name,
+            "device_type": device.device_type, "last_seen": device.last_seen_at,
+            "online": False, "device_count": 0,
+        })
+        player["device_count"] += 1
+        player["online"] = bool(player["online"] or now - device.last_seen_at <= 90)
+        if device.last_seen_at >= float(player["last_seen"]):
+            player.update({"last_seen": device.last_seen_at, "device_name": device.device_name})
+        if device.display_name:
+            player["username"] = device.display_name
+        if device.role in {"host", "moderator"}:
+            player["role"] = device.role
+    return sorted(players.values(), key=lambda item: float(item["last_seen"]), reverse=True)
 
 
 def _remove_private_track_sources(value: Any) -> None:

@@ -27,6 +27,8 @@ class DeviceIdentity:
     last_seen_at: float
     device_type: str = "voice"
     capabilities: tuple[str, ...] = ()
+    display_name: str = ""
+    role: str = "member"
 
 
 class PairingStore:
@@ -87,6 +89,8 @@ class PairingStore:
                     revoked_at REAL,
                     device_type TEXT NOT NULL DEFAULT 'voice',
                     capabilities TEXT NOT NULL DEFAULT '[]'
+                    ,display_name TEXT NOT NULL DEFAULT ''
+                    ,role TEXT NOT NULL DEFAULT 'member'
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_devices_user_guild
@@ -105,6 +109,8 @@ class PairingStore:
                 ("pairing_codes", "capabilities", "TEXT NOT NULL DEFAULT '[]'"),
                 ("devices", "device_type", "TEXT NOT NULL DEFAULT 'voice'"),
                 ("devices", "capabilities", "TEXT NOT NULL DEFAULT '[]'"),
+                ("devices", "display_name", "TEXT NOT NULL DEFAULT ''"),
+                ("devices", "role", "TEXT NOT NULL DEFAULT 'member'"),
             ):
                 names = {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")}
                 if column not in names:
@@ -255,6 +261,43 @@ class PairingStore:
             )
             for row in rows
         ]
+
+    def list_guild_devices(self, guild_id: int) -> list[DeviceIdentity]:
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                "SELECT device_id, user_id, guild_id, device_name, created_at, last_seen_at, "
+                "device_type, capabilities, display_name, role FROM devices "
+                "WHERE guild_id = ? AND revoked_at IS NULL ORDER BY last_seen_at DESC",
+                (int(guild_id),),
+            ).fetchall()
+        return [self._identity_from_row(row) for row in rows]
+
+    def update_presence(self, device_id: str, display_name: str, role: str) -> None:
+        clean_role = role if role in {"host", "moderator", "member", "guest"} else "member"
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                "UPDATE devices SET display_name = ?, role = ? WHERE device_id = ? AND revoked_at IS NULL",
+                (" ".join(display_name.split())[:80], clean_role, device_id),
+            )
+
+    def revoke_guild_device(self, device_id: str, guild_id: int) -> bool:
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE devices SET revoked_at = ? WHERE device_id = ? AND guild_id = ? AND revoked_at IS NULL",
+                (time.time(), device_id, int(guild_id)),
+            )
+        return cursor.rowcount > 0
+
+    def _identity_from_row(self, row: sqlite3.Row) -> DeviceIdentity:
+        keys = set(row.keys())
+        return DeviceIdentity(
+            device_id=str(row["device_id"]), user_id=int(row["user_id"]), guild_id=int(row["guild_id"]),
+            device_name=str(row["device_name"]), created_at=float(row["created_at"]),
+            last_seen_at=float(row["last_seen_at"]), device_type=self._device_type(str(row["device_type"])),
+            capabilities=self._capabilities(row["capabilities"]),
+            display_name=str(row["display_name"] or "") if "display_name" in keys else "",
+            role=str(row["role"] or "member") if "role" in keys else "member",
+        )
 
     def revoke_device(self, device_id: str, user_id: int, guild_id: int) -> bool:
         with self._lock, self._connect() as connection:

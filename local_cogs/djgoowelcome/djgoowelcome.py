@@ -236,14 +236,44 @@ class DjGooWelcome(commands.Cog):
             and int(member.id) == int(guild.owner_id)
         )
         is_manager = is_owner or bool(getattr(permissions, "manage_guild", False))
+        actor_role = "host" if is_owner else ("moderator" if is_manager else "member")
+        display_name = str(getattr(member, "display_name", "") or "Discord member")
+        await asyncio.to_thread(
+            self._pairing_store.update_presence, identity.device_id, display_name, actor_role
+        )
         state = await asyncio.to_thread(
             build_remote_state_snapshot,
             PROJECT_ROOT,
             privileged=is_manager,
         )
+        if is_manager:
+            devices = await asyncio.to_thread(self._pairing_store.list_guild_devices, identity.guild_id)
+            players: Dict[int, Dict[str, Any]] = {}
+            for device in devices:
+                paired_member = guild.get_member(device.user_id) if guild is not None else None
+                paired_permissions = getattr(paired_member, "guild_permissions", None)
+                paired_owner = bool(guild is not None and paired_member is not None and int(paired_member.id) == int(guild.owner_id))
+                paired_role = "host" if paired_owner else ("moderator" if bool(getattr(paired_permissions, "manage_guild", False)) else "member")
+                paired_name = str(getattr(paired_member, "display_name", "") or device.display_name or f"Discord user {device.user_id}")
+                if paired_member is not None and (paired_name != device.display_name or paired_role != device.role):
+                    await asyncio.to_thread(self._pairing_store.update_presence, device.device_id, paired_name, paired_role)
+                player = players.setdefault(device.user_id, {
+                    "id": str(device.user_id), "discord_user_id": str(device.user_id),
+                    "username": paired_name, "role": paired_role, "device_name": device.device_name,
+                    "device_type": device.device_type, "last_seen": device.last_seen_at,
+                    "online": False, "device_count": 0,
+                })
+                player["device_count"] += 1
+                player["online"] = bool(player["online"] or time.time() - device.last_seen_at <= 90)
+                if device.last_seen_at >= float(player["last_seen"]):
+                    player.update({"last_seen": device.last_seen_at, "device_name": device.device_name})
+                player["username"] = paired_name
+                if paired_role in {"host", "moderator"}:
+                    player["role"] = paired_role
+            state["players"] = sorted(players.values(), key=lambda item: float(item["last_seen"]), reverse=True)
         state["session"] = {
-            "role": "host" if is_owner else ("moderator" if is_manager else "member"),
-            "display_name": str(getattr(member, "display_name", "") or "Discord member"),
+            "role": actor_role,
+            "display_name": display_name,
             "discord_user_id": str(identity.user_id),
             "guild_id": str(identity.guild_id),
             "device_id": identity.device_id,
