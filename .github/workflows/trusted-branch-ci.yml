@@ -5,6 +5,7 @@ on:
     branches:
       - "agent/**"
       - "release/**"
+      - "hotfix/**"
       - "codex/browser-webrtc-remote-control-pr"
   workflow_dispatch:
 
