@@ -175,6 +175,9 @@ jobs:
             --output build/full-release/voice-app
           python tools/build_thin_launchers.py --output build/full-release/launchers
 
+          python -c "import importlib.util,pathlib; p=pathlib.Path(r'build/full-release/host-app/tools/djgoo_portable_stack.py').resolve(); s=importlib.util.spec_from_file_location('djgoo_layered_stack_smoke',p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); core=m.load_core(); assert callable(core.main); print('Versioned Host supervisor core load OK')"
+          if ($LASTEXITCODE -ne 0) { throw "Versioned Host supervisor core smoke test failed" }
+
       - name: Assemble layered Host and Voice packages
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
