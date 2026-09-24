@@ -1,8 +1,45 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import tools.apply_update as apply_update
+
+
+def test_invoke_stack_supports_source_venv_without_console(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    python = tmp_path / ".venv" / "Scripts" / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"python")
+    stack = tmp_path / "tools" / "djgoo_stack.py"
+    stack.parent.mkdir(parents=True)
+    stack.write_text("# supervisor\n", encoding="utf-8")
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def run(command, **kwargs):
+        calls.append((list(command), kwargs))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(apply_update.subprocess, "run", run)
+    monkeypatch.setattr(
+        apply_update,
+        "portable_environment",
+        lambda root: {"DJGOO_HOME": str(root)},
+    )
+    logs: list[str] = []
+
+    apply_update.invoke_stack(tmp_path, "shutdown", logs.append)
+
+    assert calls[0][0] == [str(python), str(stack), "shutdown"]
+    assert calls[0][1]["env"] == {"DJGOO_HOME": str(tmp_path)}
+    assert calls[0][1]["creationflags"] == getattr(
+        apply_update.subprocess,
+        "CREATE_NO_WINDOW",
+        0,
+    )
+    assert logs == ["Requested stack shutdown (exit 0)."]
 
 
 def test_bootloader_parent_requires_same_djgoo_executable(
