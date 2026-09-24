@@ -1,6 +1,6 @@
 Red-DiscordBot==3.5.24
 aiohttp>=3.9,<4
-cryptography>=42,<47
+cryptography>=50.0.0,<51
 numpy>=1.26,<3
 psutil>=5.9,<8
 pytest>=8,<9
