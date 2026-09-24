@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from tools import djgoo_portable_stack as adapter
+from tools import layered_stack
 
 
 class RecordingLogger:
@@ -139,6 +140,36 @@ def test_configure_core_uses_bundled_runtimes_and_safe_flags(tmp_path, monkeypat
         assert not breakaway or not (core.WINDOWS_DETACHED_FLAGS & breakaway)
     else:
         assert core.WINDOWS_DETACHED_FLAGS == 0
+
+
+def test_layered_stack_preserves_java_fallback_without_packaged_runtime(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    app = tmp_path / "app" / "test"
+    app.mkdir(parents=True)
+    touch(tmp_path / ".venv" / "Scripts" / "python.exe")
+    touch(tmp_path / ".venv" / "Scripts" / "pythonw.exe")
+    configured_java = Path("java.exe")
+    core = SimpleNamespace(
+        JAVA=configured_java,
+        build_specs=lambda: [],
+        LOG=RecordingLogger(),
+    )
+    monkeypatch.setattr(
+        layered_stack.legacy,
+        "configure_core",
+        lambda candidate, project_root: candidate,
+    )
+
+    configured = layered_stack.configure_core(
+        core,
+        project_root=tmp_path,
+        app_root=app,
+    )
+
+    assert configured.JAVA == configured_java
+    assert configured.BOT_PYTHON == tmp_path / ".venv" / "Scripts" / "python.exe"
 
 
 def test_spawn_supervisor_reenters_through_portable_adapter(tmp_path, monkeypatch) -> None:
