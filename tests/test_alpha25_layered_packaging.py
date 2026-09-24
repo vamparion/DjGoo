@@ -168,6 +168,9 @@ def test_thin_launcher_is_extraction_free() -> None:
     assert "launcher.djgoo_layered_voice" in source
     assert "launcher.djgoo_layered_mini" in source
     assert 'Path.Combine(root, "runtime", runtimeName' in source
+    assert 'Directory.Exists(Path.Combine(root, ".git"))' in source
+    assert 'Path.Combine(root, sourceRuntime, "Scripts", "pythonw.exe")' in source
+    assert 'Path.Combine(root, "runtime", "webrtc", "Lib", "site-packages")' in source
 
 
 def test_legacy_flat_sources_are_removed_once_but_runtime_is_preserved(tmp_path: Path) -> None:
