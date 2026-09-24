@@ -29,11 +29,11 @@ def load_core():
 
 
 def portable_windows_flags() -> int:
-    """Use Windows flags that detach safely without requiring job breakaway rights."""
+    """Run background components without visible Windows console windows."""
 
     if os.name != "nt":
         return 0
-    return subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    return subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
 
 
 def _process_cmdline(process: Any) -> list[str]:

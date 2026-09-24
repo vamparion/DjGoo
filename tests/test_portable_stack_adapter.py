@@ -121,7 +121,7 @@ def test_configure_core_uses_bundled_runtimes_and_safe_flags(tmp_path, monkeypat
     assert callable(core.spawn_supervisor)
 
     if os.name == "nt":
-        assert core.WINDOWS_DETACHED_FLAGS & subprocess.DETACHED_PROCESS
+        assert core.WINDOWS_DETACHED_FLAGS & subprocess.CREATE_NO_WINDOW
         assert core.WINDOWS_DETACHED_FLAGS & subprocess.CREATE_NEW_PROCESS_GROUP
         breakaway = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
         assert not breakaway or not (core.WINDOWS_DETACHED_FLAGS & breakaway)

@@ -49,7 +49,7 @@ EVENT_LOG = LOG_DIR / "djgoo-events.jsonl"
 WINDOWS_DETACHED_FLAGS = 0
 if os.name == "nt":
     WINDOWS_DETACHED_FLAGS = (
-        subprocess.DETACHED_PROCESS
+        subprocess.CREATE_NO_WINDOW
         | subprocess.CREATE_NEW_PROCESS_GROUP
         | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
     )

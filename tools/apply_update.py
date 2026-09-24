@@ -14,6 +14,9 @@ from ctypes import wintypes
 from pathlib import Path, PurePosixPath
 from typing import Callable, Iterable, Mapping
 
+from tools.app_layout import active_app_root, runtime_python
+from tools.portable_environment import portable_environment
+
 
 REPLACE_TIMEOUT_SECONDS = 30.0
 PARENT_EXIT_TIMEOUT_SECONDS = 30.0
@@ -528,18 +531,22 @@ def stack_was_running(root: Path) -> bool:
 
 
 def invoke_stack(root: Path, action: str, log: Callable[[str], None]) -> None:
-    python = root / "runtime" / "python" / "python.exe"
-    stack = root / "tools" / "djgoo_stack.py"
-    if not python.exists() or not stack.exists():
+    python = runtime_python(root, "host")
+    root_stack = root / "tools" / "djgoo_stack.py"
+    layered_stack = active_app_root(root) / "tools" / "djgoo_portable_stack_entry.py"
+    stack = root_stack if root_stack.is_file() else layered_stack
+    if not python.is_file() or not stack.is_file():
         log(f"Stack {action} skipped because the runtime or supervisor is missing.")
         return
     try:
         completed = subprocess.run(
             [str(python), str(stack), action],
             cwd=root,
+            env=portable_environment(root),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             timeout=20,
             check=False,
         )
