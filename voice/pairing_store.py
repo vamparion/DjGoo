@@ -128,10 +128,6 @@ class PairingStore:
         expires = now + max(60, min(int(ttl_seconds), 900))
         with self._lock, self._connect() as connection:
             connection.execute("DELETE FROM pairing_codes WHERE expires_at <= ?", (now,))
-            connection.execute(
-                "DELETE FROM pairing_codes WHERE user_id = ? AND guild_id = ?",
-                (int(user_id), int(guild_id)),
-            )
             for _ in range(10):
                 code = "".join(secrets.choice(PAIRING_ALPHABET) for _ in range(8))
                 try:

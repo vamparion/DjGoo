@@ -36,6 +36,7 @@ def read_recent_log_lines(path: Path, *, limit: int = 80) -> List[str]:
 
 
 def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
+    measured_at = time.time()
     now_playing = read_json_file(
         project_root / "data" / "djgoo-now-playing.json",
         {},
@@ -79,6 +80,11 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
             "queue_count": len(live_queue),
             "requester": str(now_playing.get("requester") or ""),
             "state": str(now_playing.get("playback_state") or "idle"),
+            "position_ms": int(now_playing.get("position_seconds") or 0) * 1000,
+            "duration_ms": int(current.get("duration_seconds") or 0) * 1000,
+            "playing": str(now_playing.get("playback_state") or "idle") == "playing",
+            "measured_at": measured_at,
+            "volume": int(now_playing.get("volume") or 0),
         },
         "queue": live_queue,
         "playlists": playlists,

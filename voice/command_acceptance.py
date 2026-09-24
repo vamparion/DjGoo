@@ -30,6 +30,7 @@ class AuthorizationResult:
 
 AuthorizeCallback = Callable[[DeviceIdentity, str], Awaitable[AuthorizationResult]]
 StateCallback = Callable[[DeviceIdentity], Awaitable[dict[str, Any]]]
+SignalCallback = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 WEB_INTENT_CAPABILITY = {
     "play": "playback.request",
@@ -98,11 +99,13 @@ class AuthenticatedCommandProcessor:
         queue_path: Path,
         authorize: AuthorizeCallback,
         state_provider: StateCallback | None = None,
+        signal_provider: SignalCallback | None = None,
     ) -> None:
         self.pairing_store = pairing_store
         self.queue_path = queue_path
         self.authorize = authorize
         self.state_provider = state_provider
+        self.signal_provider = signal_provider
         self._queue_lock = threading.Lock()
         self._limiter = DeviceRateLimiter()
 
@@ -155,6 +158,11 @@ class AuthenticatedCommandProcessor:
         if self.state_provider is None:
             raise CommandRejected(503, "Remote player state is unavailable")
         return await self.state_provider(identity)
+
+    async def webrtc_signal(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self.signal_provider is None:
+            raise CommandRejected(503, "Direct browser connection is unavailable")
+        return await self.signal_provider(payload)
 
     async def accept(self, token: str, payload: dict[str, Any]) -> dict[str, Any]:
         identity = await asyncio.to_thread(self.pairing_store.authenticate, token)

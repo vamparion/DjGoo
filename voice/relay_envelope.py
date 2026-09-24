@@ -53,6 +53,8 @@ async def handle_host_envelope(
             result = await processor.remote_state(
                 str(payload.get("device_token") or ""),
             )
+        elif action == "webrtc/signal":
+            result = await processor.webrtc_signal(payload)
         else:
             raise CommandRejected(400, "Unknown relay action")
         response_plaintext = {"ok": True, "status": 200, "result": result}

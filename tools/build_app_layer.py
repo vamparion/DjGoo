@@ -28,6 +28,7 @@ ROOT_FILES = (
     "requirements-voice.txt",
     "requirements-voice-base.txt",
     "requirements-speech.txt",
+    "requirements-webrtc.txt",
 )
 EXCLUDED_NAMES = {
     ".git",

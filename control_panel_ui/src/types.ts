@@ -56,6 +56,11 @@ export type ControlState = {
     queue_count: number;
     requester?: string;
     state?: string;
+    position_ms?: number;
+    duration_ms?: number;
+    playing?: boolean;
+    measured_at?: number;
+    volume?: number;
   };
   queue: Track[];
   playlists: Playlist[];

@@ -2,6 +2,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5174",
     "build": "vite build",
+    "test": "vitest run",
     "preview": "vite preview --host 127.0.0.1 --port 5174"
   },
   "dependencies": {
@@ -14,5 +15,9 @@
     "react-dom": "latest",
     "typescript": "latest",
     "vite": "latest"
+  },
+  "devDependencies": {
+    "jsdom": "^30.1.1",
+    "vitest": "^5.0.1"
   }
 }

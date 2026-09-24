@@ -128,7 +128,11 @@ def test_remote_frontend_erases_fragment_and_reuses_shared_app() -> None:
     assert "new WebSocket" in transport and "credentialWithInviteRoutes" in transport
     assert 'transport === "relay"' in transport and "RelaySocketSession" in transport
     assert "stateRefreshIntervalMs()" in app
-    assert 'remoteTransportKind(remoteCredential) === "relay" ? 3000 : 12000' in api
+    assert "subscribeState" in app and "setState(next)" in app
+    assert "reconnectRemote()" in app and "void poll()" in app
+    assert "isRemoteDirectConnected(remoteCredential) ? 60000 : 8000" in api
+    assert "HostRejection" in transport and "command_id: crypto.randomUUID()" in transport
+    assert "const command =" in transport and "...command, device_token" in transport
     assert "device_token" not in worker and "#pair=" not in worker
 
 

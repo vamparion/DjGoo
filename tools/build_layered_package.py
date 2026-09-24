@@ -75,6 +75,7 @@ def _write_runtime_layout(root: Path, product: str, speech_included: bool) -> No
                 "java": product == "host",
                 "speech": speech_included,
                 "speech_optional_on_host": product == "host",
+                "webrtc": product == "host",
             },
             indent=2,
         )
@@ -223,6 +224,7 @@ def build(
     runtime_java: Path | None = None,
     lavalink_jar: Path | None = None,
     speech_layer: Path | None = None,
+    webrtc_layer: Path | None = None,
     include_host_speech: bool = False,
 ) -> Path:
     normalized_product = product.strip().lower()
@@ -260,6 +262,7 @@ def build(
         _copy_tree(speech_layer.resolve() if speech_layer else None, output / "runtime" / "speech")
 
     if normalized_product == "host":
+        _copy_tree(webrtc_layer.resolve() if webrtc_layer else None, output / "runtime" / "webrtc")
         if runtime_java is None or lavalink_jar is None:
             raise LayeredPackageError("Host package requires Java runtime and Lavalink jar")
         _copy_tree(runtime_java.resolve(), output / "runtime" / "java")
@@ -295,6 +298,7 @@ def main() -> int:
     parser.add_argument("--runtime-java", type=Path)
     parser.add_argument("--lavalink-jar", type=Path)
     parser.add_argument("--speech-layer", type=Path)
+    parser.add_argument("--webrtc-layer", type=Path)
     parser.add_argument("--include-host-speech", action="store_true")
     args = parser.parse_args()
     build(
@@ -307,6 +311,7 @@ def main() -> int:
         runtime_java=args.runtime_java,
         lavalink_jar=args.lavalink_jar,
         speech_layer=args.speech_layer,
+        webrtc_layer=args.webrtc_layer,
         include_host_speech=args.include_host_speech,
     )
     return 0

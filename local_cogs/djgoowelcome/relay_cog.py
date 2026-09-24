@@ -29,6 +29,7 @@ from voice.pairing_bundle import PairingEndpoint, PairingInvite
 from voice.relay_crypto import load_or_create_host_identity
 from voice.relay_envelope import handle_host_envelope
 from voice.relay_host import RelayHostClient
+from voice.webrtc_transport import WebRtcSignalManager
 
 
 class DjGooRelay(commands.Cog):
@@ -48,6 +49,11 @@ class DjGooRelay(commands.Cog):
             djgoo_cog._authorize_remote,
             djgoo_cog._remote_state,
         )
+        self.webrtc = WebRtcSignalManager(
+            self.processor,
+            ice_servers=tuple(self._webrtc_ice_servers()),
+        )
+        self.processor.signal_provider = self.webrtc.signal
         self.discord_webhook_url = self._discord_webhook_url()
         self.discord_webhook_id = (
             discord_webhook_id(self.discord_webhook_url)
@@ -56,6 +62,11 @@ class DjGooRelay(commands.Cog):
         )
         self.client: RelayHostClient | None = None
         self._startup_task: asyncio.Task[None] | None = None
+        self._webrtc_observer_task: asyncio.Task[None] | None = None
+        if self.webrtc.available():
+            self._webrtc_observer_task = self.bot.loop.create_task(
+                self._observe_webrtc_state()
+            )
         relay_url = str(self.settings.get("url") or "").strip()
         if bool(self.settings.get("enabled", False)) and relay_url:
             self.client = RelayHostClient(
@@ -76,6 +87,12 @@ class DjGooRelay(commands.Cog):
                 else ""
             ),
         )
+        log_event(
+            "web.remote.transport.webrtc.ready"
+            if self.webrtc.available()
+            else "web.remote.transport.webrtc.unavailable",
+            ice_servers=str(len(self.webrtc.ice_servers)),
+        )
 
     def _raw_secrets(self) -> dict[str, Any]:
         path = self.djgoo_cog._secrets_path()
@@ -91,6 +108,23 @@ class DjGooRelay(commands.Cog):
         gateway = gateway if isinstance(gateway, dict) else {}
         relay = gateway.get("relay", {})
         return relay if isinstance(relay, dict) else {}
+
+    def _webrtc_ice_servers(self) -> list[str]:
+        secrets = self._raw_secrets()
+        gateway = secrets.get("voice_gateway", {})
+        gateway = gateway if isinstance(gateway, dict) else {}
+        webrtc = gateway.get("webrtc", {})
+        webrtc = webrtc if isinstance(webrtc, dict) else {}
+        raw = webrtc.get("ice_servers")
+        if isinstance(raw, list):
+            values = [
+                str(item).strip()
+                for item in raw
+                if str(item).strip().startswith("stun:")
+            ]
+            if values:
+                return values
+        return ["stun:stun.l.google.com:19302"]
 
     def _discord_webhook_url(self) -> str:
         secrets = self._raw_secrets()
@@ -277,11 +311,43 @@ class DjGooRelay(commands.Cog):
             encryption_fingerprint=self.client.encryption_fingerprint,
         )
 
+    def _state_source_signature(self) -> tuple[tuple[str, int, int], ...]:
+        names = (
+            "djgoo-now-playing.json",
+            "djgoo-playlists.json",
+            "djgoo-stations.sqlite3",
+            "djgoo-stations.sqlite3-wal",
+            "djgoo-gaming-session.json",
+        )
+        signature = []
+        for name in names:
+            path = self.project_root / "data" / name
+            try:
+                stat = path.stat()
+                signature.append((name, stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                signature.append((name, 0, 0))
+        return tuple(signature)
+
+    async def _observe_webrtc_state(self) -> None:
+        """Watch cheap state-file metadata and push only meaningful snapshots."""
+        previous = self._state_source_signature()
+        while True:
+            await asyncio.sleep(1.0)
+            current = self._state_source_signature()
+            if current == previous:
+                continue
+            previous = current
+            await self.webrtc.publish_state()
+
     def cog_unload(self) -> None:
         if self._startup_task is not None:
             self._startup_task.cancel()
         if self.client is not None:
             self.bot.loop.create_task(self.client.stop())
+        if self._webrtc_observer_task is not None:
+            self._webrtc_observer_task.cancel()
+        self.bot.loop.create_task(self.webrtc.close_all())
 
     @commands.Cog.listener()
     async def on_message(self, message) -> None:

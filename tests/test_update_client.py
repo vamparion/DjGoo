@@ -59,6 +59,17 @@ def test_select_update_requires_both_small_update_assets() -> None:
     assert offer.bundle_asset.name == BUNDLE_ASSET_NAME
 
 
+def test_alpha25_install_is_offered_alpha26() -> None:
+    installed = parse_version("0.3.0-alpha.25")
+    assert installed is not None
+
+    offer = select_update([_release("v0.3.0-alpha.26")], installed)
+
+    assert offer is not None
+    assert offer.version.text == "0.3.0-alpha.26"
+    assert offer.tag == "v0.3.0-alpha.26"
+
+
 def test_stable_install_does_not_follow_prereleases() -> None:
     installed = parse_version("1.0.0")
     assert installed is not None

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { createProfile, getState, isRemoteSession, resetDjGoo, savedProfile, sendCommand, stateRefreshIntervalMs } from "./api";
+import { createProfile, getState, isDirectTransportHealthy, isRemoteSession, reconnectRemote, resetDjGoo, savedProfile, sendCommand, stateRefreshIntervalMs, subscribeConnection, subscribeState } from "./api";
 import { CommandBar } from "./components/CommandBar";
 import { HealthPanel } from "./components/HealthPanel";
 import { LivePanel } from "./components/LivePanel";
@@ -60,11 +60,24 @@ export function App() {
     };
     const visibilityChanged = () => {
       window.clearTimeout(timer);
-      if (!document.hidden) void poll();
+      if (!document.hidden) {
+        reconnectRemote();
+        void poll();
+      }
     };
+    const unsubscribeState = subscribeState(next => {
+      refreshApplied.current = ++refreshStarted.current;
+      setState(next);
+      if (next.session) setProfile({ id: next.session.discord_user_id || "remote", token: "", username: next.session.display_name, role: next.session.role });
+      setError("");
+    });
+    const unsubscribeConnection = subscribeConnection(() => {
+      window.clearTimeout(timer);
+      if (!stopped && !document.hidden) timer = window.setTimeout(poll, stateRefreshIntervalMs());
+    });
     document.addEventListener("visibilitychange", visibilityChanged);
     void poll();
-    return () => { stopped = true; window.clearTimeout(timer); document.removeEventListener("visibilitychange", visibilityChanged); };
+    return () => { stopped = true; window.clearTimeout(timer); unsubscribeState(); unsubscribeConnection(); document.removeEventListener("visibilitychange", visibilityChanged); };
   }, []);
 
   async function send(action: string, payload: Record<string, unknown> = {}) {
@@ -77,7 +90,7 @@ export function App() {
       }
       setStatus(`Sent ${action}`);
       await refresh();
-      if (["play_next", "play_now", "play", "skip", "stop", "start_radio", "radio"].includes(action)) {
+      if (!isDirectTransportHealthy() && ["play_next", "play_now", "play", "skip", "stop", "start_radio", "radio"].includes(action)) {
         window.setTimeout(() => void refresh(), 2000);
         window.setTimeout(() => void refresh(), 6000);
       }

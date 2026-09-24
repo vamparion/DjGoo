@@ -1,5 +1,5 @@
 import type { ControlState } from "./types";
-import { remoteCommand, remoteState, remoteTransportKind, type WebCredential } from "./remoteTransport";
+import { isRemoteDirectConnected, remoteCommand, remoteState, requestDirectReconnect, subscribeDirectConnection, subscribeRemoteState, type WebCredential } from "./remoteTransport";
 
 const API_BASE = import.meta.env.VITE_DJGOO_API_BASE || "";
 const PROFILE_KEY = "djgoo-profile";
@@ -26,7 +26,25 @@ export function isRemoteSession() { return Boolean(remoteCredential); }
 
 export function stateRefreshIntervalMs() {
   if (!remoteCredential) return 3000;
-  return remoteTransportKind(remoteCredential) === "relay" ? 3000 : 12000;
+  return isRemoteDirectConnected(remoteCredential) ? 60000 : 8000;
+}
+
+export function subscribeState(listener: (state: ControlState) => void) {
+  if (!remoteCredential) return () => undefined;
+  return subscribeRemoteState(remoteCredential, state => listener(state as ControlState));
+}
+
+export function subscribeConnection(listener: (connected: boolean) => void) {
+  if (!remoteCredential) return () => undefined;
+  return subscribeDirectConnection(remoteCredential, listener);
+}
+
+export function reconnectRemote() {
+  if (remoteCredential) requestDirectReconnect(remoteCredential);
+}
+
+export function isDirectTransportHealthy() {
+  return Boolean(remoteCredential && isRemoteDirectConnected(remoteCredential));
 }
 
 export function forgetRemoteSession() {
