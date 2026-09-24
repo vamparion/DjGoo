@@ -105,6 +105,18 @@ def touch(path: Path) -> Path:
     return path
 
 
+def test_load_core_falls_back_to_source_stack_name(tmp_path, monkeypatch) -> None:
+    portable_core = tmp_path / "djgoo_stack_core.py"
+    source_core = tmp_path / "djgoo_stack.py"
+    source_core.write_text("SENTINEL = 'source-core'\n", encoding="utf-8")
+    monkeypatch.setattr(adapter, "CORE_PATH", portable_core)
+    monkeypatch.setattr(adapter, "SOURCE_CORE_PATH", source_core)
+
+    core = adapter.load_core()
+
+    assert core.SENTINEL == "source-core"
+
+
 def test_configure_core_uses_bundled_runtimes_and_safe_flags(tmp_path, monkeypatch) -> None:
     runtime_python = touch(tmp_path / "runtime" / "python" / "python.exe")
     runtime_pythonw = touch(tmp_path / "runtime" / "python" / "pythonw.exe")
