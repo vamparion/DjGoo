@@ -156,6 +156,15 @@ def test_app_layer_excludes_runtime_state_and_keeps_public_source(tmp_path: Path
     assert not (output / "config" / "secrets.json").exists()
 
 
+def test_host_app_layer_contains_supervisor_core_source(tmp_path: Path) -> None:
+    output = tmp_path / "host-app"
+    build_app_layer(output, "host", VERSION)
+
+    assert (output / "tools" / "djgoo_stack.py").is_file()
+    assert (output / "tools" / "djgoo_portable_stack.py").is_file()
+    assert (output / "tools" / "djgoo_portable_stack_entry.py").is_file()
+
+
 def test_thin_launcher_is_extraction_free() -> None:
     root = Path(__file__).resolve().parents[1]
     source = (root / "launcher" / "windows" / "DjGooThinLauncher.cs").read_text(
@@ -168,6 +177,9 @@ def test_thin_launcher_is_extraction_free() -> None:
     assert "launcher.djgoo_layered_voice" in source
     assert "launcher.djgoo_layered_mini" in source
     assert 'Path.Combine(root, "runtime", runtimeName' in source
+    assert 'Directory.Exists(Path.Combine(root, ".git"))' in source
+    assert 'Path.Combine(root, sourceRuntime, "Scripts", "pythonw.exe")' in source
+    assert 'Path.Combine(root, "runtime", "webrtc", "Lib", "site-packages")' in source
 
 
 def test_legacy_flat_sources_are_removed_once_but_runtime_is_preserved(tmp_path: Path) -> None:

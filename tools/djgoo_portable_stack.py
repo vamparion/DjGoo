@@ -14,14 +14,25 @@ import psutil
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CORE_PATH = Path(__file__).with_name("djgoo_stack_core.py")
+SOURCE_CORE_PATH = Path(__file__).with_name("djgoo_stack.py")
 LAVALINK_HOST = "::1"
 LAVALINK_PORT = 2333
 
 
 def load_core():
-    spec = importlib.util.spec_from_file_location("djgoo_stack_core", CORE_PATH)
+    # Generation-3 portable packages rename the supervisor core to
+    # djgoo_stack_core.py. Versioned app layers retain the source name
+    # djgoo_stack.py. Support both layouts so application-only updates can
+    # run on packaged installs and source/developer checkouts.
+    core_path = CORE_PATH if CORE_PATH.is_file() else SOURCE_CORE_PATH
+    if not core_path.is_file():
+        raise RuntimeError(
+            "Could not locate DjGoo supervisor core at "
+            f"{CORE_PATH} or {SOURCE_CORE_PATH}"
+        )
+    spec = importlib.util.spec_from_file_location("djgoo_stack_core", core_path)
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load DjGoo supervisor core from {CORE_PATH}")
+        raise RuntimeError(f"Could not load DjGoo supervisor core from {core_path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)

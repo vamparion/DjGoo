@@ -56,12 +56,23 @@ internal static class DjGooThinLauncher
             ? "launcher.djgoo_layered_voice"
             : mini ? "launcher.djgoo_layered_mini" : "launcher.djgoo_layered_host";
         string runtimeName = voice ? "python-voice" : "python-bot";
-        string pythonw = FirstExisting(
+        var runtimeCandidates = new List<string>
+        {
             Path.Combine(root, "runtime", runtimeName, "pythonw.exe"),
             Path.Combine(root, "runtime", "python", "pythonw.exe"),
             Path.Combine(root, "runtime", runtimeName, "python.exe"),
             Path.Combine(root, "runtime", "python", "python.exe")
-        );
+        };
+        bool sourceCheckout =
+            Directory.Exists(Path.Combine(root, ".git")) ||
+            File.Exists(Path.Combine(root, ".git"));
+        if (sourceCheckout)
+        {
+            string sourceRuntime = voice ? ".voice-venv" : ".venv";
+            runtimeCandidates.Add(Path.Combine(root, sourceRuntime, "Scripts", "pythonw.exe"));
+            runtimeCandidates.Add(Path.Combine(root, sourceRuntime, "Scripts", "python.exe"));
+        }
+        string pythonw = FirstExisting(runtimeCandidates.ToArray());
         if (!File.Exists(pythonw))
         {
             MessageBox.Show(
@@ -87,9 +98,11 @@ internal static class DjGooThinLauncher
         start.EnvironmentVariables["DJGOO_HOME"] = root;
         start.EnvironmentVariables["DJGOO_APP_ROOT"] = appRoot;
         string speech = Path.Combine(root, "runtime", "speech", "Lib", "site-packages");
+        string webrtc = Path.Combine(root, "runtime", "webrtc", "Lib", "site-packages");
         string existing = start.EnvironmentVariables["PYTHONPATH"] ?? "";
         var pythonPath = new List<string>();
         pythonPath.Add(appRoot);
+        if (Directory.Exists(webrtc)) pythonPath.Add(webrtc);
         if (Directory.Exists(speech)) pythonPath.Add(speech);
         if (!String.IsNullOrWhiteSpace(existing)) pythonPath.Add(existing);
         start.EnvironmentVariables["PYTHONPATH"] = String.Join(Path.PathSeparator.ToString(), pythonPath.ToArray());

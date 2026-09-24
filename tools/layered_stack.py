@@ -79,7 +79,9 @@ def configure_core(
     core.VOICE_PYTHON = bot_python
     core.PYTHONW = bot_pythonw if bot_pythonw.is_file() else bot_python
     core.REDBOT_SELECTOR = app / "tools" / "layered_redbot_selector.py"
-    core.JAVA = root / "runtime" / "java" / "bin" / "java.exe"
+    packaged_java = root / "runtime" / "java" / "bin" / "java.exe"
+    if packaged_java.is_file():
+        core.JAVA = packaged_java
     core.LAVALINK_DIR = root / "data" / "discordbot" / "cogs" / "Audio"
     core.LAVALINK_JAR = core.LAVALINK_DIR / "Lavalink.jar"
 

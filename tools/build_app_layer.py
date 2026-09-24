@@ -141,6 +141,7 @@ def build(output: Path, product: str, version: str) -> Path:
             [
                 output / "local_cogs" / "djgoowelcome",
                 output / "tools" / "djgoo_portable_stack_entry.py",
+                output / "tools" / "djgoo_stack.py",
             ]
         )
     missing = [str(path.relative_to(output)) for path in required if not path.exists()]

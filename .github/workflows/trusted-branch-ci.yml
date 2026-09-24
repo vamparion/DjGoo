@@ -5,6 +5,7 @@ on:
     branches:
       - "agent/**"
       - "release/**"
+      - "hotfix/**"
       - "codex/browser-webrtc-remote-control-pr"
   workflow_dispatch:
 
@@ -108,6 +109,10 @@ jobs:
             --version $version `
             --output build/trusted-layered/voice-app
           if ($LASTEXITCODE -ne 0) { throw "Voice application layer build failed" }
+
+          python -c "import importlib.util,pathlib; p=pathlib.Path(r'build/trusted-layered/host-app/tools/djgoo_portable_stack.py').resolve(); s=importlib.util.spec_from_file_location('djgoo_layered_stack_smoke',p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); core=m.load_core(); assert callable(core.main); print('Versioned Host supervisor core load OK')"
+          if ($LASTEXITCODE -ne 0) { throw "Versioned Host supervisor core smoke test failed" }
+
           python tools/build_thin_launchers.py `
             --output build/trusted-layered/launchers
           if ($LASTEXITCODE -ne 0) { throw "Thin launcher build failed" }
