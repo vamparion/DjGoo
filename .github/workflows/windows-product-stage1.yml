@@ -18,6 +18,8 @@ jobs:
     # Only the repository branch can execute code on trusted AEGIS.
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 20
+    env:
+      DOTNET_INSTALL_DIR: ${{ runner.temp }}\dotnet
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
