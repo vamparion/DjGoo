@@ -6,15 +6,19 @@ import os
 import runpy
 import socket
 import sys
+import time
 import traceback
 from pathlib import Path
 from typing import Any, BinaryIO
+
+import psutil
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from tools.app_layout import bundled_cogs_root
 from tools.portable_environment import bind_red_data_manager, red_config_dir
 from tools.portable_red_setup import ensure_instance, verify_red_instance_runtime
 from voice.health import write_heartbeat
@@ -90,6 +94,35 @@ class SingleInstance:
 
 def redbot_lock_path(project_root: Path = PROJECT_ROOT) -> Path:
     return project_root / "data" / "redbot-instance.lock"
+
+
+def redbot_owner_path(project_root: Path = PROJECT_ROOT) -> Path:
+    return project_root / "data" / "pids" / "redbot-owner.json"
+
+
+def write_redbot_owner(project_root: Path = PROJECT_ROOT) -> None:
+    path = redbot_owner_path(project_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": 1,
+        "pid": os.getpid(),
+        "create_time": psutil.Process(os.getpid()).create_time(),
+        "project_root": str(project_root.resolve()),
+        "written_at": time.time(),
+    }
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def clear_redbot_owner(project_root: Path = PROJECT_ROOT) -> None:
+    path = redbot_owner_path(project_root)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if isinstance(payload, dict) and int(payload.get("pid") or 0) == os.getpid():
+        path.unlink(missing_ok=True)
 
 
 def redbot_settings_path(project_root: Path = PROJECT_ROOT) -> Path:
@@ -293,7 +326,7 @@ def apply_runtime_patches(project_root: Path = PROJECT_ROOT) -> None:
 
 
 def redbot_argv(project_root: Path = PROJECT_ROOT) -> list[str]:
-    local_cogs = (project_root / "local_cogs").resolve()
+    local_cogs = bundled_cogs_root(project_root).resolve()
     return [
         "redbot",
         INSTANCE_NAME,
@@ -368,6 +401,7 @@ def run_redbot(project_root: Path = PROJECT_ROOT, *, allow_interactive_setup: bo
     if not instance.acquire():
         raise RedbotAlreadyRunning(duplicate_instance_message(project_root))
     try:
+        write_redbot_owner(project_root)
         ensure_instance(project_root)
         bind_red_data_manager(project_root)
         if not allow_interactive_setup and not music_core_is_configured(project_root):
@@ -376,6 +410,7 @@ def run_redbot(project_root: Path = PROJECT_ROOT, *, allow_interactive_setup: bo
         sys.argv = redbot_argv(project_root)
         runpy.run_module("redbot", run_name="__main__")
     finally:
+        clear_redbot_owner(project_root)
         instance.close()
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Mapping
 
@@ -14,6 +15,12 @@ SCHEMA = 1
 
 class AppLayoutError(RuntimeError):
     pass
+
+
+def is_source_checkout(root: Path) -> bool:
+    """Return whether *root* is a Git-backed DjGoo developer checkout."""
+
+    return (root.resolve() / ".git").exists()
 
 
 def package_root(fallback: Path | None = None) -> Path:
@@ -85,6 +92,16 @@ def active_app_root(
     return root
 
 
+def bundled_cogs_root(root: Path) -> Path:
+    """Resolve bundled cogs from the active app layer or legacy flat layout."""
+
+    root = root.resolve()
+    # Resolve from this root's pointer. A process-global DJGOO_APP_ROOT may
+    # belong to another package instance (or another test fixture).
+    layered = active_app_root(root, environment={}) / "local_cogs"
+    return layered if layered.is_dir() else root / "local_cogs"
+
+
 def current_payload(version: str, app_relative_path: str | None = None) -> dict[str, object]:
     normalized = str(version).strip().lstrip("v")
     if not normalized:
@@ -133,6 +150,31 @@ def runtime_python(root: Path, product: str, *, windowed: bool = False) -> Path:
         if path.is_file():
             return path
     return candidates[-1]
+
+
+def resolve_java(root: Path, environment: Mapping[str, str] | None = None) -> Path:
+    """Resolve Java for packaged and source-checkout Host installations."""
+
+    root = root.resolve()
+    packaged = root / RUNTIME_DIRECTORY / "java" / "bin" / "java.exe"
+    if packaged.is_file():
+        return packaged
+
+    source = os.environ if environment is None else environment
+    configured = str(source.get("DJGOO_JAVA") or "").strip()
+    if configured:
+        candidate = Path(configured).expanduser()
+        if candidate.is_file():
+            return candidate.resolve()
+        resolved = shutil.which(configured, path=source.get("PATH"))
+        if resolved:
+            return Path(resolved).resolve()
+        return candidate
+
+    resolved = shutil.which("java.exe", path=source.get("PATH")) or shutil.which(
+        "java", path=source.get("PATH")
+    )
+    return Path(resolved).resolve() if resolved else Path("java.exe")
 
 
 def speech_site_packages(root: Path) -> Path:

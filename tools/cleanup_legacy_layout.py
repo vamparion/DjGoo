@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import time
 from pathlib import Path
@@ -21,6 +22,11 @@ LEGACY_APPLICATION_DIRECTORIES = (
 
 def cleanup_legacy_layout(root: Path) -> list[str]:
     root = root.resolve()
+    # A source checkout deliberately keeps these directories under Git. The
+    # versioned app layer may be active after an incremental update, but that
+    # must never turn release-layout cleanup into source deletion.
+    if os.environ.get("DJGOO_SOURCE_CHECKOUT") == "1" or (root / ".git").exists():
+        return []
     app = active_app_root(root)
     if app == root or not app.is_dir():
         return []
