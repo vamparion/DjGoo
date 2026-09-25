@@ -15,6 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from tools.app_layout import bundled_cogs_root
 from tools.portable_environment import bind_red_data_manager, red_config_dir as portable_red_config_dir
 
 
@@ -61,7 +62,7 @@ def ensure_instance(project_root: Path) -> Path:
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "config.json"
     data_path = (project_root / "data" / INSTANCE_NAME).resolve()
-    local_cogs = (project_root / "local_cogs").resolve()
+    local_cogs = bundled_cogs_root(project_root).resolve()
     data_path.mkdir(parents=True, exist_ok=True)
     local_cogs.mkdir(parents=True, exist_ok=True)
 
@@ -167,7 +168,7 @@ def write_marker(project_root: Path) -> None:
                 "created_at": time.time(),
                 "project_root": str(project_root),
                 "red_config_dir": str(red_config_dir(project_root)),
-                "local_cog_path": str((project_root / "local_cogs").resolve()),
+                "local_cog_path": str(bundled_cogs_root(project_root).resolve()),
                 "startup_cogs": ["audio", "djgoowelcome"],
             },
             indent=2,
@@ -211,7 +212,7 @@ def main() -> int:
     if dpapi_verified:
         print("Verified Windows-encrypted update credential storage.")
     print()
-    print(f"Registered bundled DjGoo cogs from:\n  {(project_root / 'local_cogs').resolve()}\n")
+    print(f"Registered bundled DjGoo cogs from:\n  {bundled_cogs_root(project_root).resolve()}\n")
     print("Discord requires each host owner to create their own bot application.")
     print("Never send the bot token to another user and never put it in GitHub.")
     print("Enable the Server Members, Presence, and Message Content gateway intents.")

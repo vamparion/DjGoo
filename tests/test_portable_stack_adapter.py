@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -116,6 +117,41 @@ def test_load_core_falls_back_to_source_stack_name(tmp_path, monkeypatch) -> Non
     core = adapter.load_core()
 
     assert core.SENTINEL == "source-core"
+
+
+def test_redbot_readiness_accepts_verified_venv_child_owner(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    owner = FakeProcess(222, ["python.exe", "-m", "redbot"], created=12.5)
+    owner_path = tmp_path / "data" / "pids" / "redbot-owner.json"
+    owner_path.parent.mkdir(parents=True)
+    owner_path.write_text(
+        __import__("json").dumps(
+            {
+                "pid": owner.pid,
+                "create_time": owner.create_time(),
+                "project_root": str(tmp_path.resolve()),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(adapter.psutil, "Process", lambda pid: owner)
+    core = make_fake_core()
+    core.PROJECT_ROOT = tmp_path
+    core.component_record = lambda name: {"pid": 111, "command": ["python.exe", "selector.py"]}
+    core.health_path = lambda name: Path(name)
+    core.read_json = lambda path: {
+        "pid": 222,
+        "timestamp": __import__("time").time(),
+        "ready": True,
+        "audio_loaded": True,
+        "discord_ready": True,
+    }
+    monkeypatch.setattr(adapter, "_portable_lavalink_ready", lambda candidate: True)
+    monkeypatch.setattr(adapter, "_lavalink_client_ready", lambda candidate, pid: pid == 222)
+
+    assert adapter._portable_redbot_ready(core) is True
 
 
 def test_configure_core_uses_bundled_runtimes_and_safe_flags(tmp_path, monkeypatch) -> None:
@@ -360,3 +396,81 @@ def test_lavalink_start_reports_foreign_port_owner_instead_of_spawning(
     assert configured.start_component(SimpleNamespace(name="lavalink", command=[])) is False
     assert started == []
     assert configured.LOG.events[-1][0] == "component.port_in_use"
+
+
+def test_recorded_redbot_owner_requires_matching_root_and_creation_time(tmp_path, monkeypatch) -> None:
+    owner = FakeProcess(4242, ["python.exe", "redbot"], created=123.0)
+    monkeypatch.setattr(adapter.psutil, "Process", lambda pid: owner)
+    owner_path = tmp_path / "data" / "pids" / "redbot-owner.json"
+    owner_path.parent.mkdir(parents=True)
+    payload = {"pid": owner.pid, "create_time": owner.create_time(), "project_root": str(tmp_path)}
+    owner_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert adapter._recorded_redbot_owner(tmp_path) is owner
+
+    payload["project_root"] = str(tmp_path / "other")
+    owner_path.write_text(json.dumps(payload), encoding="utf-8")
+    assert adapter._recorded_redbot_owner(tmp_path) is None
+
+    payload["project_root"] = str(tmp_path)
+    payload["create_time"] = 1.0
+    owner_path.write_text(json.dumps(payload), encoding="utf-8")
+    assert adapter._recorded_redbot_owner(tmp_path) is None
+
+
+def test_redbot_stop_terminates_verified_interpreter_owner(tmp_path, monkeypatch) -> None:
+    touch(tmp_path / "runtime" / "python" / "python.exe")
+    touch(tmp_path / "runtime" / "python" / "pythonw.exe")
+    touch(tmp_path / "runtime" / "java" / "bin" / "java.exe")
+    owner = FakeProcess(5252, ["python.exe", "redbot"], created=456.0)
+    owner_path = tmp_path / "data" / "pids" / "redbot-owner.json"
+    owner_path.parent.mkdir(parents=True)
+    owner_path.write_text(
+        json.dumps({"pid": owner.pid, "create_time": owner.create_time(), "project_root": str(tmp_path)}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(adapter.psutil, "Process", lambda pid: owner)
+    monkeypatch.setattr(adapter.psutil, "process_iter", lambda: [])
+    monkeypatch.setattr(adapter.psutil, "wait_procs", lambda processes, timeout: (processes, []))
+    core = adapter.configure_core(make_fake_core(), tmp_path)
+
+    core.terminate_component(SimpleNamespace(name="redbot"), "requested-stop")
+
+    assert owner.terminated is True
+    assert not owner_path.exists()
+
+
+def test_supervisor_adopts_verified_redbot_interpreter_owner(tmp_path, monkeypatch) -> None:
+    touch(tmp_path / "runtime" / "python" / "python.exe")
+    touch(tmp_path / "runtime" / "python" / "pythonw.exe")
+    touch(tmp_path / "runtime" / "java" / "bin" / "java.exe")
+    owner = FakeProcess(6262, ["python.exe", "redbot"], created=789.0)
+    owner_path = tmp_path / "data" / "pids" / "redbot-owner.json"
+    owner_path.parent.mkdir(parents=True)
+    owner_path.write_text(
+        json.dumps({"pid": owner.pid, "create_time": owner.create_time(), "project_root": str(tmp_path)}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(adapter.psutil, "Process", lambda pid: owner)
+    core = adapter.configure_core(make_fake_core(), tmp_path)
+    spec = SimpleNamespace(name="redbot")
+
+    assert core.component_running(spec) is True
+    assert core._records["redbot"]["pid"] == owner.pid
+    assert core.LOG.events[-1][0] == "component.adopted"
+
+
+def test_redbot_launcher_handoff_has_bounded_owner_grace(tmp_path, monkeypatch) -> None:
+    touch(tmp_path / "runtime" / "python" / "python.exe")
+    touch(tmp_path / "runtime" / "python" / "pythonw.exe")
+    touch(tmp_path / "runtime" / "java" / "bin" / "java.exe")
+    now = 100.0
+    monkeypatch.setattr(adapter.time, "monotonic", lambda: now)
+    core = adapter.configure_core(make_fake_core(), tmp_path)
+    spec = SimpleNamespace(name="redbot")
+
+    assert core.start_component(spec) is True
+    assert core.component_running(spec) is True
+
+    now = 111.0
+    assert core.component_running(spec) is False

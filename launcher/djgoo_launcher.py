@@ -34,6 +34,7 @@ SOURCE_ROOT = Path(__file__).resolve().parents[1]
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
+from tools.app_layout import is_source_checkout
 from tools.portable_environment import portable_environment
 from tools.supervisor_lifecycle import restart_stale_supervisor
 from tools.update_auth import clear_token, load_token, save_token
@@ -241,7 +242,11 @@ class DjGooLauncher:
         tools.pack(fill=X)
         Button(tools, text="Open logs", command=partial(self.open_path, self.layout.logs)).pack(side=LEFT, padx=(0, 8))
         Button(tools, text="Open settings", command=partial(self.open_path, self.layout.config)).pack(side=LEFT, padx=(0, 8))
-        Button(tools, text="Check for updates", command=self.check_updates).pack(side=LEFT, padx=(0, 8))
+        developer_mode = is_source_checkout(self.layout.root)
+        update_button = Button(tools, text="Check for updates", command=self.check_updates)
+        if developer_mode:
+            update_button.configure(text="Developer Mode", state="disabled")
+        update_button.pack(side=LEFT, padx=(0, 8))
         Button(tools, text="Discord portal", command=partial(webbrowser.open, DISCORD_APPS_URL)).pack(side=LEFT, padx=(0, 8))
         Button(tools, text="Release page", command=partial(webbrowser.open, RELEASES_URL)).pack(side=LEFT)
 
@@ -249,6 +254,8 @@ class DjGooLauncher:
         self.activity = Text(self.root, height=14, wrap="word", font=("Consolas", 9))
         self.activity.pack(fill=BOTH, expand=True, padx=18, pady=(0, 18))
         self.log("Launcher ready.")
+        if developer_mode:
+            self.log("Developer Mode: production updates are disabled; use Git to update this checkout.")
         if not self.layout.marker.exists():
             self.log("First run detected. Use First-run setup before starting DjGoo.")
 

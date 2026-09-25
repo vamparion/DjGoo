@@ -92,11 +92,15 @@ internal static class DjGooThinLauncher
 
         var start = new ProcessStartInfo();
         start.FileName = pythonw;
-        start.WorkingDirectory = root;
+        // Python places the working directory before PYTHONPATH for -m. Use
+        // the active app directory so a source checkout cannot shadow the
+        // freshly updated launcher package with stale root-level modules.
+        start.WorkingDirectory = appRoot;
         start.UseShellExecute = false;
         start.CreateNoWindow = true;
         start.EnvironmentVariables["DJGOO_HOME"] = root;
         start.EnvironmentVariables["DJGOO_APP_ROOT"] = appRoot;
+        if (sourceCheckout) start.EnvironmentVariables["DJGOO_SOURCE_CHECKOUT"] = "1";
         string speech = Path.Combine(root, "runtime", "speech", "Lib", "site-packages");
         string webrtc = Path.Combine(root, "runtime", "webrtc", "Lib", "site-packages");
         string existing = start.EnvironmentVariables["PYTHONPATH"] ?? "";
