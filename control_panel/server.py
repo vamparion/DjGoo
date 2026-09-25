@@ -41,6 +41,11 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
     root: Path = PROJECT_ROOT
     static_root: Path = PROJECT_ROOT / "control_panel_dist"
 
+    def log_message(self, format: str, *args: object) -> None:
+        if self.path in {"/api/healthz", "/api/state"}:
+            return
+        super().log_message(format, *args)
+
     @classmethod
     def route_get(cls, path: str) -> Tuple[int, Dict[str, Any]]:
         parsed = urlparse(path)
@@ -248,12 +253,13 @@ def _query_param(query: str, name: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project-root", default=str(PROJECT_ROOT))
+    parser.add_argument("--static-root")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--tls", action="store_true")
     args = parser.parse_args()
     root = Path(args.project_root).resolve()
-    handler = create_handler_class(root)
+    handler = create_handler_class(root, Path(args.static_root).resolve() if args.static_root else None)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     scheme = "http"
     if args.tls:

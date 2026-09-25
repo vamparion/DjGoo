@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -324,10 +326,8 @@ def _heartbeat_status(
     *,
     max_age_seconds: float,
 ) -> Dict[str, Any] | None:
-    heartbeat = read_json_file(
-        project_root / "data" / "health" / f"{component}.json",
-        {},
-    )
+    health_root = Path(os.environ.get("DJGOO_HEALTH_DIR") or project_root / "data" / "health")
+    heartbeat = read_json_file(health_root / f"{component}.json", {})
     if not heartbeat:
         return None
     try:
@@ -374,6 +374,24 @@ def _component_status(
 
 
 def build_health(project_root: Path) -> Dict[str, Any]:
+    if os.environ.get("DJGOO_NATIVE_HOST") == "1":
+        red = _heartbeat_status(project_root, "redbot", max_age_seconds=120.0) or {
+            "status": "starting", "detail": "Music heartbeat is pending", "source": "heartbeat"
+        }
+        try:
+            with socket.create_connection(("::1", 2333), timeout=0.35):
+                lavalink = {"status": "online", "detail": "Audio Engine is accepting connections", "source": "socket"}
+        except OSError:
+            lavalink = {"status": "starting", "detail": "Audio Engine is starting", "source": "socket"}
+        voice = _heartbeat_status(project_root, "voice", max_age_seconds=90.0) or {
+            "status": "online", "detail": "Optional speech runtime is not active", "source": "optional"
+        }
+        return {
+            "redbot": red,
+            "lavalink": lavalink,
+            "voice": voice,
+            "web": {"status": "online", "detail": "Web remote is serving this request", "source": "service"},
+        }
     return {
         "redbot": _component_status(
             project_root,
@@ -489,6 +507,8 @@ def _active_station(data: Dict[str, Any]) -> Dict[str, Any] | None:
 
 
 def _process_status(process_name: str, command_marker: str) -> Dict[str, Any]:
+    if os.environ.get("DJGOO_NATIVE_HOST") == "1":
+        return {"status": "unknown", "detail": "Native Host owns component state", "source": "native-host"}
     script = (
         "Get-CimInstance Win32_Process | "
         f"Where-Object {{$_.Name -eq '{process_name}' -and $_.CommandLine -like '*{command_marker}*'}} | "

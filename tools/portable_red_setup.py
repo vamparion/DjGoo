@@ -62,7 +62,8 @@ def ensure_instance(project_root: Path) -> Path:
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "config.json"
     data_path = (project_root / "data" / INSTANCE_NAME).resolve()
-    local_cogs = bundled_cogs_root(project_root).resolve()
+    program_root = Path(os.environ.get("DJGOO_PROGRAM_ROOT") or project_root).resolve()
+    local_cogs = bundled_cogs_root(program_root).resolve()
     data_path.mkdir(parents=True, exist_ok=True)
     local_cogs.mkdir(parents=True, exist_ok=True)
 
@@ -168,7 +169,7 @@ def write_marker(project_root: Path) -> None:
                 "created_at": time.time(),
                 "project_root": str(project_root),
                 "red_config_dir": str(red_config_dir(project_root)),
-                "local_cog_path": str(bundled_cogs_root(project_root).resolve()),
+                "local_cog_path": str(bundled_cogs_root(Path(os.environ.get("DJGOO_PROGRAM_ROOT") or project_root)).resolve()),
                 "startup_cogs": ["audio", "djgoowelcome"],
             },
             indent=2,

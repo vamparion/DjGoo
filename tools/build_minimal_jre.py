@@ -22,6 +22,7 @@ DEFAULT_MODULES = {
     "java.net.http",
     "java.prefs",
     "java.rmi",
+    "java.scripting",
     "java.security.jgss",
     "java.sql",
     "java.transaction.xa",
@@ -122,6 +123,20 @@ def _validate(runtime: Path, jar: Path) -> None:
         raise MinimalJreError(
             "Minimal Java runtime could not execute the pinned Audio Engine: "
             + output[-1200:]
+        )
+    modules = subprocess.run(
+        [str(java), "--list-modules"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    available = {line.split("@", 1)[0] for line in modules.stdout.splitlines()}
+    missing = {"java.scripting"} - available
+    if modules.returncode != 0 or missing:
+        raise MinimalJreError(
+            "Minimal Java runtime is missing Lavalink runtime modules: "
+            + ", ".join(sorted(missing))
         )
 
 

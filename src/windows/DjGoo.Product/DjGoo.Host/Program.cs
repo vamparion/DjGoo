@@ -20,6 +20,10 @@ if (!string.IsNullOrWhiteSpace(arguments.TestChild))
         new[] { "--shutdown-event", shutdownEvent }, Path.GetDirectoryName(arguments.TestChild) ?? paths.ProgramRoot,
         ShutdownEventName: shutdownEvent));
 }
+else
+{
+    definitions.AddRange(new InstalledProduct(paths).Components());
+}
 
 using var supervisor = new NativeSupervisor(definitions, identity, log);
 using var exit = new CancellationTokenSource();

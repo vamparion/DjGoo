@@ -14,9 +14,10 @@ from typing import Any, BinaryIO
 import psutil
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+PROGRAM_ROOT = Path(os.environ.get("DJGOO_PROGRAM_ROOT") or Path(__file__).resolve().parents[1]).resolve()
+PROJECT_ROOT = Path(os.environ.get("DJGOO_DATA_ROOT") or PROGRAM_ROOT).resolve()
+if str(PROGRAM_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROGRAM_ROOT))
 
 from tools.app_layout import bundled_cogs_root
 from tools.portable_environment import bind_red_data_manager, red_config_dir
@@ -214,7 +215,11 @@ def _ipv6_socketpair(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0):
 
 
 def bundled_java_executable(project_root: Path = PROJECT_ROOT) -> Path:
-    return (project_root.resolve() / "runtime" / "java" / "bin" / "java.exe").resolve()
+    configured = str(os.environ.get("DJGOO_JAVA") or "").strip()
+    if configured:
+        return Path(configured).resolve()
+    program_root = PROGRAM_ROOT if os.environ.get("DJGOO_NATIVE_HOST") == "1" else project_root
+    return (program_root / "runtime" / "java" / "bin" / "java.exe").resolve()
 
 
 def apply_bundled_java_environment(project_root: Path = PROJECT_ROOT) -> Path:
@@ -326,7 +331,8 @@ def apply_runtime_patches(project_root: Path = PROJECT_ROOT) -> None:
 
 
 def redbot_argv(project_root: Path = PROJECT_ROOT) -> list[str]:
-    local_cogs = bundled_cogs_root(project_root).resolve()
+    program_root = PROGRAM_ROOT if os.environ.get("DJGOO_NATIVE_HOST") == "1" else project_root
+    local_cogs = bundled_cogs_root(program_root).resolve()
     return [
         "redbot",
         INSTANCE_NAME,

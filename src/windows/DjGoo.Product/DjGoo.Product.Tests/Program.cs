@@ -38,6 +38,7 @@ internal sealed class ProductTestSuite
             UnitPaths();
             UnitDeveloperMode();
             UnitManifest();
+            UnitLayerVerifier();
             UnitComponentModel();
             await UnitFramingAsync();
             await IntegrationAsync();
@@ -107,6 +108,19 @@ internal sealed class ProductTestSuite
             "component dependency model");
         Check(catalog.Single(item => item.Kind == ProductComponentKind.LocalVoice).Optional,
             "optional local voice model");
+    }
+
+    private void UnitLayerVerifier()
+    {
+        var root = Path.Combine(_root, "layer-verifier");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "a.txt"), "hello", new UTF8Encoding(false));
+        var layer = new LayerIdentity("test", "1", "55393d24cc21d1af021be0bd28f48a861218c044962bd3cae0c7a27fcad2bd0a", 5,
+            "layers/test", "test.zip");
+        LayerVerifier.Verify(root, layer);
+        Check(true, "layer byte identity verification");
+        File.AppendAllText(Path.Combine(root, "a.txt"), "!");
+        Throws<InvalidOperationException>(() => LayerVerifier.Verify(root, layer), "damaged layer rejection");
     }
 
     private async Task UnitFramingAsync()

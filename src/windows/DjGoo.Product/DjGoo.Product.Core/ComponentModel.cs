@@ -22,6 +22,20 @@ public enum ProductComponentKind
     TestChild,
 }
 
+public enum ComponentHealthKind
+{
+    Process,
+    Tcp,
+    Https,
+    Heartbeat,
+}
+
+public sealed record ComponentHealthDefinition(
+    ComponentHealthKind Kind,
+    string Target,
+    int Port = 0,
+    int MaximumAgeSeconds = 30);
+
 public sealed record ProductComponentDescriptor(
     ProductComponentKind Kind,
     string Name,
@@ -46,7 +60,11 @@ public sealed record ComponentDefinition(
     IReadOnlyList<string> Arguments,
     string WorkingDirectory,
     bool Optional = false,
-    string? ShutdownEventName = null);
+    string? ShutdownEventName = null,
+    IReadOnlyDictionary<string, string>? Environment = null,
+    IReadOnlyList<string>? Dependencies = null,
+    ComponentHealthDefinition? Health = null,
+    int StartupTimeoutSeconds = 120);
 
 public sealed record ComponentStatus(
     ProductComponentKind Kind,
