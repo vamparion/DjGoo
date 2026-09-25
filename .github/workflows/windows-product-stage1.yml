@@ -1,0 +1,92 @@
+name: Windows product Stage 1
+
+on:
+  push:
+    branches:
+      - "codex/windows-product-stage1"
+  workflow_dispatch:
+
+concurrency:
+  group: windows-product-stage1-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  native-product:
+    # Only the repository branch can execute code on trusted AEGIS.
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 6 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "6.0.x"
+
+      - name: Build native product solution
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          dotnet build src/windows/DjGoo.Product/DjGoo.Product.sln -c Release
+          if ($LASTEXITCODE -ne 0) { throw "Native product build failed" }
+
+      - name: Publish self-contained Windows executables
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $projects = @{
+            "host" = "DjGoo.Host"
+            "client" = "DjGoo.HostClient"
+            "child" = "DjGoo.TestChild"
+            "tests" = "DjGoo.Product.Tests"
+          }
+          foreach ($output in $projects.Keys) {
+            $project = $projects[$output]
+            dotnet publish "src/windows/DjGoo.Product/$project/$project.csproj" `
+              -c Release `
+              -r win-x64 `
+              --self-contained true `
+              -p:PublishSingleFile=true `
+              -p:DebugType=None `
+              -o "build/windows-stage1/$output"
+            if ($LASTEXITCODE -ne 0) { throw "$project publish failed" }
+          }
+          foreach ($required in @(
+            "build/windows-stage1/host/DjGoo.Host.exe",
+            "build/windows-stage1/client/DjGoo.HostClient.exe",
+            "build/windows-stage1/child/DjGoo.TestChild.exe",
+            "build/windows-stage1/tests/DjGoo.Product.Tests.exe"
+          )) {
+            if (!(Test-Path $required) -or (Get-Item $required).Length -lt 1000000) {
+              throw "Missing self-contained executable: $required"
+            }
+          }
+
+      - name: Run native Host integration smoke
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          & build/windows-stage1/tests/DjGoo.Product.Tests.exe `
+            build/windows-stage1/host/DjGoo.Host.exe `
+            build/windows-stage1/client/DjGoo.HostClient.exe `
+            build/windows-stage1/child/DjGoo.TestChild.exe
+          if ($LASTEXITCODE -ne 0) { throw "Native Host integration smoke failed" }
+          $leftovers = Get-Process DjGoo.Host,DjGoo.TestChild -ErrorAction SilentlyContinue
+          if ($leftovers) {
+            $leftovers | Format-Table Id, ProcessName, Path
+            throw "Native integration smoke left product processes running"
+          }
+
+      - name: Upload native Stage 1 executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: DjGoo-Windows-Stage1-${{ github.sha }}
+          path: |
+            build/windows-stage1/host/DjGoo.Host.exe
+            build/windows-stage1/client/DjGoo.HostClient.exe
+          if-no-files-found: error
+          retention-days: 14

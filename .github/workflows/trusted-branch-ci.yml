@@ -8,6 +8,7 @@ on:
       - "hotfix/**"
       - "codex/browser-webrtc-remote-control-pr"
       - "codex/alpha29-source-release"
+      - "codex/windows-product-stage1"
   workflow_dispatch:
 
 concurrency:
