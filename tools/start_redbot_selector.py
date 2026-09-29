@@ -245,6 +245,11 @@ async def configure_external_lavalink(cog: Any) -> None:
     await cog.config.ws_port.set(LAVALINK_PORT)
     await cog.config.password.set(LAVALINK_PASSWORD)
     await cog.config.secured_ws.set(False)
+    if os.environ.get("DJGOO_NATIVE_HOST") == "1":
+        local_root = Path(os.environ["DJGOO_DATA_ROOT"]) / "cache"
+        (local_root / "localtracks").mkdir(parents=True, exist_ok=True)
+        await cog.config.localpath.set(str(local_root))
+        cog.local_folder_current_path = local_root
 
     # Keep Red's managed-node YAML aligned for diagnostics and future migrations.
     # The server bind address is a raw IPv6 literal; only the WebSocket client

@@ -3,13 +3,15 @@ from __future__ import annotations
 import contextlib
 import asyncio
 from contextvars import ContextVar
+import hashlib
 import json
 import logging
 import os
 import random
 import re
 import time
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
+from urllib.request import Request, urlopen
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -936,6 +938,13 @@ class DjGooAudioBridge:
         if cleaned_youtube is not None:
             log_event("play.resolve.done", query=query, resolved_query=cleaned_youtube, used_youtube_guard=True)
             return cleaned_youtube
+        if os.environ.get("DJGOO_NATIVE_HOST") == "1":
+            youtube = await asyncio.to_thread(self._ytmusic_song_search_query, query)
+            resolved = await asyncio.to_thread(self._direct_media_query, youtube) if youtube else None
+            resolved = resolved or await asyncio.to_thread(self._soundcloud_search_query, query)
+            resolved = resolved or query
+            log_event("play.resolve.installed_search", query=query, resolved_query=resolved)
+            return [resolved]
         resolved = await asyncio.to_thread(self.nuclear.resolve_track_query, query)
         if resolved:
             log_event("play.resolve.done", query=query, resolved_query=resolved, used_nuclear=True)
@@ -949,6 +958,52 @@ class DjGooAudioBridge:
             return []
         log_event("play.resolve.done", query=query, resolved_query=query, used_nuclear=False, used_ytmusic=False)
         return [query]
+
+    @staticmethod
+    def _soundcloud_search_query(query: str) -> Optional[str]:
+        endpoint = f"http://[::1]:2333/loadtracks?identifier={quote('scsearch:' + query, safe='')}"
+        request = Request(endpoint, headers={"Authorization": "youshallnotpass"})
+        try:
+            with urlopen(request, timeout=8) as response:
+                payload = json.load(response)
+        except Exception as exc:
+            log_event("soundcloud.search.failed", query=query, error=type(exc).__name__, detail=str(exc))
+            return None
+        tracks = payload.get("tracks") if isinstance(payload, dict) else None
+        if not tracks:
+            return None
+        info = tracks[0].get("info") if isinstance(tracks[0], dict) else None
+        uri = str((info or {}).get("uri") or "").strip()
+        return uri or None
+
+    @staticmethod
+    def _direct_media_query(uri: Optional[str]) -> Optional[str]:
+        if not uri:
+            return None
+        try:
+            import yt_dlp
+
+            data_root = Path(os.environ.get("DJGOO_DATA_ROOT") or Path.home() / "AppData/Local/DjGoo")
+            cache = data_root / "cache" / "localtracks"
+            cache.mkdir(parents=True, exist_ok=True)
+            stem = hashlib.sha256(uri.encode("utf-8")).hexdigest()[:24]
+            existing = next(cache.glob(f"{stem}.*"), None)
+            if existing and existing.stat().st_size:
+                return f"localtracks/{existing.name}"
+            options = {
+                "quiet": True,
+                "no_warnings": True,
+                "format": "bestaudio",
+                "outtmpl": str(cache / f"{stem}.%(ext)s"),
+                "noplaylist": True,
+            }
+            with yt_dlp.YoutubeDL(options) as extractor:
+                info = extractor.extract_info(uri, download=True)
+                filename = Path(extractor.prepare_filename(info))
+            return f"localtracks/{filename.name}" if filename.is_file() else None
+        except Exception as exc:
+            log_event("media.extract.failed", uri=uri, error=type(exc).__name__, detail=str(exc))
+            return None
 
     def _repair_voice_play_query(self, query: str) -> str:
         repaired = re.sub(r"\blindy\s+stirling\b", "Lindsey Stirling", query, flags=re.IGNORECASE)

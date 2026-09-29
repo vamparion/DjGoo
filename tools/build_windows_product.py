@@ -95,6 +95,9 @@ def build(args: argparse.Namespace) -> Path:
     lavalink.mkdir(parents=True)
     shutil.copy2(args.lavalink.resolve(), lavalink / "Lavalink.jar")
     shutil.copy2(ROOT / "config" / "lavalink.application.yml", lavalink / "application.yml")
+    plugins = lavalink / "plugins"
+    plugins.mkdir()
+    shutil.copy2(args.youtube_plugin.resolve(), plugins / args.youtube_plugin.name)
 
     native = output / ".native"
     shutil.copy2(publish("DjGoo.Host", native / "host"), output / "DjGoo.Host.exe")
@@ -131,6 +134,7 @@ def main() -> int:
     parser.add_argument("--java", type=Path, required=True)
     parser.add_argument("--webrtc", type=Path, required=True)
     parser.add_argument("--lavalink", type=Path, required=True)
+    parser.add_argument("--youtube-plugin", type=Path, required=True)
     parser.add_argument("--python-generation", default="bot-745f76594ec2f6df182a")
     parser.add_argument("--java-generation", default="jre-eefd194014ddc7956880")
     parser.add_argument("--webrtc-generation", default="webrtc-4a7f0fabd7ec821fc1f3")

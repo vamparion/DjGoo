@@ -41,6 +41,36 @@ from .helpers import (
 
 
 log = logging.getLogger("red.djgoowelcome")
+
+
+def discord_gateway_connected(bot: Any) -> bool:
+    if not bot.is_ready():
+        return False
+    shards = getattr(bot, "shards", {})
+    for shard in shards.values():
+        is_closed = getattr(shard, "is_closed", None)
+        if callable(is_closed):
+            if is_closed():
+                return False
+            continue
+        websocket = getattr(shard, "ws", None)
+        if websocket is None or bool(getattr(websocket, "closed", True)):
+            return False
+    return True
+
+
+def resolve_command_queue_path(
+    project_root: Path, configured: object, filename: str, *, native_host: bool
+) -> Path:
+    if native_host:
+        return project_root / "data" / filename
+    text = str(configured or "").strip()
+    if text:
+        path = Path(text)
+        return path if path.is_absolute() else project_root / path
+    return project_root / "data" / filename
+
+
 FAST_CONTROL_INTENTS = {
     "skip",
     "stop",
@@ -286,19 +316,21 @@ class DjGooWelcome(commands.Cog):
     def _queue_path(self) -> Path:
         secrets = load_secrets(self._secrets_path())
         voice = secrets.get("voice", {}) if isinstance(secrets.get("voice", {}), dict) else {}
-        configured = voice.get("queue_path", "")
-        if configured:
-            configured_path = Path(str(configured))
-            return configured_path if configured_path.is_absolute() else PROJECT_ROOT / configured_path
-        return PROJECT_ROOT / "data" / "voice-command-queue.jsonl"
+        return resolve_command_queue_path(
+            PROJECT_ROOT,
+            voice.get("queue_path", ""),
+            "voice-command-queue.jsonl",
+            native_host=os.environ.get("DJGOO_NATIVE_HOST") == "1",
+        )
 
     def _remote_queue_path(self) -> Path:
         settings = self._gateway_settings()
-        configured = str(settings.get("queue_path") or "").strip()
-        if configured:
-            path = Path(configured)
-            return path if path.is_absolute() else PROJECT_ROOT / path
-        return PROJECT_ROOT / "data" / "remote-command-queue.jsonl"
+        return resolve_command_queue_path(
+            PROJECT_ROOT,
+            settings.get("queue_path"),
+            "remote-command-queue.jsonl",
+            native_host=os.environ.get("DJGOO_NATIVE_HOST") == "1",
+        )
 
     def _is_on_cooldown(self, member, channel) -> bool:
         key = self._cooldown_key(member, channel)
@@ -440,6 +472,7 @@ class DjGooWelcome(commands.Cog):
         await self._audio_bridge.resume_saved_playback()
         next_heartbeat = 0.0
         queue_paths = (self._queue_path(), self._remote_queue_path())
+        log_event("voice.queue.ready", paths=[str(path) for path in queue_paths])
         while True:
             try:
                 now = time.monotonic()
@@ -448,7 +481,7 @@ class DjGooWelcome(commands.Cog):
                         "redbot.heartbeat",
                         guild_count=len(self.bot.guilds),
                         audio_loaded=self.bot.get_cog("Audio") is not None,
-                        discord_ready=self.bot.is_ready(),
+                        discord_ready=discord_gateway_connected(self.bot),
                         voice_gateway_ready=self._gateway_ready,
                     )
                     publish_state = getattr(

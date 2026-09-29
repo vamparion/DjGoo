@@ -50,3 +50,20 @@ def test_redbot_heartbeat_includes_health_fields(tmp_path: Path, monkeypatch) ->
     assert fields["ready"] is True
     assert fields["audio_loaded"] is True
     assert fields["discord_ready"] is True
+
+
+def test_redbot_disconnected_heartbeat_is_not_ready(tmp_path: Path, monkeypatch) -> None:
+    captured: list[tuple[str, dict]] = []
+    monkeypatch.setenv("DJGOO_EVENT_LOG", str(tmp_path / "events.jsonl"))
+    monkeypatch.setattr(
+        operational_log,
+        "write_heartbeat",
+        lambda component, fields: captured.append((component, dict(fields))),
+    )
+    operational_log._COMPONENT_READY["redbot"] = True
+
+    operational_log.log_event(
+        "redbot.heartbeat", guild_count=1, audio_loaded=True, discord_ready=False
+    )
+
+    assert captured[-1][1]["ready"] is False

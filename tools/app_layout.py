@@ -32,6 +32,12 @@ def package_root(fallback: Path | None = None) -> Path:
     return Path.cwd().resolve()
 
 
+def mutable_data_root(fallback: Path, environment: Mapping[str, str] | None = None) -> Path:
+    source = os.environ if environment is None else environment
+    configured = str(source.get("DJGOO_DATA_ROOT") or "").strip()
+    return Path(configured).expanduser().resolve() if configured else fallback.resolve()
+
+
 def _safe_child(root: Path, relative: str) -> Path:
     text = str(relative or "").strip().replace("\\", "/")
     if not text or text.startswith("/") or ":" in text.split("/", 1)[0]:

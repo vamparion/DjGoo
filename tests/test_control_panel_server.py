@@ -88,6 +88,33 @@ class ControlPanelServerTests(unittest.TestCase):
         self.assertFalse(response["ok"])
         self.assertIn("host", response["error"].lower())
 
+    def test_local_browser_can_resume_existing_profile_name(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            handler_cls = create_handler_class(Path(temp_dir))
+            _, first = handler_cls.route_post(
+                "/api/profile", {"username": "Oinky", "device_id": "old-browser"}, is_local=True
+            )
+            status, resumed = handler_cls.route_post(
+                "/api/profile", {"username": "Oinky", "device_id": "new-browser"}, is_local=True
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(resumed["profile"]["id"], first["profile"]["id"])
+        self.assertEqual(resumed["profile"]["token"], first["profile"]["token"])
+
+    def test_remote_browser_cannot_claim_existing_profile_name(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            handler_cls = create_handler_class(Path(temp_dir))
+            handler_cls.route_post(
+                "/api/profile", {"username": "Oinky", "device_id": "owner"}, is_local=True
+            )
+            status, response = handler_cls.route_post(
+                "/api/profile", {"username": "Oinky", "device_id": "remote"}, is_local=False
+            )
+
+        self.assertEqual(status, 400)
+        self.assertIn("already in use", response["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

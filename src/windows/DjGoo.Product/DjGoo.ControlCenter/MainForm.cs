@@ -159,7 +159,19 @@ internal sealed class MainForm : Form
     private void OpenLogs()
     {
         _paths.EnsureDataDirectories();
-        Open(_paths.Logs);
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/e,\"{_paths.Logs}\"")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            });
+        }
+        catch
+        {
+            if (!File.Exists(_paths.HostLog)) File.WriteAllText(_paths.HostLog, string.Empty);
+            Open(_paths.HostLog);
+        }
     }
     private static void Open(string target) => Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
     private void RunUpdater(string command) => Process.Start(new ProcessStartInfo(Path.Combine(_paths.ProgramRoot, "DjGoo.Updater.exe"), command) { UseShellExecute = true });

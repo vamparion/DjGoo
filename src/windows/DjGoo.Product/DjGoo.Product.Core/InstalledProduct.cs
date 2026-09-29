@@ -72,7 +72,7 @@ public sealed class InstalledProduct
         {
             new ComponentDefinition(ProductComponentKind.Lavalink, "lavalink", java,
                 new[] { "-Xms64M", "-Xmx512M", "-jar", lavalinkJar, $"--spring.config.location=file:{lavalinkConfig.Replace('\\', '/')}" },
-                Paths.DataRoot, Environment: environment, Health: new(ComponentHealthKind.Tcp, "::1", 2333), StartupTimeoutSeconds: 60),
+                LavalinkRoot, Environment: environment, Health: new(ComponentHealthKind.Tcp, "::1", 2333), StartupTimeoutSeconds: 60),
             new ComponentDefinition(ProductComponentKind.Red, "red", python,
                 new[] { Path.Combine(ApplicationRoot, "tools", "start_redbot_selector.py") }, ApplicationRoot,
                 Environment: environment, Dependencies: new[] { "lavalink" },

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import inspect
 import math
 import random
@@ -173,7 +174,6 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
         query = self._repair_voice_play_query(query) if source == "voice" else query.strip()
         if self._is_youtube_url(query):
             return await super()._resolve_play_queries(query, source=source)
-
         nuclear_track = await asyncio.to_thread(self.nuclear.resolve_track, query)
         canonical = None
         if nuclear_track is not None:
@@ -200,6 +200,11 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
             )
         resolved = await asyncio.to_thread(self._ranked_ytmusic_song, query, canonical)
         if resolved:
+            if os.environ.get("DJGOO_NATIVE_HOST") == "1":
+                direct = await asyncio.to_thread(self._direct_media_query, resolved)
+                if direct:
+                    log_event("play.resolve.installed_search", query=query, resolved_query=direct)
+                    return [direct]
             log_event(
                 "play.resolve.ranked",
                 original_query=original_query,

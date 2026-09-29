@@ -96,6 +96,7 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                     str(payload.get("username") or ""),
                     role=role,
                     device_id=str(payload.get("device_id") or ""),
+                    resume_existing=is_local,
                 )
                 return 200, ok({"profile": profile})
             profile = gaming.profile(str(payload.get("token") or ""))
