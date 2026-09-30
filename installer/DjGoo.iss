@@ -37,7 +37,11 @@ Name: "{group}\DjGoo"; Filename: "{app}\DjGoo.exe"
 Name: "{group}\Repair DjGoo"; Filename: "{app}\DjGoo.Updater.exe"; Parameters: "repair"
 Name: "{autodesktop}\DjGoo"; Filename: "{app}\DjGoo.exe"; Tasks: desktopicon
 
+[Registry]
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "DjGoo"; ValueData: """{app}\DjGoo.exe"""; Flags: uninsdeletevalue
+
 [Run]
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""DjGoo Startup"" /F"; Flags: runhidden waituntilterminated
 Filename: "{app}\DjGoo.exe"; Description: "Launch DjGoo"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
