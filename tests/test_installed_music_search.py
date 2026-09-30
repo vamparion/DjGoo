@@ -1,4 +1,5 @@
 import io
+import pytest
 from unittest.mock import patch
 
 from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
@@ -49,3 +50,19 @@ def test_direct_media_query_returns_extracted_stream(tmp_path) -> None:
         resolved = DjGooAudioBridge._direct_media_query("https://www.youtube.com/watch?v=track")
 
     assert resolved and resolved.startswith("localtracks/") and resolved.endswith(".webm")
+
+
+@pytest.mark.asyncio
+async def test_installed_explicit_youtube_url_uses_local_media() -> None:
+    bridge = object.__new__(DjGooAudioBridge)
+
+    async def clean(_query):
+        return ["https://www.youtube.com/watch?v=track"]
+
+    bridge._resolve_youtube_play_query = clean
+    bridge._direct_media_query = lambda _uri: "localtracks/track.webm"
+
+    with patch.dict("os.environ", {"DJGOO_NATIVE_HOST": "1"}, clear=False):
+        resolved = await bridge._resolve_play_queries("https://youtu.be/track")
+
+    assert resolved == ["localtracks/track.webm"]

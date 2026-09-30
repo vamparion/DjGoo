@@ -2,7 +2,10 @@ from types import SimpleNamespace
 
 from pathlib import Path
 
+import pytest
+
 from local_cogs.djgoowelcome.djgoowelcome import (
+    DjGooWelcome,
     discord_gateway_connected,
     resolve_command_queue_path,
 )
@@ -29,6 +32,18 @@ def test_legacy_websocket_shape_is_supported() -> None:
     bot = Bot(True, False)
     bot.shards = {0: SimpleNamespace(ws=SimpleNamespace(closed=False))}
     assert discord_gateway_connected(bot)
+
+
+@pytest.mark.asyncio
+async def test_disconnect_event_is_authoritative_until_gateway_resumes() -> None:
+    cog = object.__new__(DjGooWelcome)
+    cog._discord_gateway_connected = True
+
+    await cog.on_shard_disconnect(0)
+    assert cog._discord_gateway_connected is False
+
+    await cog.on_shard_resumed(0)
+    assert cog._discord_gateway_connected is True
 
 
 def test_installed_host_ignores_stale_absolute_queue_path(tmp_path: Path) -> None:

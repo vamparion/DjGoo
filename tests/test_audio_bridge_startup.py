@@ -843,7 +843,7 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
 
         calls = []
 
-        async def original(_audio, _ctx, *, query):
+        async def original(_command, _audio, _ctx, *, query):
             calls.append(("original", query))
 
         class FakeCommand:
@@ -864,6 +864,7 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
 
             async def handle_from_discord_context(self, item, ctx, voice_channel=None):
                 calls.append(("bridge", item, ctx, voice_channel))
+                await bot.command.callback(object(), ctx, query=item["query"])
                 return "queued"
 
         class FakeDjGoo:
@@ -904,6 +905,23 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0][0], "bridge")
         self.assertEqual(calls[0][1]["intent"], "play")
         self.assertEqual(calls[0][3].id, 456)
+
+        calls.clear()
+        result = await bot.command.callback(
+            object(),
+            FakeContext(),
+            query="sandstorm",
+        )
+        self.assertEqual(result, "queued")
+        self.assertEqual(calls[0][0], "bridge")
+        self.assertEqual(calls[0][1]["query"], "sandstorm")
+        self.assertEqual([call[0] for call in calls], ["bridge", "original"])
+
+        calls.clear()
+        await bot.command.callback(
+            object(), FakeContext(), query="localtracks/sandstorm.webm"
+        )
+        self.assertEqual(calls, [("original", "localtracks/sandstorm.webm")])
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     async def test_discord_command_context_supplies_configured_voice_channel(self):

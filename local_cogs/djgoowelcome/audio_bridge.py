@@ -936,6 +936,19 @@ class DjGooAudioBridge:
             log_event("play.voice_query.repaired", original_query=original_query, repaired_query=query)
         cleaned_youtube = await self._resolve_youtube_play_query(query)
         if cleaned_youtube is not None:
+            if os.environ.get("DJGOO_NATIVE_HOST") == "1":
+                installed_queries = []
+                for youtube_query in cleaned_youtube:
+                    installed_queries.append(
+                        await asyncio.to_thread(self._direct_media_query, youtube_query)
+                        or youtube_query
+                    )
+                log_event(
+                    "play.resolve.installed_youtube",
+                    query=query,
+                    resolved_query=installed_queries,
+                )
+                return installed_queries
             log_event("play.resolve.done", query=query, resolved_query=cleaned_youtube, used_youtube_guard=True)
             return cleaned_youtube
         if os.environ.get("DJGOO_NATIVE_HOST") == "1":

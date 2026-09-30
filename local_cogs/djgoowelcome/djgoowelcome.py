@@ -116,6 +116,7 @@ class DjGooWelcome(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+        self._discord_gateway_connected = False
         self._last_sent: Dict[Tuple[int, int], float] = {}
         self._cooldown_seconds = 300
         self._audio_bridge = EnhancedDjGooAudioBridge(
@@ -158,6 +159,26 @@ class DjGooWelcome(commands.Cog):
         if user_id is None:
             return
         await asyncio.to_thread(self._pairing_store.delete_user, int(user_id))
+
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        self._discord_gateway_connected = True
+
+    @commands.Cog.listener()
+    async def on_shard_ready(self, _shard_id: int) -> None:
+        self._discord_gateway_connected = True
+
+    @commands.Cog.listener()
+    async def on_shard_resumed(self, _shard_id: int) -> None:
+        self._discord_gateway_connected = True
+
+    @commands.Cog.listener()
+    async def on_disconnect(self) -> None:
+        self._discord_gateway_connected = False
+
+    @commands.Cog.listener()
+    async def on_shard_disconnect(self, _shard_id: int) -> None:
+        self._discord_gateway_connected = False
 
     def _secrets_path(self) -> Path:
         configured = os.environ.get("DJGOO_SECRETS_FILE")
@@ -481,7 +502,10 @@ class DjGooWelcome(commands.Cog):
                         "redbot.heartbeat",
                         guild_count=len(self.bot.guilds),
                         audio_loaded=self.bot.get_cog("Audio") is not None,
-                        discord_ready=discord_gateway_connected(self.bot),
+                        discord_ready=(
+                            self._discord_gateway_connected
+                            and discord_gateway_connected(self.bot)
+                        ),
                         voice_gateway_ready=self._gateway_ready,
                     )
                     publish_state = getattr(
