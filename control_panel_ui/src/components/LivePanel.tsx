@@ -26,6 +26,7 @@ export function LivePanel({ state, send }: PanelProps) {
   return (
     <section className="panel hero">
       <div className={`art ${hasTrack ? "playing" : ""}`}>
+        <img src="./icons/djgoo-192.png" alt="" />
         <span>{hasTrack ? "ON" : "IDLE"}</span>
       </div>
       <div>
@@ -51,11 +52,9 @@ export function LivePanel({ state, send }: PanelProps) {
           <button className="btn" onClick={() => void send("volume_up")}>Vol +</button>
           {canRecover && <button className="btn danger" onClick={() => void send("reset")}>Reset</button>}
         </div>
-        <div className="hint-strip">
-          <button onClick={() => void send("play_next", { query: "sandstorm" })}>Play Sandstorm</button>
-          <button onClick={() => void send("start_radio", { query: "80s" })}>Start 80s radio</button>
+        {hasTrack && <div className="hint-strip">
           <button onClick={() => void send("save_current", { playlist: "favorites" })}>Save to favorites</button>
-        </div>
+        </div>}
       </div>
     </section>
   );

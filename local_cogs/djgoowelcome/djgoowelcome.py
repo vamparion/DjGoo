@@ -560,7 +560,7 @@ class DjGooWelcome(commands.Cog):
         """Start or stop a persistent, station-specific DjGoo radio."""
         seed = seed.strip()
         if not seed:
-            await ctx.send("Choose a station seed, for example `!radio 80s`.")
+            await ctx.send("Choose a station seed, such as an artist, song, genre, or playlist.")
             return
         parsed = parse_command(f"radio {seed}", require_wake=False)
         item = command_to_queue_item(

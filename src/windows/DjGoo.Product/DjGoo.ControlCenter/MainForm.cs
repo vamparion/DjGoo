@@ -25,6 +25,7 @@ internal sealed class MainForm : Form
     private readonly RegisteredWaitHandle _activateWait;
     private readonly RegisteredWaitHandle _exitWait;
     private readonly Func<Task> _ensureHost;
+    private readonly Image _brandImage = BrandStyle.LoadMark();
     private bool _reconnecting;
     private bool _exiting;
 
@@ -40,6 +41,7 @@ internal sealed class MainForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 10);
         BuildUi();
+        BrandStyle.Apply(this);
         _tray = BuildTray();
         _activateWait = ThreadPool.RegisterWaitForSingleObject(activate, (_, _) => BeginInvoke(ShowCenter), null, -1, false);
         _exitWait = ThreadPool.RegisterWaitForSingleObject(exit, (_, _) => BeginInvoke(ExitControlCenter), null, -1, false);
@@ -55,16 +57,20 @@ internal sealed class MainForm : Form
 
     private void BuildUi()
     {
-        var body = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24), RowCount = 7, ColumnCount = 1 };
-        body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var body = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24), RowCount = 6, ColumnCount = 1 };
         body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        body.Controls.Add(_state);
-        body.Controls.Add(_detail);
+        var header = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = false, Margin = new Padding(0, 0, 0, 4) };
+        header.Controls.Add(new PictureBox { Image = _brandImage, Size = new Size(72, 72), SizeMode = PictureBoxSizeMode.Zoom, Margin = new Padding(0, 0, 16, 0) });
+        var heading = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = new Padding(0, 8, 0, 0) };
+        heading.Controls.Add(_state);
+        heading.Controls.Add(_detail);
+        header.Controls.Add(heading);
+        body.Controls.Add(header);
         var services = new Label
         {
             AutoSize = true,
@@ -109,7 +115,7 @@ internal sealed class MainForm : Form
         var tray = new NotifyIcon
         {
             Text = "DjGoo",
-            Icon = SystemIcons.Application,
+            Icon = BrandStyle.AppIcon(),
             ContextMenuStrip = menu,
             Visible = true,
         };
@@ -274,7 +280,7 @@ internal sealed class MainForm : Form
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _activateWait.Unregister(null); _exitWait.Unregister(null); _refresh.Dispose(); _tray.Dispose(); }
+        if (disposing) { _activateWait.Unregister(null); _exitWait.Unregister(null); _refresh.Dispose(); _tray.Dispose(); _brandImage.Dispose(); }
         base.Dispose(disposing);
     }
 }

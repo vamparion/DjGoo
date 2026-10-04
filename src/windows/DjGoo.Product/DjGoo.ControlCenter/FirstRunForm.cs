@@ -32,6 +32,7 @@ internal sealed class FirstRunForm : Form
         continueButton.Click += (_, _) => Save();
         layout.Controls.Add(continueButton);
         Controls.Add(layout);
+        BrandStyle.Apply(this);
         AcceptButton = continueButton;
     }
 

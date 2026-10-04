@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { CommandSender } from "./types";
+import { normalizeMediaInput } from "../mediaInput";
 
 type Props = {
   send: CommandSender;
@@ -19,7 +20,7 @@ export function CommandBar({ send }: Props) {
   }
 
   async function submit() {
-    const text = query.trim();
+    const text = normalizeMediaInput(query);
     if (!text) return;
     if (action === "auto") {
       const resolved = resolveAutoAction(text);
@@ -37,7 +38,7 @@ export function CommandBar({ send }: Props) {
   return (
     <header className="topbar">
       <div className="brand">
-        <div className="logo">DG</div>
+        <div className="logo"><img src="./icons/djgoo-192.png" alt="" /></div>
         <div>
           <strong>DjGoo</strong>
           <span>Control Panel</span>
@@ -50,7 +51,7 @@ export function CommandBar({ send }: Props) {
           onKeyDown={(event) => {
             if (event.key === "Enter") void submit();
           }}
-          placeholder="Command: play song, radio 80s, save chill"
+          placeholder="Paste a song or playlist link, or search by name"
         />
         <select value={action} onChange={(event) => setAction(event.target.value)}>
           <option value="auto">Auto action</option>

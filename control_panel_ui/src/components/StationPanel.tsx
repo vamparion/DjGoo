@@ -13,7 +13,7 @@ export function StationPanel({ state, send, expanded = false }: Props) {
   useEffect(() => { if (!stationId && state.stations[0]) setStationId(state.stations[0].id); }, [state.stations, stationId]);
   async function act(action: string, payload: Record<string, unknown> = {}) { if (!station) return; await stationAction(action, { seed: station.seed, ...payload }); await send("queue"); }
   async function tune(key: string, value: number) { await act("settings", { settings: { [key]: value } }); }
-  if (!station) return <section className="panel"><div className="empty-state"><strong>No station yet</strong><p>Start with a song, artist, album, playlist, decade, genre, or several examples.</p><button className="btn primary" onClick={() => void send("start_radio", { query: "80s" })}>Start 80s Radio</button></div></section>;
+  if (!station) return <section className="panel"><div className="empty-state"><strong>No station yet</strong><p>Use Find to start a station from any song, artist, album, playlist, decade, or genre.</p></div></section>;
   return <section className={`panel ${expanded ? "wide-panel" : ""}`}>
     <div className="panel-title-row"><div><h2>Radio Studio</h2><p>{station.last_selection_reason || `Tuned around ${station.seed}`}</p></div><div className="inline-actions"><button className="btn" onClick={() => void send("start_radio", { query: station.seed })}>Start</button><button className="btn amber" onClick={() => void send("stop_radio")}>Stop Radio</button></div></div>
     {expanded && <select value={station.id} onChange={(event) => setStationId(event.target.value)}>{state.stations.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}

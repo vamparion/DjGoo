@@ -411,8 +411,8 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
         bridge.nuclear = Resolver()
 
-        self.assertEqual(await bridge._radio_fallback_query("80s"), "Nuclear 80s hits")
-        self.assertEqual(await bridge._radio_fallback_query("white girl music"), "Nuclear 2000s pop hits")
+        self.assertEqual(await bridge._radio_fallback_query("rock"), "Nuclear rock hits")
+        self.assertEqual(await bridge._radio_fallback_query("edm"), "Nuclear edm hits")
         self.assertEqual(await bridge._radio_fallback_query("Sandstorm"), "Nuclear Sandstorm")
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")

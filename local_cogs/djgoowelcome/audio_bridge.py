@@ -1088,7 +1088,6 @@ class DjGooAudioBridge:
             "country": "country hits",
             "rap": "rap hits",
             "r&b": "r&b hits",
-            "white girl music": "2000s pop hits",
         }
         if normalized in aliases:
             return aliases[normalized]
@@ -1113,7 +1112,7 @@ class DjGooAudioBridge:
     async def _start_radio(self, audio, ctx, seed: str) -> str:
         seed = seed.strip()
         if not seed:
-            await self._notice("Tell me what to seed the station with, like `DjGoo radio Sandstorm`.")
+            await self._notice("Tell me what to seed the station with: an artist, song, genre, or playlist.")
             return "Missing radio seed"
         station_seed = seed
         station_mode = "balanced"

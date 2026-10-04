@@ -1,5 +1,5 @@
-const CACHE = "djgoo-control-v3";
-const SHELL = ["./", "./manifest.webmanifest", "./djgoo-mark.svg"];
+const CACHE = "djgoo-control-v4";
+const SHELL = ["./", "./manifest.webmanifest", "./icons/djgoo-192.png", "./icons/djgoo-512.png"];
 self.addEventListener("install", (event) => event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting())));
 self.addEventListener("activate", (event) => event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)))).then(() => self.clients.claim())));
 self.addEventListener("fetch", (event) => {

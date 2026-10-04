@@ -1,8 +1,7 @@
 import { useState } from "react";
 import { searchLibrary, searchNuclear } from "../api";
 import type { PanelProps } from "./types";
-
-const quickSearches = ["sandstorm", "80s hits", "rocket league edm", "white girl music", "linkin park", "chill radio"];
+import { normalizeMediaInput } from "../mediaInput";
 
 export function SearchPanel({ send }: PanelProps) {
   const [query, setQuery] = useState("");
@@ -11,7 +10,7 @@ export function SearchPanel({ send }: PanelProps) {
   const [library, setLibrary] = useState<Array<Record<string, unknown>>>([]);
 
   async function preview(text = query) {
-    const q = text.trim();
+    const q = normalizeMediaInput(text);
     if (!q) return;
     setBusy(true);
     try {
@@ -23,10 +22,10 @@ export function SearchPanel({ send }: PanelProps) {
       setBusy(false);
     }
   }
-  async function findEverywhere() { const q = query.trim(); if (!q) return; const data = await searchLibrary(q); setLibrary(data.results); }
+  async function findEverywhere() { const q = normalizeMediaInput(query); if (!q) return; const data = await searchLibrary(q); setLibrary(data.results); }
 
   async function submit(action: "play" | "play_next" | "start_radio") {
-    const q = query.trim();
+    const q = normalizeMediaInput(query);
     if (!q) return;
     await send(action, { query: q });
     setQuery("");
@@ -64,20 +63,6 @@ export function SearchPanel({ send }: PanelProps) {
         </div>
       )}
       {library.length > 0 && <div className="list">{library.slice(0, 20).map((item, index) => <div className="row" key={`${String(item.uri)}-${index}`}><div><strong>{String(item.title || "Untitled")}</strong><span>{String(item.kind)} · {String(item.group)}</span></div><button className="btn" onClick={() => void send("play_next", { query: String(item.uri || item.title) })}>Next</button></div>)}</div>}
-      <div className="chip-row">
-        {quickSearches.map((item) => (
-          <button
-            className="chip"
-            key={item}
-            onClick={() => {
-              setQuery(item);
-              void preview(item);
-            }}
-          >
-            {item}
-          </button>
-        ))}
-      </div>
     </section>
   );
 }

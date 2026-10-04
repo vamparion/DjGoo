@@ -169,7 +169,8 @@ class AuthenticatedCommandProcessor:
         if identity is None:
             raise CommandRejected(401, "Unknown or revoked device")
         if not self._limiter.allow(identity.device_id):
-            raise CommandRejected(429, "Voice command rate limit exceeded")
+            label = "Web control" if identity.device_type == "web" else "Voice command"
+            raise CommandRejected(429, f"{label} rate limit exceeded")
 
         command_id = str(payload.get("command_id") or "")
         try:
@@ -214,6 +215,7 @@ class AuthenticatedCommandProcessor:
         item = {
             "type": "command",
             "source": "web_remote" if identity.device_type == "web" else "voice_remote",
+            "control_surface": "web" if identity.device_type == "web" else "voice",
             "created_at": created_at,
             "command_id": command_id,
             "device_id": identity.device_id,

@@ -40,10 +40,7 @@ export function QueuePanel({ state, send }: PanelProps) {
         <div className="empty-state">
           <strong>No readable queue yet</strong>
           <p>Requests and radio additions will appear here as soon as DjGoo confirms them.</p>
-          <div className="inline-actions">
-            <button className="btn" onClick={() => void send("queue")}>Refresh</button>
-            <button className="btn primary" onClick={() => void send("play_next", { query: "sandstorm" })}>Test Song</button>
-          </div>
+          <button className="btn" onClick={() => void send("queue")}>Refresh</button>
         </div>
       )}
     </section>

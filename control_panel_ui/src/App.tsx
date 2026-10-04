@@ -113,6 +113,7 @@ export function App() {
   if (!state) {
     return (
       <main className="loading loading-state">
+        <img className="loading-mark" src="./icons/djgoo-192.png" alt="" />
         <strong>{error ? "DjGoo could not load" : "Loading DjGoo..."}</strong>
         {error && <><p>{error}</p><div className="inline-actions"><button className="btn primary" onClick={() => void refresh()}>Reconnect</button></div><p className="muted">Your paired device remains saved. Reconnecting does not require another Discord command.</p></>}
       </main>

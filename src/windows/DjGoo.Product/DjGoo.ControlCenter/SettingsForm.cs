@@ -26,6 +26,7 @@ internal sealed class SettingsForm : Form
         FormBorderStyle = FormBorderStyle.Sizable;
         MaximizeBox = false;
         BuildUi();
+        BrandStyle.Apply(this);
         LoadSettings();
     }
 

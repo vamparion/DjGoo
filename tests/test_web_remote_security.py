@@ -79,6 +79,7 @@ async def test_web_capabilities_and_replay_are_enforced_host_side(tmp_path: Path
     queued = json.loads((tmp_path / "queue.jsonl").read_text().strip())
     assert queued["user_id"] == 12 and queued["guild_id"] == 34
     assert queued["actor_role"] == "host"
+    assert queued["source"] == "web_remote" and queued["control_surface"] == "web"
     assert "is_admin" not in queued
     with pytest.raises(CommandRejected, match="not enabled"):
         await processor.accept(token, {**payload, "command_id": str(uuid.uuid4()), "intent": "stop"})
@@ -156,3 +157,14 @@ def test_guest_stop_is_not_admin_only_and_web_retries_are_deduplicated() -> None
     assert '"stop"' not in destructive
     assert 'source in {"mini_player", "web_remote"}' in requests
     assert '"request.control_surface.duplicate_rejected"' in requests
+
+
+def test_shipped_web_ui_has_no_personal_test_shortcuts() -> None:
+    source_root = Path(__file__).resolve().parents[1] / "control_panel_ui" / "src"
+    shipped = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in source_root.rglob("*")
+        if path.suffix in {".ts", ".tsx"} and not path.name.endswith(".test.ts")
+    ).casefold()
+    for personal_example in ("sandstorm", "white girl music", "rocket league edm", "radio 80s"):
+        assert personal_example not in shipped
