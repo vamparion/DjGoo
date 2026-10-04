@@ -22,6 +22,7 @@ class FakeAudio:
     command_play = object()
     command_stop = object()
     command_skip = object()
+    command_pause = object()
 
 
 class FakeMember:
@@ -45,6 +46,26 @@ class FakeResumeGuild:
 
 
 class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_web_toggle_pause_controls_the_active_player(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge.bot = type("Bot", (), {"get_cog": lambda _self, _name: FakeAudio()})()
+        bridge._context = lambda: FakeContext()
+        bridge.invoked = []
+
+        async def invoke(command, ctx, *args, **kwargs):
+            bridge.invoked.append((command, ctx, args, kwargs))
+
+        bridge._invoke_silently = invoke
+        player = type("Player", (), {"paused": False})()
+        with patch("local_cogs.djgoowelcome.audio_bridge.lavalink.get_player", return_value=player):
+            result = await bridge.handle({"intent": "toggle_pause", "source": "web_remote"})
+
+        self.assertEqual(result, "Paused.")
+        self.assertEqual(bridge.invoked[0][0], FakeAudio.command_pause)
+
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     async def test_playlist_replaces_current_track_and_preserves_source_order(self):
         from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge

@@ -346,6 +346,8 @@ class DjGooAudioBridge:
             if intent in {"pause", "resume"}:
                 await self._pause_or_resume(audio, ctx, want_pause=intent == "pause")
                 return intent.title()
+            if intent == "toggle_pause":
+                return await self._toggle_pause(audio, ctx)
             if intent == "stop":
                 return await self._stop_playback(audio, ctx)
             if intent == "clear_queue":
@@ -1001,8 +1003,6 @@ class DjGooAudioBridge:
             cache.mkdir(parents=True, exist_ok=True)
             stem = hashlib.sha256(uri.encode("utf-8")).hexdigest()[:24]
             existing = next(cache.glob(f"{stem}.*"), None)
-            if existing and existing.stat().st_size:
-                return f"localtracks/{existing.name}"
             options = {
                 "quiet": True,
                 "no_warnings": True,
@@ -1011,8 +1011,37 @@ class DjGooAudioBridge:
                 "noplaylist": True,
             }
             with yt_dlp.YoutubeDL(options) as extractor:
-                info = extractor.extract_info(uri, download=True)
-                filename = Path(extractor.prepare_filename(info))
+                info = extractor.extract_info(
+                    uri,
+                    download=not bool(existing and existing.stat().st_size),
+                )
+                filename = existing or Path(extractor.prepare_filename(info))
+            if filename.is_file():
+                metadata_path = cache / "metadata.json"
+                try:
+                    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    metadata = {}
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                metadata[filename.name] = {
+                    "title": str(info.get("title") or "").strip(),
+                    "artist": str(
+                        info.get("artist")
+                        or info.get("uploader")
+                        or info.get("channel")
+                        or ""
+                    ).strip(),
+                    "artwork_url": str(info.get("thumbnail") or "").strip(),
+                    "duration_seconds": int(float(info.get("duration") or 0)),
+                    "source_uri": str(info.get("webpage_url") or uri).strip(),
+                }
+                temporary = metadata_path.with_suffix(".json.tmp")
+                temporary.write_text(
+                    json.dumps(metadata, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                os.replace(temporary, metadata_path)
             return f"localtracks/{filename.name}" if filename.is_file() else None
         except Exception as exc:
             log_event("media.extract.failed", uri=uri, error=type(exc).__name__, detail=str(exc))
@@ -1407,6 +1436,19 @@ class DjGooAudioBridge:
             "title": getattr(track, "title", "") or info.get("title", ""),
             "uri": getattr(track, "uri", "") or info.get("uri", ""),
         }
+        artist = (
+            getattr(track, "author", "")
+            or info.get("author", "")
+            or info.get("artist", "")
+        )
+        if artist:
+            data["artist"] = str(artist).strip()
+        local_metadata = self._local_media_metadata(str(data["uri"]))
+        if local_metadata:
+            if not data["title"] or str(data["title"]).strip().lower() == "unknown title":
+                data["title"] = str(local_metadata.get("title") or data["title"])
+            if not data.get("artist") or data["artist"].lower() == "unknown artist":
+                data["artist"] = str(local_metadata.get("artist") or data.get("artist") or "")
         artwork = (
             getattr(track, "artwork_url", "")
             or info.get("artworkUrl", "")
@@ -1415,14 +1457,31 @@ class DjGooAudioBridge:
         )
         if artwork:
             data["artwork_url"] = str(artwork).strip()
+        elif local_metadata.get("artwork_url"):
+            data["artwork_url"] = str(local_metadata["artwork_url"]).strip()
         elif data["uri"]:
             video_id = self._youtube_video_id(str(data["uri"]))
             if video_id:
                 data["artwork_url"] = f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg"
         duration = self._track_duration_seconds(track)
+        if not duration:
+            duration = int(local_metadata.get("duration_seconds") or 0)
         if duration:
             data["duration_seconds"] = str(duration)
         return data
+
+    def _local_media_metadata(self, uri: str) -> Dict[str, Any]:
+        if not uri or "localtracks" not in uri.lower():
+            return {}
+        name = Path(uri.replace("\\", "/")).name
+        root = Path(getattr(self, "project_root", PROJECT_ROOT))
+        path = root / "cache" / "localtracks" / "metadata.json"
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        value = document.get(name) if isinstance(document, dict) else None
+        return value if isinstance(value, dict) else {}
 
     async def _pause_or_resume(self, audio, ctx, *, want_pause: bool) -> None:
         try:

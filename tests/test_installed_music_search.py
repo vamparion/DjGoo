@@ -41,7 +41,14 @@ def test_direct_media_query_returns_extracted_stream(tmp_path) -> None:
             assert download is True
             path = self.options["outtmpl"].replace("%(ext)s", "webm")
             __import__("pathlib").Path(path).write_bytes(b"audio")
-            return {"ext": "webm"}
+            return {
+                "ext": "webm",
+                "title": "Darude - Sandstorm",
+                "uploader": "Darude",
+                "duration": 225,
+                "thumbnail": "https://img.test/sandstorm.jpg",
+                "webpage_url": uri,
+            }
 
         def prepare_filename(self, _info):
             return self.options["outtmpl"].replace("%(ext)s", "webm")
@@ -50,6 +57,38 @@ def test_direct_media_query_returns_extracted_stream(tmp_path) -> None:
         resolved = DjGooAudioBridge._direct_media_query("https://www.youtube.com/watch?v=track")
 
     assert resolved and resolved.startswith("localtracks/") and resolved.endswith(".webm")
+    metadata = __import__("json").loads((tmp_path / "cache" / "localtracks" / "metadata.json").read_text())
+    assert metadata[resolved.removeprefix("localtracks/")]["title"] == "Darude - Sandstorm"
+
+
+def test_local_media_metadata_replaces_lavalink_unknown_labels(tmp_path) -> None:
+    cache = tmp_path / "cache" / "localtracks"
+    cache.mkdir(parents=True)
+    (cache / "metadata.json").write_text(
+        '{"track.webm":{"title":"Darude - Sandstorm","artist":"Darude","duration_seconds":225,"artwork_url":"https://img.test/sandstorm.jpg"}}',
+        encoding="utf-8",
+    )
+    bridge = object.__new__(DjGooAudioBridge)
+    bridge.project_root = tmp_path
+    track = type(
+        "Track",
+        (),
+        {
+            "title": "Unknown title",
+            "author": "Unknown artist",
+            "uri": str(cache / "track.webm"),
+            "info": {},
+            "length": 0,
+        },
+    )()
+
+    assert bridge._track_data(track) == {
+        "title": "Darude - Sandstorm",
+        "artist": "Darude",
+        "uri": str(cache / "track.webm"),
+        "artwork_url": "https://img.test/sandstorm.jpg",
+        "duration_seconds": "225",
+    }
 
 
 @pytest.mark.asyncio
