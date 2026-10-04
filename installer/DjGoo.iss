@@ -23,7 +23,7 @@ RestartApplications=no
 DisableProgramGroupPage=yes
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: checkedonce
 
 [Files]
 Source: "..\build\windows-product\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

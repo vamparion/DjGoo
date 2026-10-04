@@ -10,6 +10,17 @@ internal sealed class MainForm : Form
     private readonly NotifyIcon _tray;
     private readonly Label _state = new() { AutoSize = true, Font = new Font("Segoe UI", 18, FontStyle.Bold), Text = "Starting" };
     private readonly Label _detail = new() { AutoSize = true, ForeColor = Color.DimGray, Text = "Connecting to DjGoo Host" };
+    private readonly TextBox _activity = new()
+    {
+        Dock = DockStyle.Fill,
+        Multiline = true,
+        ReadOnly = true,
+        ScrollBars = ScrollBars.Vertical,
+        Font = new Font("Consolas", 9),
+        BackColor = Color.FromArgb(20, 24, 30),
+        ForeColor = Color.Gainsboro,
+        BorderStyle = BorderStyle.FixedSingle,
+    };
     private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 1500 };
     private readonly RegisteredWaitHandle _activateWait;
     private readonly RegisteredWaitHandle _exitWait;
@@ -23,9 +34,9 @@ internal sealed class MainForm : Form
         _client = new HostPipeClient(pipeName);
         _ensureHost = ensureHost;
         Text = "DjGoo";
-        Width = 560;
-        Height = 330;
-        MinimumSize = new Size(500, 300);
+        Width = 820;
+        Height = 560;
+        MinimumSize = new Size(720, 500);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 10);
         BuildUi();
@@ -44,11 +55,14 @@ internal sealed class MainForm : Form
 
     private void BuildUi()
     {
-        var body = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24), RowCount = 4, ColumnCount = 1 };
+        var body = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24), RowCount = 7, ColumnCount = 1 };
+        body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         body.Controls.Add(_state);
         body.Controls.Add(_detail);
         var services = new Label
@@ -58,13 +72,23 @@ internal sealed class MainForm : Form
             Text = "Music, web remote, and local voice are managed in the background."
         };
         body.Controls.Add(services);
-        var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight };
+        var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0, 16, 0, 0) };
         actions.Controls.Add(Button("Start", async () => await CommandAsync("start")));
         actions.Controls.Add(Button("Stop", async () => await CommandAsync("stop")));
         actions.Controls.Add(Button("Restart", async () => await CommandAsync("restart")));
         actions.Controls.Add(Button("Open web", () => Open("https://127.0.0.1:8765/")));
-        actions.Controls.Add(Button("Open logs", OpenLogs));
         body.Controls.Add(actions);
+
+        var manage = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0, 10, 0, 0) };
+        manage.Controls.Add(Button("Connect Discord", ConfigureDiscordAsync));
+        manage.Controls.Add(Button("Settings", () => OpenFolder(_paths.Config)));
+        manage.Controls.Add(Button("Check for updates", () => RunUpdater("check")));
+        manage.Controls.Add(Button("Repair", () => RunUpdater("repair")));
+        manage.Controls.Add(Button("Open logs", OpenLogs));
+        body.Controls.Add(manage);
+
+        body.Controls.Add(new Label { AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold), Margin = new Padding(0, 16, 0, 5), Text = "Activity" });
+        body.Controls.Add(_activity);
         Controls.Add(body);
     }
 
@@ -129,6 +153,7 @@ internal sealed class MainForm : Form
                 : required.Any(item => item.Phase == ComponentPhase.Recovering) ? "Recovering" : "Starting";
             var details = string.Join("  |  ", status.Components.Select(item => $"{Display(item.Kind)}: {Simple(item.Phase)}"));
             SetState(label, details);
+            RefreshActivity();
         }
         catch (Exception ex) { SetState("Needs attention", ex.Message); }
     }
@@ -159,9 +184,15 @@ internal sealed class MainForm : Form
     private void OpenLogs()
     {
         _paths.EnsureDataDirectories();
+        OpenFolder(_paths.Logs);
+    }
+
+    private static void OpenFolder(string path)
+    {
+        Directory.CreateDirectory(path);
         try
         {
-            Process.Start(new ProcessStartInfo("explorer.exe", $"/e,\"{_paths.Logs}\"")
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/e,\"{path}\"")
             {
                 UseShellExecute = false,
                 CreateNoWindow = true,
@@ -169,9 +200,40 @@ internal sealed class MainForm : Form
         }
         catch
         {
-            if (!File.Exists(_paths.HostLog)) File.WriteAllText(_paths.HostLog, string.Empty);
-            Open(_paths.HostLog);
+            Open(path);
         }
+    }
+
+    private async Task ConfigureDiscordAsync()
+    {
+        var wasRunning = false;
+        try
+        {
+            var response = await _client.SendAsync("status", 1500);
+            wasRunning = response.Status?.DesiredRunning == true;
+            if (wasRunning) await _client.SendAsync("stop", 10000);
+            using var setup = new FirstRunForm(_paths);
+            var saved = setup.ShowDialog(this) == DialogResult.OK;
+            if (saved || wasRunning) await _client.SendAsync("start", 10000);
+            await RefreshStatusAsync();
+        }
+        catch (Exception ex)
+        {
+            SetState("Needs attention", ex.Message);
+        }
+    }
+
+    private void RefreshActivity()
+    {
+        try
+        {
+            if (!File.Exists(_paths.HostLog)) { _activity.Text = "No activity has been recorded yet."; return; }
+            var lines = File.ReadLines(_paths.HostLog).TakeLast(16);
+            _activity.Lines = lines.ToArray();
+            _activity.SelectionStart = _activity.TextLength;
+            _activity.ScrollToCaret();
+        }
+        catch (IOException) { }
     }
     private static void Open(string target) => Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
     private void RunUpdater(string command) => Process.Start(new ProcessStartInfo(Path.Combine(_paths.ProgramRoot, "DjGoo.Updater.exe"), command) { UseShellExecute = true });
