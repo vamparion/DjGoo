@@ -127,13 +127,13 @@ export function App() {
     if (activeView === "Radio") {
       return (
         <>
-          <StationPanel state={state} send={send} expanded />
+          <StationPanel state={state} send={send} expanded canManage={canManage} />
           <SmartActions state={state} send={send} mode="radio" />
         </>
       );
     }
     if (activeView === "Lists") {
-      return <PlaylistPanel state={state} send={send} expanded />;
+      return <PlaylistPanel state={state} send={send} expanded canManage={canManage} />;
     }
     if (activeView === "Players") {
       return <GuestPanel state={state} send={send} profile={profile} refresh={refresh} />;

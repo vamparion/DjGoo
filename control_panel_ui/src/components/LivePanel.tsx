@@ -25,7 +25,7 @@ export function LivePanel({ state, send }: PanelProps) {
 
   return (
     <section className="panel hero">
-      <div className={`art ${hasTrack ? "playing" : ""}`}>
+      <div className={`art ${playback.playing ? "playing" : ""}`}>
         <img src="./icons/djgoo-192.png" alt="" />
         <span>{hasTrack ? "ON" : "IDLE"}</span>
       </div>

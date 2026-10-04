@@ -150,6 +150,7 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                 elif action == "restore": result = stations.restore_snapshot(seed, str(payload.get("snapshot_id") or ""))
                 elif action == "clone": result = stations.clone(seed, str(payload.get("new_seed") or ""))
                 elif action == "merge": result = stations.merge([str(value) for value in payload.get("seeds", [])], str(payload.get("new_seed") or ""))
+                elif action == "delete": result = stations.delete(seed)
                 else: return 404, error("Unknown station action", status=404)
                 return 200, ok({"result": result})
             if path.startswith("/api/playlist/"):
@@ -163,6 +164,7 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                 elif action == "cleanup": result = playlists.cleanup(name)
                 elif action == "replace": result = {"name": playlists.replace_track(name, str(payload.get("track_id") or ""), payload.get("replacement") or {})}
                 elif action == "remove": result = dict(zip(("name", "removed"), playlists.remove_tracks(name, [str(value) for value in payload.get("track_ids", [])])))
+                elif action == "delete": result = {"name": playlists.delete(name)}
                 elif action == "import":
                     reviewed = [item for item in payload.get("tracks", []) if isinstance(item, dict)]
                     results = [playlists.add_track(name, item) for item in reviewed]

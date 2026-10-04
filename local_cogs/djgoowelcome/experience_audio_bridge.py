@@ -209,6 +209,7 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             elif action == "restore": result = self.stations.restore_snapshot(seed, str(payload.get("snapshot_id") or ""))
             elif action == "clone": result = self.stations.clone(seed, str(payload.get("new_seed") or ""))
             elif action == "merge": result = self.stations.merge([str(value) for value in payload.get("seeds", [])], str(payload.get("new_seed") or ""))
+            elif action == "delete": result = self.stations.delete(seed)
             else: return {"status": "failed", "message": "Unknown station action."}
             return {"status": "completed", "message": "Station updated.", "result": result}
         if intent == "remote_playlist_action":
@@ -219,6 +220,7 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             elif action == "cleanup": result = self.playlists.cleanup(name)
             elif action == "replace": result = {"name": self.playlists.replace_track(name, str(payload.get("track_id") or ""), payload.get("replacement") or {})}
             elif action == "remove": result = dict(zip(("name", "removed"), self.playlists.remove_tracks(name, [str(value) for value in payload.get("track_ids", [])])))
+            elif action == "delete": result = {"name": self.playlists.delete(name)}
             elif action == "import":
                 reviewed = [value for value in payload.get("tracks", []) if isinstance(value, dict)]
                 changes = [self.playlists.add_track(name, value) for value in reviewed]

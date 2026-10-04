@@ -79,3 +79,18 @@ def test_station_tuning_feedback_undo_snapshot_clone_and_merge(tmp_path: Path) -
     assert clone["played"] == [] and len(clone["liked"]) == 1
     assert len(merged["liked"]) == 1 and len(merged["banned"]) == 1
     assert store.undo_feedback("Rock", "liked")["liked"] == []
+
+
+def test_delete_station_removes_history_and_all_active_references(tmp_path: Path) -> None:
+    store = SqliteDjGooStations(tmp_path / "stations.sqlite3")
+    store.set_active(123, "Rock")
+    store.set_active(456, "Rock")
+    store.add_feedback("Rock", "liked", {"title": "One", "uri": "track:one"})
+
+    deleted = store.delete("Rock")
+
+    assert deleted["name"] == "Rock radio"
+    assert deleted["cleared_active_guilds"] == 2
+    assert store.get_station("Rock") is None
+    assert store.get_active(123) is None
+    assert store.get_active(456) is None

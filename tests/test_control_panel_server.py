@@ -1,3 +1,4 @@
+import gc
 import tempfile
 import unittest
 from pathlib import Path
@@ -114,6 +115,40 @@ class ControlPanelServerTests(unittest.TestCase):
 
         self.assertEqual(status, 400)
         self.assertIn("already in use", response["error"])
+
+    def test_host_can_delete_playlist_and_station_but_member_cannot(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            handler_cls = create_handler_class(root)
+            _, host_body = handler_cls.route_post(
+                "/api/profile", {"username": "Host", "device_id": "host"}, is_local=True
+            )
+            _, member_body = handler_cls.route_post(
+                "/api/profile", {"username": "Member", "device_id": "member"}, is_local=False
+            )
+            from voice.djgoo_playlists import DjGooPlaylists
+            from voice.sqlite_stations import SqliteDjGooStations
+            DjGooPlaylists(root / "data" / "djgoo-playlists.json").create("Game Night")
+            SqliteDjGooStations(root / "data" / "djgoo-stations.sqlite3").get_or_create("Rock")
+
+            denied, denied_body = handler_cls.route_post(
+                "/api/playlist/delete",
+                {"token": member_body["profile"]["token"], "playlist": "Game Night"},
+            )
+            playlist_status, _ = handler_cls.route_post(
+                "/api/playlist/delete",
+                {"token": host_body["profile"]["token"], "playlist": "Game Night"},
+            )
+            station_status, _ = handler_cls.route_post(
+                "/api/station/delete",
+                {"token": host_body["profile"]["token"], "seed": "Rock"},
+            )
+            gc.collect()
+
+        self.assertEqual(denied, 400)
+        self.assertIn("moderator", denied_body["error"])
+        self.assertEqual(playlist_status, 200)
+        self.assertEqual(station_status, 200)
 
 
 if __name__ == "__main__":

@@ -1,20 +1,28 @@
 import { useEffect, useState } from "react";
+import { Trash2 } from "lucide-react";
 import { playlistAction } from "../api";
 import type { PanelProps } from "./types";
 
-type Props = PanelProps & { compact?: boolean; expanded?: boolean };
+type Props = PanelProps & { compact?: boolean; expanded?: boolean; canManage?: boolean };
 
-export function PlaylistPanel({ state, send, compact = false, expanded = false }: Props) {
+export function PlaylistPanel({ state, send, compact = false, expanded = false, canManage = false }: Props) {
   const [name, setName] = useState(state.playlists[0]?.name || "");
   const [drag, setDrag] = useState("");
   const [bulk, setBulk] = useState("");
   const playlist = state.playlists.find((item) => item.name === name) || state.playlists[0];
   useEffect(() => { if (!name && state.playlists[0]) setName(state.playlists[0].name); }, [name, state.playlists]);
   async function action(kind: string, payload: Record<string, unknown> = {}) { if (!playlist) return; await playlistAction(kind, { playlist: playlist.name, ...payload }); await send("queue"); }
+  async function deletePlaylist() {
+    if (!playlist || !window.confirm(`Delete "${playlist.name}" and all ${playlist.track_count} saved tracks? This cannot be undone.`)) return;
+    const currentIndex = state.playlists.findIndex((item) => item.name === playlist.name);
+    const next = state.playlists[currentIndex + 1] || state.playlists[currentIndex - 1];
+    await action("delete");
+    setName(next?.name || "");
+  }
   async function drop(beforeId: string) { if (!playlist || !drag || drag === beforeId) return; const ids = playlist.tracks.map((track) => track.id || "").filter(Boolean); const from = ids.indexOf(drag); const to = ids.indexOf(beforeId); ids.splice(to, 0, ids.splice(from, 1)[0]); setDrag(""); await action("reorder", { track_ids: ids }); }
   if (compact) return <section className="panel"><div className="panel-title-row"><div><h2>Playlists</h2><p>Fast access to saved lists.</p></div></div><div className="list">{state.playlists.slice(0, 4).map((item) => <div className="row" key={item.name}><div><strong>{item.name}</strong><span>{item.track_count} tracks</span></div><button className="btn" onClick={() => void send("play_playlist", { playlist: item.name })}>Play</button></div>)}</div></section>;
   return <section className={`panel ${expanded ? "wide-panel" : ""}`}>
-    <div className="panel-title-row"><div><h2>Playlist Workshop</h2><p>Drag songs into order, clean duplicates, and keep playlist identity when replacing sources.</p></div>{playlist && <div className="inline-actions"><button className="btn" onClick={() => void action("cleanup")}>Clean Up</button><button className="btn primary" onClick={() => void send("play_playlist", { playlist: playlist.name })}>Play</button></div>}</div>
+    <div className="panel-title-row"><div><h2>Playlist Workshop</h2><p>Drag songs into order, clean duplicates, and keep playlist identity when replacing sources.</p></div>{playlist && <div className="inline-actions">{canManage && <button className="btn danger icon-action" title="Delete playlist" aria-label={`Delete ${playlist.name}`} onClick={() => void deletePlaylist()}><Trash2 size={16} /><span>Delete playlist</span></button>}<button className="btn" onClick={() => void action("cleanup")}>Clean Up</button><button className="btn primary" onClick={() => void send("play_playlist", { playlist: playlist.name })}>Play</button></div>}</div>
     <div className="editor-row"><select value={playlist?.name || ""} onChange={(event) => setName(event.target.value)}>{state.playlists.map((item) => <option key={item.name}>{item.name}</option>)}</select>{playlist && <><input defaultValue={playlist.folder} placeholder="Folder" onBlur={(event) => void action("metadata", { metadata: { folder: event.target.value } })} /><input defaultValue={(playlist.tags || []).join(", ")} placeholder="Tags" onBlur={(event) => void action("metadata", { metadata: { tags: event.target.value.split(",") } })} /></>}</div>
     {playlist && <div className="editor-row"><input defaultValue={playlist.artwork_url} placeholder="Artwork URL" onBlur={(event) => void action("metadata", { metadata: { artwork_url: event.target.value } })} /><input defaultValue={playlist.smart_query} placeholder="Smart playlist rule, e.g. liked tracks" onBlur={(event) => void action("metadata", { metadata: { smart_query: event.target.value } })} /></div>}
     {playlist && <textarea defaultValue={playlist.description} placeholder="Playlist description" onBlur={(event) => void action("metadata", { metadata: { description: event.target.value } })} />}

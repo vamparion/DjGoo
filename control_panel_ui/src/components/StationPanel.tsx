@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
+import { Trash2 } from "lucide-react";
 import { stationAction } from "../api";
 import type { PanelProps } from "./types";
 
-type Props = PanelProps & { expanded?: boolean };
+type Props = PanelProps & { expanded?: boolean; canManage?: boolean };
 
-export function StationPanel({ state, send, expanded = false }: Props) {
+export function StationPanel({ state, send, expanded = false, canManage = false }: Props) {
   const [stationId, setStationId] = useState(state.active_station?.id || state.stations[0]?.id || "");
   const [cloneName, setCloneName] = useState("");
   const [mergeSeeds, setMergeSeeds] = useState("");
@@ -12,10 +13,17 @@ export function StationPanel({ state, send, expanded = false }: Props) {
   const station = state.stations.find((item) => item.id === stationId) || state.active_station || state.stations[0] || null;
   useEffect(() => { if (!stationId && state.stations[0]) setStationId(state.stations[0].id); }, [state.stations, stationId]);
   async function act(action: string, payload: Record<string, unknown> = {}) { if (!station) return; await stationAction(action, { seed: station.seed, ...payload }); await send("queue"); }
+  async function deleteStation() {
+    if (!station || !window.confirm(`Delete "${station.name}" and its saved preferences and history? This cannot be undone.`)) return;
+    const currentIndex = state.stations.findIndex((item) => item.id === station.id);
+    const next = state.stations[currentIndex + 1] || state.stations[currentIndex - 1];
+    await act("delete");
+    setStationId(next?.id || "");
+  }
   async function tune(key: string, value: number) { await act("settings", { settings: { [key]: value } }); }
   if (!station) return <section className="panel"><div className="empty-state"><strong>No station yet</strong><p>Use Find to start a station from any song, artist, album, playlist, decade, or genre.</p></div></section>;
   return <section className={`panel ${expanded ? "wide-panel" : ""}`}>
-    <div className="panel-title-row"><div><h2>Radio Studio</h2><p>{station.last_selection_reason || `Tuned around ${station.seed}`}</p></div><div className="inline-actions"><button className="btn" onClick={() => void send("start_radio", { query: station.seed })}>Start</button><button className="btn amber" onClick={() => void send("stop_radio")}>Stop Radio</button></div></div>
+    <div className="panel-title-row"><div><h2>Radio Studio</h2><p>{station.last_selection_reason || `Tuned around ${station.seed}`}</p></div><div className="inline-actions">{expanded && canManage && <button className="btn danger icon-action" title="Delete station" aria-label={`Delete ${station.name}`} onClick={() => void deleteStation()}><Trash2 size={16} /><span>Delete station</span></button>}<button className="btn" onClick={() => void send("start_radio", { query: station.seed })}>Start</button><button className="btn amber" onClick={() => void send("stop_radio")}>Stop Radio</button></div></div>
     {expanded && <select value={station.id} onChange={(event) => setStationId(event.target.value)}>{state.stations.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}
     <div className="metric-grid"><div className="metric"><span>Seed type</span><strong>{station.seed_type}</strong></div><div className="metric"><span>Drift</span><strong>{station.last_drift_score || 0}%</strong></div><div className="metric"><span>Played here</span><strong>{station.played.length}</strong></div><div className="metric"><span>Preferences</span><strong>{station.feedback_history.length}</strong></div></div>
     {expanded && <><div className="tuning-grid"><Tune label="Familiar" value={station.familiar_percent} change={(value) => tune("familiar_percent", value)} /><div className="metric"><span>Balanced</span><strong>{station.balanced_percent}%</strong></div><Tune label="Discovery" value={station.discovery_percent} change={(value) => tune("discovery_percent", value)} /><Tune label="Artist spacing" value={station.artist_spacing} max={20} suffix=" songs" change={(value) => tune("artist_spacing", value)} /><Tune label="Song spacing" value={station.song_spacing} max={200} suffix=" songs" change={(value) => tune("song_spacing", value)} /></div>
