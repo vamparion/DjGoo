@@ -46,6 +46,54 @@ class FakeResumeGuild:
 
 class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_playlist_replaces_current_track_and_preserves_source_order(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        class Track:
+            def __init__(self, uri):
+                self.uri = uri
+
+        class Player:
+            def __init__(self):
+                self.current = Track("existing")
+                self.queue = [Track("existing-queued")]
+
+            async def skip(self):
+                self.current = self.queue.pop(0)
+
+        player = Player()
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge._lavalink_node_ready = lambda _guild_id: True
+
+        async def wait_for_node(_guild_id):
+            return True
+
+        async def invoke(_command, _ctx, *, query):
+            # Match Red's head insertion when a player is already active.
+            player.queue.insert(0, Track(query))
+
+        async def track_ready(_guild_id):
+            return True
+
+        bridge._wait_for_lavalink_node = wait_for_node
+        bridge._invoke_silently = invoke
+        bridge._wait_for_track_after_play = track_ready
+
+        with patch("local_cogs.djgoowelcome.audio_bridge.lavalink.get_player", return_value=player):
+            result = await bridge._play_queries_when_ready(
+                FakeAudio(),
+                FakeContext(),
+                ["track-one", "track-two", "track-three"],
+            )
+
+        self.assertTrue(result)
+        self.assertEqual(player.current.uri, "track-one")
+        self.assertEqual(
+            [track.uri for track in player.queue],
+            ["track-two", "track-three"],
+        )
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     async def test_radio_does_not_become_active_when_initial_play_never_queues(self):
         from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
 

@@ -1195,9 +1195,67 @@ class DjGooAudioBridge:
             log.warning("Lavalink was not ready after waiting for guild %s.", ctx.guild.id)
             log_event("play.lavalink.timeout", guild_id=ctx.guild.id, query=queries[0], query_count=len(queries))
             return False
+        player = None
+        prior_track_ids: set[int] = set()
+        if len(queries) > 1:
+            try:
+                player = lavalink.get_player(ctx.guild.id)
+            except (NodeNotFound, PlayerNotFound):
+                player = None
+            if player is not None:
+                prior_track_ids = {id(track) for track in list(player.queue)}
+                if player.current is not None:
+                    prior_track_ids.add(id(player.current))
+
         log_event("play.command.start", guild_id=ctx.guild.id, query=queries[0], query_count=len(queries))
+        added_tracks = []
         for query in queries:
             await self._invoke_silently(audio.command_play, ctx, query=query)
+            if player is not None:
+                candidates = [player.current, *list(player.queue)]
+                added = next(
+                    (
+                        track
+                        for track in candidates
+                        if track is not None
+                        and id(track) not in prior_track_ids
+                        and track not in added_tracks
+                    ),
+                    None,
+                )
+                if added is not None:
+                    added_tracks.append(added)
+
+        # Red may insert each direct play request at the head of an existing
+        # queue. A resolved playlist is one ordered request, so restore that
+        # batch's source order and start its first item immediately.
+        if player is not None and len(added_tracks) > 1:
+            def order_playlist_queue() -> None:
+                current_id = id(player.current) if player.current is not None else None
+                player.queue.clear()
+                player.queue.extend(
+                    track for track in added_tracks if id(track) != current_id
+                )
+
+            order_playlist_queue()
+            replaced_existing = (
+                player.current is not None and id(player.current) in prior_track_ids
+            )
+            if replaced_existing:
+                result = player.skip()
+                if hasattr(result, "__await__"):
+                    await result
+
+            # Track-enqueue listeners may complete immediately after Red's play
+            # command. Let them settle, then make the batch order authoritative.
+            await asyncio.sleep(0.25)
+            order_playlist_queue()
+            log_event(
+                "play.playlist.ordered",
+                guild_id=ctx.guild.id,
+                track_count=len(added_tracks),
+                replaced_existing=replaced_existing,
+            )
         success = await self._wait_for_track_after_play(ctx.guild.id)
         log_event("play.command.result", guild_id=ctx.guild.id, query=queries[0], query_count=len(queries), track_detected=success)
         return success
