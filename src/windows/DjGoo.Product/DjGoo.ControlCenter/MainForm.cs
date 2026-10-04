@@ -81,7 +81,7 @@ internal sealed class MainForm : Form
 
         var manage = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0, 10, 0, 0) };
         manage.Controls.Add(Button("Connect Discord", ConfigureDiscordAsync));
-        manage.Controls.Add(Button("Settings", () => OpenFolder(_paths.Config)));
+        manage.Controls.Add(Button("Settings", OpenSettingsAsync));
         manage.Controls.Add(Button("Check for updates", () => RunUpdater("check")));
         manage.Controls.Add(Button("Repair", () => RunUpdater("repair")));
         manage.Controls.Add(Button("Open logs", OpenLogs));
@@ -215,6 +215,21 @@ internal sealed class MainForm : Form
             using var setup = new FirstRunForm(_paths);
             var saved = setup.ShowDialog(this) == DialogResult.OK;
             if (saved || wasRunning) await _client.SendAsync("start", 10000);
+            await RefreshStatusAsync();
+        }
+        catch (Exception ex)
+        {
+            SetState("Needs attention", ex.Message);
+        }
+    }
+
+    private async Task OpenSettingsAsync()
+    {
+        using var settings = new SettingsForm(_paths);
+        if (settings.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            await _client.SendAsync("restart", 15000);
             await RefreshStatusAsync();
         }
         catch (Exception ex)

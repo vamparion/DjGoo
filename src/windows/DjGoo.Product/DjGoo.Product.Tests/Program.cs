@@ -40,6 +40,7 @@ internal sealed class ProductTestSuite
             UnitManifest();
             UnitLayerVerifier();
             UnitComponentModel();
+            UnitProductSettings();
             await UnitFramingAsync();
             await IntegrationAsync();
             await HostCrashCleanupAsync();
@@ -121,6 +122,42 @@ internal sealed class ProductTestSuite
         Check(true, "layer byte identity verification");
         File.AppendAllText(Path.Combine(root, "a.txt"), "!");
         Throws<InvalidOperationException>(() => LayerVerifier.Verify(root, layer), "damaged layer rejection");
+    }
+
+    private void UnitProductSettings()
+    {
+        var paths = new ProductPaths(Path.Combine(_root, "settings-program"), Path.Combine(_root, "settings-data"));
+        var path = ProductSettingsStore.SettingsPath(paths);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path,
+            "{\"0\":{\"GLOBAL\":{" +
+            "\"token\":\"existing-private-token-value\",\"prefix\":[\"!\"],\"locale\":\"en-US\"," +
+            "\"embeds\":true,\"fuzzy\":false,\"use_buttons\":true,\"invite_public\":false," +
+            "\"description\":\"old\",\"unknown_red_setting\":{\"preserve\":true}}}," +
+            "\"other_instance\":{\"untouched\":42}}");
+        var loaded = ProductSettingsStore.Load(paths);
+        Check(loaded.HasToken && loaded.Prefix == "!" && !loaded.Fuzzy, "product settings load");
+        ProductSettingsStore.Save(paths, loaded with
+        {
+            Prefix = "?", Locale = "fr-FR", Embeds = false, Fuzzy = true,
+            UseButtons = false, InvitePublic = true, Description = "DjGoo test",
+        });
+        using var saved = JsonDocument.Parse(File.ReadAllText(path));
+        var global = saved.RootElement.GetProperty("0").GetProperty("GLOBAL");
+        Check(global.GetProperty("token").GetString() == "existing-private-token-value", "settings preserve token");
+        Check(global.GetProperty("unknown_red_setting").GetProperty("preserve").GetBoolean() &&
+              saved.RootElement.GetProperty("other_instance").GetProperty("untouched").GetInt32() == 42,
+            "settings preserve unknown data");
+        Check(global.GetProperty("prefix")[0].GetString() == "?" &&
+              global.GetProperty("locale").GetString() == "fr-FR" &&
+              !global.GetProperty("embeds").GetBoolean() && global.GetProperty("fuzzy").GetBoolean() &&
+              !global.GetProperty("use_buttons").GetBoolean() && global.GetProperty("invite_public").GetBoolean(),
+            "settings update managed values");
+        Check(!File.Exists(path + ".tmp"), "settings atomic temporary cleanup");
+        Throws<ArgumentException>(() => ProductSettingsStore.Save(paths, loaded with { Prefix = "" }),
+            "settings reject empty prefix");
+        Throws<ArgumentException>(() => ProductSettingsStore.Save(paths, loaded, "short"),
+            "settings reject invalid token");
     }
 
     private async Task UnitFramingAsync()
