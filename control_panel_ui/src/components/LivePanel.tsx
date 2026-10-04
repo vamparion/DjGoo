@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { PanelProps } from "./types";
+import { playbackPosition } from "../playbackClock";
 
 function clock(ms: number) {
   const seconds = Math.max(0, Math.floor(ms / 1000));
@@ -19,10 +20,7 @@ export function LivePanel({ state, send }: PanelProps) {
   const source = playback.source || (state.active_station?.last_track ? "Station memory" : "Idle");
   const hasTrack = title !== "Ready for a song";
   const canRecover = state.capabilities?.system_management !== false;
-  const anchored = Number(playback.position_ms || 0);
-  const elapsed = playback.playing && playback.measured_at
-    ? anchored + Math.max(0, now - playback.measured_at * 1000)
-    : anchored;
+  const elapsed = playbackPosition(playback, now);
   const duration = Number(playback.duration_ms || 0);
 
   return (

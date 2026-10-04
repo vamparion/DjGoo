@@ -15,6 +15,7 @@ import type { ControlState } from "./types";
 import type { DjGooProfile } from "./api";
 import { Onboarding } from "./components/Onboarding";
 import { GamingSettings } from "./components/GamingSettings";
+import { optimisticallyTogglePlayback } from "./playbackClock";
 
 const views = ["Live", "Find", "Radio", "Lists", "Players", "Settings", "Logs"] as const;
 type View = (typeof views)[number];
@@ -82,6 +83,9 @@ export function App() {
 
   async function send(action: string, payload: Record<string, unknown> = {}) {
     setStatus(`Sending ${action}`);
+    if (action === "toggle_pause") {
+      setState(current => current ? optimisticallyTogglePlayback(current) : current);
+    }
     try {
       if (action === "reset") {
         await resetDjGoo();
@@ -89,7 +93,12 @@ export function App() {
         await sendCommand(action, payload);
       }
       setStatus(`Sent ${action}`);
-      await refresh();
+      if (action === "toggle_pause") {
+        window.setTimeout(() => void refresh(), 750);
+        window.setTimeout(() => void refresh(), 2500);
+      } else {
+        await refresh();
+      }
       if (!isDirectTransportHealthy() && ["play_next", "play_now", "play", "skip", "stop", "start_radio", "radio"].includes(action)) {
         window.setTimeout(() => void refresh(), 2000);
         window.setTimeout(() => void refresh(), 6000);
@@ -97,6 +106,7 @@ export function App() {
     } catch (err) {
       setError(String((err as Error).message || err));
       setStatus("Error");
+      if (action === "toggle_pause") void refresh();
     }
   }
 
