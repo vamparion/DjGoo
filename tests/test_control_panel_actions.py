@@ -20,6 +20,12 @@ class ControlPanelActionTests(unittest.TestCase):
         self.assertEqual(item["intent"], "start_radio")
         self.assertEqual(item["query"], "80s")
 
+    def test_resolve_panel_action_preserves_pause_toggle(self):
+        item = resolve_panel_action({"action": "toggle_pause"})
+
+        self.assertEqual(item["intent"], "toggle_pause")
+        self.assertEqual(item["raw"], "panel:toggle_pause")
+
     def test_resolve_panel_action_rejects_unknown_action(self):
         with self.assertRaises(ValueError):
             resolve_panel_action({"action": "explode"})

@@ -35,4 +35,13 @@ describe("playback clock", () => {
     expect(paused.playback.position_ms).toBe(15_000);
     expect(playbackPosition(paused.playback, 120_000)).toBe(15_000);
   });
+
+  it("resumes from the frozen position without counting paused time", () => {
+    const paused = optimisticallyTogglePlayback(state(true), 105_000);
+    const resumed = optimisticallyTogglePlayback(paused, 120_000);
+
+    expect(resumed.playback.playing).toBe(true);
+    expect(resumed.playback.position_ms).toBe(15_000);
+    expect(playbackPosition(resumed.playback, 123_000)).toBe(18_000);
+  });
 });

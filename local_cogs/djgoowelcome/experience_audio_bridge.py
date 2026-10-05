@@ -1141,9 +1141,7 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                 else "playback"
             ),
         )
-        position = int(getattr(player, "position", 0) or 0)
-        if position > max(10_000, int(current.get("duration_seconds") or 0) * 10):
-            position //= 1000
+        position = self._player_position_seconds(player, current)
         station_payload = None
         if station is not None:
             station_mode = str(station.get("mode") or "").strip().lower()

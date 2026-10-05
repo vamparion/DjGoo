@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Pause, Play } from "lucide-react";
 import type { PanelProps } from "./types";
 import { playbackPosition } from "../playbackClock";
 
@@ -39,7 +40,10 @@ export function LivePanel({ state, send }: PanelProps) {
         </div>
         {duration > 0 && <div className="playback-progress"><progress max={duration} value={Math.min(elapsed, duration)} /><span>{clock(elapsed)} / {clock(duration)}</span></div>}
         <div className="actions">
-          <button className="btn primary" onClick={() => void send("toggle_pause")}>Pause/Resume</button>
+          <button className="btn primary icon-action" onClick={() => void send("toggle_pause")}>
+            {playback.playing ? <Pause size={16} /> : <Play size={16} />}
+            <span>{playback.playing ? "Pause" : "Resume"}</span>
+          </button>
           <button className="btn primary" onClick={() => void send("skip")}>Skip</button>
           <button className="btn good" onClick={() => void send("like")}>Like</button>
           <button className="btn" onClick={() => void send("more_like")}>More Like</button>

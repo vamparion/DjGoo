@@ -67,6 +67,35 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bridge.invoked[0][0], FakeAudio.command_pause)
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_web_toggle_pause_resumes_a_paused_player(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge.bot = type("Bot", (), {"get_cog": lambda _self, _name: FakeAudio()})()
+        bridge._context = lambda: FakeContext()
+        bridge.invoked = []
+
+        async def invoke(command, ctx, *args, **kwargs):
+            bridge.invoked.append((command, ctx, args, kwargs))
+
+        bridge._invoke_silently = invoke
+        player = type("Player", (), {"paused": True})()
+        with patch("local_cogs.djgoowelcome.audio_bridge.lavalink.get_player", return_value=player):
+            result = await bridge.handle({"intent": "toggle_pause", "source": "web_remote"})
+
+        self.assertEqual(result, "Resumed.")
+        self.assertEqual(bridge.invoked[0][0], FakeAudio.command_pause)
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    def test_lavalink_position_is_always_converted_from_milliseconds(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+
+        self.assertEqual(bridge._player_position_seconds(type("Player", (), {"position": 5_500})(), {}), 5)
+        self.assertEqual(bridge._player_position_seconds(type("Player", (), {"position": 125_900})(), {}), 125)
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     async def test_playlist_replaces_current_track_and_preserves_source_order(self):
         from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
 

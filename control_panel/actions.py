@@ -14,7 +14,7 @@ ACTION_TO_INTENT = {
     "start_radio": "start_radio",
     "stop_radio": "stop_radio",
     "skip": "skip",
-    "toggle_pause": "pause",
+    "toggle_pause": "toggle_pause",
     "pause": "pause",
     "resume": "resume",
     "stop": "stop",

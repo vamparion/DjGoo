@@ -718,11 +718,11 @@ class DjGooAudioBridge:
         self._write_playback_state(guild_id, state)
 
     def _player_position_seconds(self, player: Any, current: Dict[str, Any]) -> int:
-        position = int(getattr(player, "position", 0) or 0)
-        duration = int(current.get("duration_seconds") or 0)
-        if position > max(10_000, duration * 10):
-            position //= 1000
-        return max(0, position)
+        # Lavalink reports player position in milliseconds, including during
+        # the first seconds of a track. Guessing the unit from its magnitude
+        # made the web clock jump by hours near the beginning of playback.
+        position_ms = int(getattr(player, "position", 0) or 0)
+        return max(0, position_ms // 1000)
 
     def _state_track_snapshot(self, guild_id: int, track: Any) -> Dict[str, Any]:
         data: Dict[str, Any] = dict(self._track_data(track))
