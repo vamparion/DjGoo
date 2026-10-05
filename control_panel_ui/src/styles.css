@@ -757,13 +757,17 @@ p {
 .history-drop-target { min-height: 52px; display: flex; align-items: center; gap: 9px; padding: 10px; border: 1px dashed var(--line); border-radius: 7px; background: var(--panel3); color: var(--muted); text-align: left; }
 .history-drop-target:hover { border-color: var(--cyan); color: var(--text); background: var(--panel2); }
 .history-list { display: grid; }
-.history-row { min-height: 62px; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 9px; border-top: 1px solid var(--line); padding: 8px 0; animation: queue-arrive 220ms ease-out both; }
+.history-row { min-height: 62px; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto auto; align-items: center; gap: 9px; border-top: 1px solid var(--line); padding: 8px 0; animation: queue-arrive 220ms ease-out both; }
 .history-row:first-child { border-top: 0; }
 .history-grip { color: var(--cyan); cursor: grab; }
 .history-grip.disabled { color: var(--muted); cursor: default; opacity: .4; }
 .history-copy { min-width: 0; }
 .history-copy strong, .history-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-copy span { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.playlist-drop-row { grid-template-columns: 20px minmax(0, 1fr) auto; }
+.playlist-drop-row:hover { background: var(--panel3); outline: 1px dashed var(--cyan); outline-offset: -1px; }
+.new-playlist-drop { width: 100%; min-height: 48px; display: flex; align-items: center; justify-content: center; gap: 8px; border: 1px dashed var(--cyan); border-radius: 7px; background: var(--panel3); color: var(--cyan); }
+.new-playlist-drop:hover { background: var(--panel2); color: var(--text); }
 
 .modal-backdrop {
   position: fixed;

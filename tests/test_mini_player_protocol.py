@@ -61,6 +61,18 @@ def test_history_dedupes_repeated_track_start_events(tmp_path: Path) -> None:
     assert len(history.entries()) == 1
 
 
+def test_history_entry_can_be_removed_by_id(tmp_path: Path) -> None:
+    history = MiniPlayerHistory(tmp_path / "history.json")
+    history.add(
+        {"id": "bad-track", "title": "Wrong song", "uri": "https://example.test/wrong"},
+        mode="PLAYBACK",
+    )
+
+    assert history.remove("bad-track") is True
+    assert history.entries() == []
+    assert history.remove("bad-track") is False
+
+
 def test_playlist_creation_and_rich_duplicate_prevention(tmp_path: Path) -> None:
     playlists = DjGooPlaylists(tmp_path / "playlists.json")
     name, created = playlists.create("80s")

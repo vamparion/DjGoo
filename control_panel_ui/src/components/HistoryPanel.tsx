@@ -1,4 +1,4 @@
-import { Clock3, GripVertical, ListPlus, Play } from "lucide-react";
+import { Clock3, GripVertical, ListPlus, Play, Trash2 } from "lucide-react";
 import { playlistAction } from "../api";
 import type { PanelProps } from "./types";
 
@@ -13,6 +13,12 @@ export function HistoryPanel({ state, send, canManage, refresh }: Props) {
   async function add(trackId: string, playlist: string) {
     if (!trackId || !playlist) return;
     await playlistAction("history-add", { playlist, track_id: trackId });
+    await refresh();
+  }
+
+  async function remove(trackId: string) {
+    if (!trackId) return;
+    await playlistAction("history-delete", { track_id: trackId });
     await refresh();
   }
 
@@ -53,6 +59,7 @@ export function HistoryPanel({ state, send, canManage, refresh }: Props) {
             <button className="btn icon-action" onClick={() => void send("play_next", { query: track.uri || `${track.title} ${track.artist || ""}` })}>
               <Play size={15} /><span>Play next</span>
             </button>
+            {canManage && <button className="icon-button history-remove" title="Remove from history" aria-label={`Remove ${track.title} from history`} onClick={() => void remove(track.id || "")}><Trash2 size={15} /></button>}
           </article>
         ))}
         {state.history.length === 0 && <div className="empty-state"><strong>No recent songs yet</strong><p>Played tracks will appear here automatically.</p></div>}

@@ -31,7 +31,7 @@ export function App() {
   const [queueOpen, setQueueOpen] = useState(false);
   const refreshStarted = useRef(0);
   const refreshApplied = useRef(0);
-  const role = state?.session?.role || profile?.role || "guest";
+  const role = isRemoteSession() ? (state?.session?.role || profile?.role || "guest") : "host";
   const canManage = role === "host" || role === "moderator";
   const visibleViews = views.filter((view) => canManage || !["Players", "Settings", "Logs"].includes(view));
 
@@ -189,7 +189,7 @@ export function App() {
         </section>
         {!compact && <aside className="side">
           <HealthPanel state={state} send={send} />
-          <PlaylistPanel state={state} send={send} compact />
+          <PlaylistPanel state={state} send={send} compact canManage={canManage} refresh={refresh} />
           {canManage && <LogsPanel state={state} send={send} />}
         </aside>}
       </main>

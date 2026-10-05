@@ -190,9 +190,11 @@ def _install_native_play_routing(bot: Red, djgoo: DjGooWelcome) -> bool:
     @functools.wraps(original_callback)
     async def routed_play(audio_cog, ctx, *, query: str):
         normalized_query = str(query).strip().replace("\\", "/").lower()
+        local_file = Path(str(query).strip()).is_file()
         if (
             _NATIVE_PLAY_BRIDGE_DEPTH.get() > 0
             or normalized_query.startswith("localtracks/")
+            or local_file
         ):
             return await original_callback(audio_cog, ctx, query=query)
         bridge = djgoo._audio_bridge

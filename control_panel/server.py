@@ -165,7 +165,8 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                 name = str(payload.get("playlist") or "")
                 playlists = DjGooPlaylists(cls.root / "data" / "djgoo-playlists.json")
                 action = path.rsplit("/", 1)[-1]
-                if action == "metadata": result = playlists.update_metadata(name, payload.get("metadata") or {})
+                if action == "create": result = dict(zip(("name", "created"), playlists.create(name)))
+                elif action == "metadata": result = playlists.update_metadata(name, payload.get("metadata") or {})
                 elif action == "reorder": result = {"name": playlists.reorder_tracks(name, [str(value) for value in payload.get("track_ids", [])])}
                 elif action == "cleanup": result = playlists.cleanup(name)
                 elif action == "replace": result = {"name": playlists.replace_track(name, str(payload.get("track_id") or ""), payload.get("replacement") or {})}
@@ -188,6 +189,9 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                         raise ValueError("That recent song is no longer available")
                     added = playlists.add_track(name, track)
                     result = {"name": added.playlist_name, "added": int(added.added), "duplicates": int(not added.added)}
+                elif action == "history-delete":
+                    removed = MiniPlayerHistory(cls.root / "data" / "djgoo-mini-history.json").remove(str(payload.get("track_id") or ""))
+                    result = {"removed": removed}
                 else: return 404, error("Unknown playlist action", status=404)
                 return 200, ok({"result": result})
             if path == "/api/system/reset":

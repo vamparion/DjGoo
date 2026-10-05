@@ -1,17 +1,26 @@
 import { useEffect, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { ListPlus, Plus, Trash2 } from "lucide-react";
 import { playlistAction } from "../api";
 import type { PanelProps } from "./types";
 
-type Props = PanelProps & { compact?: boolean; expanded?: boolean; canManage?: boolean };
+type Props = PanelProps & { compact?: boolean; expanded?: boolean; canManage?: boolean; refresh?: () => Promise<unknown> };
 
-export function PlaylistPanel({ state, send, compact = false, expanded = false, canManage = false }: Props) {
+export function PlaylistPanel({ state, send, compact = false, expanded = false, canManage = false, refresh }: Props) {
   const [name, setName] = useState(state.playlists[0]?.name || "");
   const [drag, setDrag] = useState("");
   const [bulk, setBulk] = useState("");
   const playlist = state.playlists.find((item) => item.name === name) || state.playlists[0];
   useEffect(() => { if (!name && state.playlists[0]) setName(state.playlists[0].name); }, [name, state.playlists]);
   async function action(kind: string, payload: Record<string, unknown> = {}) { if (!playlist) return; await playlistAction(kind, { playlist: playlist.name, ...payload }); await send("queue"); }
+  async function addHistory(trackId: string, playlistName: string) { if (!trackId || !playlistName) return; await playlistAction("history-add", { playlist: playlistName, track_id: trackId }); await refresh?.(); }
+  async function createPlaylist(trackId = "") {
+    const requested = window.prompt("New playlist name", "");
+    if (!requested?.trim()) return;
+    await playlistAction("create", { playlist: requested.trim() });
+    if (trackId) await playlistAction("history-add", { playlist: requested.trim(), track_id: trackId });
+    setName(requested.trim());
+    await refresh?.();
+  }
   async function deletePlaylist() {
     if (!playlist || !window.confirm(`Delete "${playlist.name}" and all ${playlist.track_count} saved tracks? This cannot be undone.`)) return;
     const currentIndex = state.playlists.findIndex((item) => item.name === playlist.name);
@@ -20,7 +29,7 @@ export function PlaylistPanel({ state, send, compact = false, expanded = false, 
     setName(next?.name || "");
   }
   async function drop(beforeId: string) { if (!playlist || !drag || drag === beforeId) return; const ids = playlist.tracks.map((track) => track.id || "").filter(Boolean); const from = ids.indexOf(drag); const to = ids.indexOf(beforeId); ids.splice(to, 0, ids.splice(from, 1)[0]); setDrag(""); await action("reorder", { track_ids: ids }); }
-  if (compact) return <section className="panel"><div className="panel-title-row"><div><h2>Playlists</h2><p>Fast access to saved lists.</p></div></div><div className="list">{state.playlists.slice(0, 4).map((item) => <div className="row" key={item.name}><div><strong>{item.name}</strong><span>{item.track_count} tracks</span></div><button className="btn" onClick={() => void send("play_playlist", { playlist: item.name })}>Play</button></div>)}</div></section>;
+  if (compact) return <section className="panel"><div className="panel-title-row"><div><h2>Playlists</h2><p>Drop recent songs here.</p></div>{canManage && <button className="icon-button" title="Create playlist" aria-label="Create playlist" onClick={() => void createPlaylist()}><Plus size={18} /></button>}</div><div className="list playlist-drop-list">{state.playlists.slice(0, 8).map((item) => <div className="row playlist-drop-row" key={item.name} onDragOver={(event) => { if (canManage) event.preventDefault(); }} onDrop={(event) => void addHistory(event.dataTransfer.getData("text/djgoo-history"), item.name)}><ListPlus size={16} /><div><strong>{item.name}</strong><span>{item.track_count} tracks</span></div><button className="btn" onClick={() => void send("play_playlist", { playlist: item.name })}>Play</button></div>)}{canManage && <button className="new-playlist-drop" onClick={() => void createPlaylist()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => void createPlaylist(event.dataTransfer.getData("text/djgoo-history"))}><Plus size={18} /><span>New playlist</span></button>}</div></section>;
   return <section className={`panel ${expanded ? "wide-panel" : ""}`}>
     <div className="panel-title-row"><div><h2>Playlist Workshop</h2><p>Drag songs into order, clean duplicates, and keep playlist identity when replacing sources.</p></div>{playlist && <div className="inline-actions">{canManage && <button className="btn danger icon-action" title="Delete playlist" aria-label={`Delete ${playlist.name}`} onClick={() => void deletePlaylist()}><Trash2 size={16} /><span>Delete playlist</span></button>}<button className="btn" onClick={() => void action("cleanup")}>Clean Up</button><button className="btn primary" onClick={() => void send("play_playlist", { playlist: playlist.name })}>Play</button></div>}</div>
     <div className="editor-row"><select value={playlist?.name || ""} onChange={(event) => setName(event.target.value)}>{state.playlists.map((item) => <option key={item.name}>{item.name}</option>)}</select>{playlist && <><input defaultValue={playlist.folder} placeholder="Folder" onBlur={(event) => void action("metadata", { metadata: { folder: event.target.value } })} /><input defaultValue={(playlist.tags || []).join(", ")} placeholder="Tags" onBlur={(event) => void action("metadata", { metadata: { tags: event.target.value.split(",") } })} /></>}</div>

@@ -204,11 +204,17 @@ def test_local_and_paired_web_use_shared_history_and_theme() -> None:
     app = (root / "App.tsx").read_text(encoding="utf-8")
     remote = (root / "RemoteApp.tsx").read_text(encoding="utf-8")
     history = (root / "components" / "HistoryPanel.tsx").read_text(encoding="utf-8")
+    playlists = (root / "components" / "PlaylistPanel.tsx").read_text(encoding="utf-8")
 
     assert "return <App />" in remote
     assert '"History"' in app and "<HistoryPanel" in app
     assert 'playlistAction("history-add"' in history
+    assert 'playlistAction("history-delete"' in history
     assert 'getData("text/djgoo-history")' in history
+    assert 'playlistAction("create"' in playlists
+    assert "new-playlist-drop" in playlists
+    assert 'getData("text/djgoo-history")' in playlists
+    assert ': "host"' in app and "isRemoteSession()" in app
 
 
 def test_hosted_relay_accepts_web_state_and_web_invites_can_offer_relay() -> None:

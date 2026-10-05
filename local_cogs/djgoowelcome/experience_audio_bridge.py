@@ -227,7 +227,8 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         if intent == "remote_playlist_action":
             action = str(payload.get("action") or "")
             name = str(payload.get("playlist") or "")
-            if action == "metadata": result = self.playlists.update_metadata(name, payload.get("metadata") or {})
+            if action == "create": result = dict(zip(("name", "created"), self.playlists.create(name)))
+            elif action == "metadata": result = self.playlists.update_metadata(name, payload.get("metadata") or {})
             elif action == "reorder": result = {"name": self.playlists.reorder_tracks(name, [str(value) for value in payload.get("track_ids", [])])}
             elif action == "cleanup": result = self.playlists.cleanup(name)
             elif action == "replace": result = {"name": self.playlists.replace_track(name, str(payload.get("track_id") or ""), payload.get("replacement") or {})}
@@ -248,6 +249,8 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                     return {"status": "failed", "message": "That recent song is no longer available."}
                 added = self.playlists.add_track(name, track)
                 result = {"name": added.playlist_name, "added": int(added.added), "duplicates": int(not added.added)}
+            elif action == "history-delete":
+                result = {"removed": self.mini_history.remove(str(payload.get("track_id") or ""))}
             else: return {"status": "failed", "message": "Unknown playlist action."}
             return {"status": "completed", "message": "Playlist updated.", "result": result}
         return {"status": "failed", "message": "Unknown DjGoo management action."}

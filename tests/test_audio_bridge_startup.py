@@ -1021,6 +1021,13 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(calls, [("original", "localtracks/sandstorm.webm")])
 
+        calls.clear()
+        with tempfile.NamedTemporaryFile(suffix=".webm") as cached_track:
+            await bot.command.callback(
+                object(), FakeContext(), query=cached_track.name
+            )
+            self.assertEqual(calls, [("original", cached_track.name)])
+
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     async def test_discord_command_context_supplies_configured_voice_channel(self):
         from types import SimpleNamespace

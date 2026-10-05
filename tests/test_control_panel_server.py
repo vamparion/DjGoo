@@ -242,6 +242,23 @@ class ControlPanelServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body["result"]["added"], 1)
 
+    def test_host_can_create_a_playlist_for_history_drop(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            handler_cls = create_handler_class(root)
+            _, host = handler_cls.route_post(
+                "/api/profile", {"username": "Host", "device_id": "desktop"}, is_local=True
+            )
+
+            status, body = handler_cls.route_post(
+                "/api/playlist/create",
+                {"token": host["profile"]["token"], "playlist": "New Mix"},
+                is_local=True,
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["result"], {"name": "new mix", "created": True})
+
 
 if __name__ == "__main__":
     unittest.main()
