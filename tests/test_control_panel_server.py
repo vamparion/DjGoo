@@ -50,6 +50,45 @@ class ControlPanelServerTests(unittest.TestCase):
         self.assertTrue(body["ok"])
         self.assertEqual(body["item"]["intent"], "skip")
 
+    def test_local_skip_is_always_an_immediate_host_control(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            handler_cls = create_handler_class(root)
+            _, member = handler_cls.route_post(
+                "/api/profile",
+                {"username": "Old Browser", "device_id": "old"},
+                is_local=False,
+            )
+
+            status, body = handler_cls.route_post(
+                "/api/command",
+                {"action": "skip", "token": member["profile"]["token"]},
+                is_local=True,
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["item"]["actor_role"], "host")
+        self.assertEqual(body["item"]["intent"], "skip")
+
+    def test_remote_member_skip_remains_a_member_vote(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            handler_cls = create_handler_class(root)
+            _, member = handler_cls.route_post(
+                "/api/profile",
+                {"username": "Remote Player", "device_id": "phone"},
+                is_local=False,
+            )
+
+            status, body = handler_cls.route_post(
+                "/api/command",
+                {"action": "skip", "token": member["profile"]["token"]},
+                is_local=False,
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["item"]["actor_role"], "member")
+
     def test_music_search_returns_ranked_choices(self):
         expected = [
             {

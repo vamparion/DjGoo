@@ -106,7 +106,7 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                 )
                 return 200, ok({"profile": profile})
             profile = gaming.profile(str(payload.get("token") or ""))
-            actor_role = str((profile or {}).get("role") or ("host" if is_local else "guest"))
+            actor_role = "host" if is_local else str((profile or {}).get("role") or "guest")
             if path == "/api/settings":
                 return 200, ok({"settings": gaming.update_settings(0, payload.get("settings") or {}, actor_role=actor_role)})
             if path == "/api/audio-input":
