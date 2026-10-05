@@ -9,6 +9,34 @@ internal sealed class HostLogger
     public void Write(string message)
     {
         lock (_gate)
-            File.AppendAllText(_path, $"{DateTimeOffset.Now:O} {message}{Environment.NewLine}");
+        {
+            var line = $"{DateTimeOffset.Now:O} {message}{Environment.NewLine}";
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                try
+                {
+                    using var stream = new FileStream(
+                        _path,
+                        FileMode.Append,
+                        FileAccess.Write,
+                        FileShare.ReadWrite | FileShare.Delete);
+                    using var writer = new StreamWriter(stream);
+                    writer.Write(line);
+                    return;
+                }
+                catch (IOException) when (attempt < 2)
+                {
+                    Thread.Sleep(20 * (attempt + 1));
+                }
+                catch (IOException)
+                {
+                    return;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    return;
+                }
+            }
+        }
     }
 }
