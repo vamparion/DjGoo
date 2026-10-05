@@ -22,6 +22,7 @@ from voice.sqlite_stations import SqliteDjGooStations
 from voice.mini_player_protocol import MiniPlayerHistory
 from voice.pairing_store import PairingStore
 from voice.tls_identity import ensure_tls_identity
+from voice.media_policy import candidates_from_ytmusic, ranked_search_candidates
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -66,6 +67,11 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                 return 400, error("Missing search query")
             resolved = NuclearResolver().resolve_track_query(query)
             return 200, ok({"query": query, "result": resolved})
+        if parsed.path == "/api/music/search":
+            query = _query_param(parsed.query, "q").strip()
+            if not query:
+                return 400, error("Missing search query")
+            return 200, ok({"query": query, "results": search_music_candidates(query)})
         if parsed.path == "/api/backup":
             snapshot = build_state_snapshot(cls.root)
             return 200, ok({"backup": {key: snapshot.get(key) for key in ("playlists", "stations", "gaming", "timeline")}})
@@ -251,6 +257,28 @@ def _query_param(query: str, name: str) -> str:
     if not values:
         return ""
     return unquote(values[0])
+
+
+def search_music_candidates(query: str, *, limit: int = 12) -> List[Dict[str, Any]]:
+    from ytmusicapi import YTMusic
+
+    items = YTMusic().search(str(query).strip(), filter="songs", limit=max(12, limit * 2))
+    ranked = ranked_search_candidates(candidates_from_ytmusic(items or []), None)
+    results = []
+    for _score, candidate in ranked[: max(1, min(20, limit))]:
+        video_id = candidate.uri.split("v=", 1)[-1].split("&", 1)[0]
+        results.append(
+            {
+                "id": video_id or candidate.uri,
+                "title": candidate.title,
+                "artist": ", ".join(candidate.artists),
+                "uri": candidate.uri,
+                "duration_seconds": candidate.duration_seconds,
+                "artwork_url": f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg" if video_id else "",
+                "source": "YouTube Music",
+            }
+        )
+    return results
 
 
 def main() -> None:

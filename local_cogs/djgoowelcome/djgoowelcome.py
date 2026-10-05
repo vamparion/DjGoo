@@ -83,6 +83,25 @@ FAST_CONTROL_INTENTS = {
     "remove_queue",
     "shuffle_queue",
 }
+QUIET_WEB_INTENTS = {
+    "queue",
+    "pause",
+    "resume",
+    "toggle_pause",
+    "stop",
+    "stop_radio",
+    "volume_up",
+    "volume_down",
+    "station_like_current",
+    "station_more_like_current",
+    "station_less_like_current",
+    "station_ban_current",
+    "save_current_to_playlist",
+    "save_last_to_playlist",
+    "gaming_undo",
+    "mini_queue_remove",
+    "mini_queue_reorder",
+}
 DESTRUCTIVE_REMOTE_INTENTS = {
     "clear_queue",
     "remove_queue",
@@ -331,6 +350,9 @@ class DjGooWelcome(commands.Cog):
         }
         return state
 
+    async def _remote_search(self, _identity: DeviceIdentity, query: str, limit: int) -> list[dict[str, Any]]:
+        return await self._audio_bridge.search_candidates(query, limit=limit)
+
     def _cooldown_key(self, member, channel) -> Tuple[int, int]:
         return (int(member.id), int(channel.id))
 
@@ -440,7 +462,10 @@ class DjGooWelcome(commands.Cog):
         )
         source = str(item.get("source") or "")
         command_id = str(item.get("command_id") or "")
-        if source != "mini_player":
+        quiet_web_control = source in {"panel", "web_remote"} and item.get("intent") in QUIET_WEB_INTENTS
+        if quiet_web_control:
+            log_event("discord.web_control.notification_suppressed", intent=item.get("intent"), source=source)
+        elif source != "mini_player":
             if item.get("intent") not in FAST_CONTROL_INTENTS:
                 await self._send_webhook_payload(build_voice_command_payload(item))
             else:

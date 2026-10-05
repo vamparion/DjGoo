@@ -88,6 +88,36 @@ async def test_web_capabilities_and_replay_are_enforced_host_side(tmp_path: Path
     assert (await processor.remote_state(token))["queue"] == []
 
 
+@pytest.mark.asyncio
+async def test_web_music_search_is_authenticated_and_returns_choices(tmp_path: Path) -> None:
+    pairing = store(tmp_path)
+    identity, token = web_device(pairing)
+    searches = []
+
+    async def authorize(_identity, intent):
+        assert intent == "state.read"
+        return AuthorizationResult(True, actor_role="host")
+
+    async def search(search_identity, query, limit):
+        searches.append((search_identity.device_id, query, limit))
+        return [{"title": "Ich Will", "artist": "Rammstein", "uri": "https://example.invalid/track"}]
+
+    processor = AuthenticatedCommandProcessor(
+        pairing,
+        tmp_path / "queue.jsonl",
+        authorize,
+        search_provider=search,
+    )
+
+    result = await processor.search(token, "  ich will  ", limit=8)
+
+    assert result["query"] == "ich will"
+    assert result["results"][0]["title"] == "Ich Will"
+    assert searches == [(identity.device_id, "ich will", 8)]
+    with pytest.raises(CommandRejected, match="authentication failed"):
+        await processor.search("invalid-token", "ich will")
+
+
 def test_remote_state_matches_control_surface_but_excludes_private_data(tmp_path: Path) -> None:
     (tmp_path / "data").mkdir(); (tmp_path / "logs").mkdir()
     (tmp_path / "data" / "djgoo-now-playing.json").write_text(json.dumps({"current": {"title": "Song", "artist": "Artist"}, "queue": [{"id": "1", "title": "Next", "uri": "https://secret.invalid"}]}))
@@ -135,6 +165,22 @@ def test_remote_frontend_erases_fragment_and_reuses_shared_app() -> None:
     assert "HostRejection" in transport and "command_id: crypto.randomUUID()" in transport
     assert "const command =" in transport and "...command, device_token" in transport
     assert "device_token" not in worker and "#pair=" not in worker
+
+
+def test_find_returns_choices_and_queue_uses_a_modal() -> None:
+    root = Path(__file__).resolve().parents[1] / "control_panel_ui" / "src"
+    app = (root / "App.tsx").read_text(encoding="utf-8")
+    search = (root / "components" / "SearchPanel.tsx").read_text(encoding="utf-8")
+    queue_modal = (root / "components" / "QueueModal.tsx").read_text(encoding="utf-8")
+    styles = (root / "styles.css").read_text(encoding="utf-8")
+
+    assert 'if (action === "queue")' in app and "setQueueOpen(true)" in app
+    assert "<QueueModal" in app and "<QueuePanel" not in app
+    assert "searchMusic(q)" in search
+    assert 'event.key === "Enter"' in search and "void search()" in search
+    assert 'send("play", { query: track.uri })' in search
+    assert 'send("play_next", { query: track.uri })' in search
+    assert "position: fixed" in styles and "queue-modal" in queue_modal
 
 
 def test_hosted_relay_accepts_web_state_and_web_invites_can_offer_relay() -> None:

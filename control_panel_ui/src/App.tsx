@@ -6,7 +6,7 @@ import { LivePanel } from "./components/LivePanel";
 import { LogsPanel } from "./components/LogsPanel";
 import { PersistentFooter } from "./components/PersistentFooter";
 import { PlaylistPanel } from "./components/PlaylistPanel";
-import { QueuePanel } from "./components/QueuePanel";
+import { QueueModal } from "./components/QueueModal";
 import { SearchPanel } from "./components/SearchPanel";
 import { SmartActions } from "./components/SmartActions";
 import { StationPanel } from "./components/StationPanel";
@@ -27,6 +27,7 @@ export function App() {
   const [status, setStatus] = useState("Ready");
   const [activeView, setActiveView] = useState<View>("Live");
   const [profile, setProfile] = useState<DjGooProfile | null>(() => savedProfile());
+  const [queueOpen, setQueueOpen] = useState(false);
   const refreshStarted = useRef(0);
   const refreshApplied = useRef(0);
   const role = state?.session?.role || profile?.role || "guest";
@@ -82,6 +83,11 @@ export function App() {
   }, []);
 
   async function send(action: string, payload: Record<string, unknown> = {}) {
+    if (action === "queue") {
+      setQueueOpen(true);
+      await refresh();
+      return;
+    }
     setStatus(`Sending ${action}`);
     if (action === "toggle_pause") {
       setState(current => current ? optimisticallyTogglePlayback(current) : current);
@@ -148,10 +154,7 @@ export function App() {
       <>
         <LivePanel state={state} send={send} />
         <SmartActions state={state} send={send} />
-        <div className="split">
-          <QueuePanel state={state} send={send} />
-          <StationPanel state={state} send={send} />
-        </div>
+        <StationPanel state={state} send={send} />
       </>
     );
   }
@@ -178,7 +181,7 @@ export function App() {
           ))}
         </nav>}
         <section className="stack">
-          {compact ? <><LivePanel state={state} send={send} /><QueuePanel state={state} send={send} /></> : renderView()}
+          {compact ? <LivePanel state={state} send={send} /> : renderView()}
         </section>
         {!compact && <aside className="side">
           <HealthPanel state={state} send={send} />
@@ -187,6 +190,7 @@ export function App() {
         </aside>}
       </main>
       <PersistentFooter state={state} send={send} status={status} />
+      {queueOpen && <QueueModal state={state} send={send} close={() => setQueueOpen(false)} />}
     </div>
   );
 }

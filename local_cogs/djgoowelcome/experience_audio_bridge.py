@@ -45,6 +45,14 @@ PLAYBACK_INTENTS = {
     "mini_queue_play_now",
     "mini_stop_radio",
 }
+QUIET_WEB_INTENTS = {
+    "queue", "pause", "resume", "toggle_pause", "stop", "stop_radio",
+    "volume_up", "volume_down", "station_like_current",
+    "station_more_like_current", "station_less_like_current",
+    "station_ban_current", "save_current_to_playlist",
+    "save_last_to_playlist", "gaming_undo", "mini_queue_remove",
+    "mini_queue_reorder",
+}
 
 
 class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
@@ -82,6 +90,10 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
     async def _notice(self, description: str) -> None:
         if self._mini_command_depth > 0:
             log_event("mini_player.notice.suppressed", description=description[:500])
+            return
+        command = _EXPERIENCE_COMMAND.get() or {}
+        if str(command.get("source") or "") in {"panel", "web_remote"} and str(command.get("intent") or "") in QUIET_WEB_INTENTS:
+            log_event("web_control.notice.suppressed", intent=command.get("intent"), description=description[:500])
             return
         await super()._notice(description)
 

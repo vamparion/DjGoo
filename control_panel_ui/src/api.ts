@@ -1,5 +1,5 @@
 import type { ControlState } from "./types";
-import { isRemoteDirectConnected, remoteCommand, remoteState, requestDirectReconnect, subscribeDirectConnection, subscribeRemoteState, type WebCredential } from "./remoteTransport";
+import { isRemoteDirectConnected, remoteCommand, remoteMusicSearch, remoteState, requestDirectReconnect, subscribeDirectConnection, subscribeRemoteState, type WebCredential } from "./remoteTransport";
 
 const API_BASE = import.meta.env.VITE_DJGOO_API_BASE || "";
 const PROFILE_KEY = "djgoo-profile";
@@ -180,6 +180,18 @@ export async function downloadBackup() {
 export async function searchNuclear(query: string) {
   if (remoteCredential) return { ok: true as const, query, result: "Use Play Next to have DjGoo resolve the cleanest match." };
   return request<{ ok: true; query: string; result: string | null }>(`/api/search?q=${encodeURIComponent(query)}`);
+}
+
+export type MusicSearchResult = {
+  id: string; title: string; artist: string; uri: string; duration_seconds: number;
+  artwork_url?: string; source?: string;
+};
+
+export async function searchMusic(query: string) {
+  if (remoteCredential) {
+    return await remoteMusicSearch(remoteCredential, query, 12) as { query: string; results: MusicSearchResult[] };
+  }
+  return request<{ ok: true; query: string; results: MusicSearchResult[] }>(`/api/music/search?q=${encodeURIComponent(query)}`);
 }
 
 export async function resetDjGoo() {

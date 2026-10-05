@@ -2,6 +2,7 @@ import gc
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from control_panel.server import create_handler_class
 
@@ -48,6 +49,31 @@ class ControlPanelServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])
         self.assertEqual(body["item"]["intent"], "skip")
+
+    def test_music_search_returns_ranked_choices(self):
+        expected = [
+            {
+                "title": "Ich Will",
+                "artist": "Rammstein",
+                "uri": "https://example.invalid/track",
+            }
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            handler_cls = create_handler_class(Path(temp_dir))
+            with patch("control_panel.server.search_music_candidates", return_value=expected) as search:
+                status, body = handler_cls.route_get("/api/music/search?q=ich%20will")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["results"], expected)
+        search.assert_called_once_with("ich will")
+
+    def test_music_search_requires_a_query(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            handler_cls = create_handler_class(Path(temp_dir))
+            status, body = handler_cls.route_get("/api/music/search")
+
+        self.assertEqual(status, 400)
+        self.assertFalse(body["ok"])
 
     def test_local_first_profile_is_host_and_can_update_settings(self):
         with tempfile.TemporaryDirectory() as temp_dir:
