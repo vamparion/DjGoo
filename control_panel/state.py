@@ -168,7 +168,7 @@ def build_remote_state_snapshot(project_root: Path, *, privileged: bool = False)
         "players": list(full.get("players") or []) if privileged else [],
         "logs": {},
         "timeline": list(full.get("timeline") or [])[:4] if privileged else [],
-        "history": [],
+        "history": list(full.get("history") or [])[:50],
         "capabilities": {
         "system_management": False,
         "diagnostics": privileged,

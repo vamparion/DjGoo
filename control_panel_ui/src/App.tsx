@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createProfile, getState, isDirectTransportHealthy, isRemoteSession, reconnectRemote, resetDjGoo, savedProfile, sendCommand, stateRefreshIntervalMs, subscribeConnection, subscribeState } from "./api";
 import { CommandBar } from "./components/CommandBar";
 import { HealthPanel } from "./components/HealthPanel";
+import { HistoryPanel } from "./components/HistoryPanel";
 import { LivePanel } from "./components/LivePanel";
 import { LogsPanel } from "./components/LogsPanel";
 import { PersistentFooter } from "./components/PersistentFooter";
@@ -17,7 +18,7 @@ import { Onboarding } from "./components/Onboarding";
 import { GamingSettings } from "./components/GamingSettings";
 import { optimisticallyTogglePlayback } from "./playbackClock";
 
-const views = ["Live", "Find", "Radio", "Lists", "Players", "Settings", "Logs"] as const;
+const views = ["Live", "Find", "History", "Radio", "Lists", "Players", "Settings", "Logs"] as const;
 type View = (typeof views)[number];
 
 export function App() {
@@ -129,6 +130,9 @@ export function App() {
   function renderView() {
     if (activeView === "Find") {
       return <SearchPanel state={state} send={send} />;
+    }
+    if (activeView === "History") {
+      return <HistoryPanel state={state} send={send} canManage={canManage} refresh={refresh} />;
     }
     if (activeView === "Radio") {
       return (

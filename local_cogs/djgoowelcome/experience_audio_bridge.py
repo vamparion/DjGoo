@@ -241,6 +241,13 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                 cutoff = time.time() - max(60, int(payload.get("seconds") or 3600))
                 changes = [self.playlists.add_track(name, value) for value in reversed(self.mini_history.entries()) if float(value.get("played_at") or 0) >= cutoff]
                 result = {"name": name, "added": sum(int(value.added) for value in changes), "duplicates": sum(int(not value.added) for value in changes)}
+            elif action == "history-add":
+                track_id = str(payload.get("track_id") or "")
+                track = next((value for value in self.mini_history.entries() if str(value.get("id") or "") == track_id), None)
+                if track is None:
+                    return {"status": "failed", "message": "That recent song is no longer available."}
+                added = self.playlists.add_track(name, track)
+                result = {"name": added.playlist_name, "added": int(added.added), "duplicates": int(not added.added)}
             else: return {"status": "failed", "message": "Unknown playlist action."}
             return {"status": "completed", "message": "Playlist updated.", "result": result}
         return {"status": "failed", "message": "Unknown DjGoo management action."}

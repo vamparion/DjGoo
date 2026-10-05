@@ -131,6 +131,22 @@ def test_remote_state_matches_control_surface_but_excludes_private_data(tmp_path
     assert state["capabilities"]["system_management"] is False
 
 
+def test_remote_state_includes_safe_recent_history(tmp_path: Path) -> None:
+    from voice.mini_player_protocol import MiniPlayerHistory
+
+    history = MiniPlayerHistory(tmp_path / "data" / "djgoo-mini-history.json")
+    history.add(
+        {"id": "recent-1", "title": "Recent Song", "artist": "Artist", "uri": "C:/private/song.webm"},
+        mode="PLAYBACK",
+    )
+
+    state = build_remote_state_snapshot(tmp_path)
+
+    assert state["history"][0]["title"] == "Recent Song"
+    assert state["history"][0]["id"] == "recent-1"
+    assert "uri" not in state["history"][0]
+
+
 def test_remote_frontend_erases_fragment_and_reuses_shared_app() -> None:
     root = Path(__file__).resolve().parents[1] / "control_panel_ui"
     main = (root / "src" / "main.tsx").read_text(encoding="utf-8")
@@ -181,6 +197,18 @@ def test_find_returns_choices_and_queue_uses_a_modal() -> None:
     assert 'send("play", { query: track.uri })' in search
     assert 'send("play_next", { query: track.uri })' in search
     assert "position: fixed" in styles and "queue-modal" in queue_modal
+
+
+def test_local_and_paired_web_use_shared_history_and_theme() -> None:
+    root = Path(__file__).resolve().parents[1] / "control_panel_ui" / "src"
+    app = (root / "App.tsx").read_text(encoding="utf-8")
+    remote = (root / "RemoteApp.tsx").read_text(encoding="utf-8")
+    history = (root / "components" / "HistoryPanel.tsx").read_text(encoding="utf-8")
+
+    assert "return <App />" in remote
+    assert '"History"' in app and "<HistoryPanel" in app
+    assert 'playlistAction("history-add"' in history
+    assert 'getData("text/djgoo-history")' in history
 
 
 def test_hosted_relay_accepts_web_state_and_web_invites_can_offer_relay() -> None:

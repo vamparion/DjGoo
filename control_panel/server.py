@@ -180,6 +180,14 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                     history = MiniPlayerHistory(cls.root / "data" / "djgoo-mini-history.json").entries()
                     results = [playlists.add_track(name, item) for item in reversed(history) if float(item.get("played_at") or 0) >= cutoff]
                     result = {"name": name, "added": sum(int(item.added) for item in results), "duplicates": sum(int(not item.added) for item in results)}
+                elif action == "history-add":
+                    track_id = str(payload.get("track_id") or "")
+                    history = MiniPlayerHistory(cls.root / "data" / "djgoo-mini-history.json").entries()
+                    track = next((item for item in history if str(item.get("id") or "") == track_id), None)
+                    if track is None:
+                        raise ValueError("That recent song is no longer available")
+                    added = playlists.add_track(name, track)
+                    result = {"name": added.playlist_name, "added": int(added.added), "duplicates": int(not added.added)}
                 else: return 404, error("Unknown playlist action", status=404)
                 return 200, ok({"result": result})
             if path == "/api/system/reset":

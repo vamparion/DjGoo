@@ -215,6 +215,33 @@ class ControlPanelServerTests(unittest.TestCase):
         self.assertEqual(playlist_status, 200)
         self.assertEqual(station_status, 200)
 
+    def test_host_can_add_one_recent_song_to_a_playlist(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            handler_cls = create_handler_class(root)
+            _, host = handler_cls.route_post(
+                "/api/profile", {"username": "Host", "device_id": "desktop"}, is_local=True
+            )
+            from voice.djgoo_playlists import DjGooPlaylists
+            from voice.mini_player_protocol import MiniPlayerHistory
+
+            playlists = DjGooPlaylists(root / "data" / "djgoo-playlists.json")
+            playlists.create("Game Night")
+            history = MiniPlayerHistory(root / "data" / "djgoo-mini-history.json")
+            history.add(
+                {"id": "recent-1", "title": "Recent Song", "artist": "Artist", "uri": "https://example.invalid/song"},
+                mode="PLAYBACK",
+            )
+
+            status, body = handler_cls.route_post(
+                "/api/playlist/history-add",
+                {"token": host["profile"]["token"], "playlist": "Game Night", "track_id": "recent-1"},
+                is_local=True,
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["result"]["added"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
