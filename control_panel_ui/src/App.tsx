@@ -9,7 +9,6 @@ import { PersistentFooter } from "./components/PersistentFooter";
 import { PlaylistPanel } from "./components/PlaylistPanel";
 import { QueueModal } from "./components/QueueModal";
 import { SearchPanel } from "./components/SearchPanel";
-import { SmartActions } from "./components/SmartActions";
 import { StationPanel } from "./components/StationPanel";
 import { GuestPanel } from "./components/GuestPanel";
 import type { ControlState } from "./types";
@@ -138,7 +137,6 @@ export function App() {
       return (
         <>
           <StationPanel state={state} send={send} expanded canManage={canManage} />
-          <SmartActions state={state} send={send} mode="radio" />
         </>
       );
     }
@@ -156,9 +154,7 @@ export function App() {
     }
     return (
       <>
-        <LivePanel state={state} send={send} />
-        <SmartActions state={state} send={send} />
-        <StationPanel state={state} send={send} />
+        <LivePanel state={state} send={send} openFind={() => setActiveView("Find")} />
       </>
     );
   }
@@ -185,7 +181,7 @@ export function App() {
           ))}
         </nav>}
         <section className="stack">
-          {compact ? <LivePanel state={state} send={send} /> : renderView()}
+          {compact ? <LivePanel state={state} send={send} openFind={() => setActiveView("Find")} /> : renderView()}
         </section>
         {!compact && <aside className="side">
           <HealthPanel state={state} send={send} />

@@ -217,6 +217,20 @@ def test_local_and_paired_web_use_shared_history_and_theme() -> None:
     assert ': "host"' in app and "isRemoteSession()" in app
 
 
+def test_live_and_playlist_surfaces_keep_controls_contextual() -> None:
+    root = Path(__file__).resolve().parents[1] / "control_panel_ui" / "src"
+    app = (root / "App.tsx").read_text(encoding="utf-8")
+    live = (root / "components" / "LivePanel.tsx").read_text(encoding="utf-8")
+    playlists = (root / "components" / "PlaylistPanel.tsx").read_text(encoding="utf-8")
+
+    assert 'openFind={() => setActiveView("Find")}' in app
+    assert "!hasTrack ?" in live and "radioActive &&" in live
+    assert 'send("reset")' not in live
+    assert "playlist-track-row" in playlists
+    assert "bulk.trim() &&" in playlists
+    assert "Playlist details" in playlists and "Add from history" in playlists
+
+
 def test_hosted_relay_accepts_web_state_and_web_invites_can_offer_relay() -> None:
     root = Path(__file__).resolve().parents[1]
     relay_host = (root / "voice" / "relay_host.py").read_text(encoding="utf-8")

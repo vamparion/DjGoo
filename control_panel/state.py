@@ -70,7 +70,10 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
     current = now_playing.get("current") if isinstance(now_playing.get("current"), dict) else {}
     live_queue = now_playing.get("queue") if isinstance(now_playing.get("queue"), list) else []
     gaming = GamingSessionStore(project_root / "data" / "djgoo-gaming-session.json")
-    history = MiniPlayerHistory(project_root / "data" / "djgoo-mini-history.json").entries()
+    history = _hydrate_history_metadata(
+        project_root,
+        MiniPlayerHistory(project_root / "data" / "djgoo-mini-history.json").entries(),
+    )
     players = _paired_players(project_root, active_guild_id)
     return {
         "playback": {
@@ -133,6 +136,36 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
         "timeline": _diagnostic_timeline(project_root),
         "history": history,
     }
+
+
+def _hydrate_history_metadata(
+    project_root: Path,
+    entries: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    metadata = read_json_file(
+        project_root / "cache" / "localtracks" / "metadata.json",
+        {},
+    )
+    if not metadata:
+        return entries
+    hydrated: List[Dict[str, Any]] = []
+    for entry in entries:
+        item = dict(entry)
+        uri = str(item.get("uri") or "").replace("\\", "/")
+        cached = metadata.get(uri.rsplit("/", 1)[-1])
+        if isinstance(cached, dict):
+            artist = str(item.get("artist") or "").strip()
+            if not artist or artist.casefold() == "unknown artist":
+                item["artist"] = str(cached.get("artist") or artist)
+            title = str(item.get("title") or "").strip()
+            if not title or title.casefold() == "unknown track":
+                item["title"] = str(cached.get("title") or title)
+            if not item.get("artwork_url") and cached.get("artwork_url"):
+                item["artwork_url"] = cached["artwork_url"]
+            if not item.get("duration_seconds") and cached.get("duration_seconds"):
+                item["duration_seconds"] = cached["duration_seconds"]
+        hydrated.append(item)
+    return hydrated
 
 
 def build_remote_state_snapshot(project_root: Path, *, privileged: bool = False) -> Dict[str, Any]:

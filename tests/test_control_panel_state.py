@@ -195,6 +195,25 @@ class ControlPanelStateTests(unittest.TestCase):
 
             self.assertEqual(read_recent_log_lines(path, limit=2), ["b", "c"])
 
+    def test_history_uses_cached_local_track_artist_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "data").mkdir()
+            cache = root / "cache" / "localtracks"
+            cache.mkdir(parents=True)
+            (root / "data" / "djgoo-mini-history.json").write_text(
+                json.dumps({"entries": [{"id": "one", "title": "Song", "artist": "Unknown artist", "uri": str(cache / "one.webm")}]}),
+                encoding="utf-8",
+            )
+            (cache / "metadata.json").write_text(
+                json.dumps({"one.webm": {"title": "Song", "artist": "Correct Artist"}}),
+                encoding="utf-8",
+            )
+
+            snapshot = build_state_snapshot(root)
+
+        self.assertEqual(snapshot["history"][0]["artist"], "Correct Artist")
+
 
 if __name__ == "__main__":
     unittest.main()

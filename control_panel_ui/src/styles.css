@@ -244,7 +244,18 @@ textarea { width: 100%; min-height: 70px; resize: vertical; border: 1px solid va
 .timeline-item { display: grid; grid-template-columns: 84px 1fr; gap: 10px; border-left: 2px solid var(--blue); padding: 7px 10px; background: var(--panel3); }
 .timeline-item > span { color: var(--muted); font-size: 11px; }
 .timeline-item p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
-.import-review { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, .7fr); gap: 10px; margin: 12px 0; }
+.playlist-selector { display: flex; align-items: end; gap: 12px; margin: 12px 0; }
+.playlist-selector label { display: grid; gap: 5px; min-width: min(360px, 100%); color: var(--muted); font-size: 12px; font-weight: 700; }
+.playlist-selector span, .track-list-heading span { color: var(--muted); font-size: 12px; font-weight: 600; }
+.playlist-tools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 12px 0 18px; }
+.playlist-tools details { align-content: start; }
+.playlist-tools summary { cursor: pointer; font-size: 13px; font-weight: 800; }
+.playlist-tools details textarea { margin-top: 10px; }
+.playlist-details { grid-column: 1 / -1; }
+.import-summary { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 8px; }
+.track-list-heading { display: flex; align-items: baseline; gap: 8px; margin: 16px 0 8px; font-size: 14px; }
+.transport-actions, .track-actions, .live-empty-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.track-actions { padding-top: 10px; border-top: 1px solid var(--line); }
 
 .settings-grid label {
   min-height: 48px;
@@ -680,6 +691,8 @@ p {
   padding: 9px;
 }
 
+.playlist-track-row { grid-template-columns: 24px minmax(0, 1fr) auto; }
+
 .row strong {
   display: block;
   font-size: 13px;
@@ -1109,6 +1122,11 @@ p {
   .search-command, .search-result { grid-template-columns: 1fr; }
   .history-row { grid-template-columns: 20px minmax(0, 1fr); }
   .history-row > button { grid-column: 2; justify-self: start; }
+  .playlist-tools { grid-template-columns: 1fr; }
+  .playlist-details { grid-column: auto; }
+  .playlist-selector { align-items: stretch; flex-direction: column; }
+  .playlist-track-row { grid-template-columns: 20px minmax(0, 1fr); }
+  .playlist-track-row > .inline-actions { grid-column: 2; justify-self: start; }
   .search-result img, .search-art-placeholder { width: 64px; height: 64px; }
   .search-result .inline-actions { display: grid; grid-template-columns: repeat(3, 1fr); }
 
