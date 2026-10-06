@@ -2,6 +2,7 @@ import { GripVertical, ListEnd, Trash2 } from "lucide-react";
 import { useState } from "react";
 import type { ControlState, Track } from "../types";
 import type { PanelProps } from "./types";
+import { clearDraggedTrack, draggedTrackFallback } from "../trackDrag";
 
 type Props = PanelProps & { canManage: boolean; refresh: () => Promise<ControlState | null | undefined> };
 
@@ -10,8 +11,12 @@ function droppedTrack(event: React.DragEvent, state: ControlState): Track | null
   if (raw) {
     try { return JSON.parse(raw) as Track; } catch { return null; }
   }
+  const plain = event.dataTransfer.getData("text/plain");
+  if (plain) {
+    try { return JSON.parse(plain) as Track; } catch { /* hosted browsers may provide unrelated text */ }
+  }
   const historyId = event.dataTransfer.getData("text/djgoo-history");
-  return state.history.find((track) => track.id === historyId) || null;
+  return state.history.find((track) => track.id === historyId) || draggedTrackFallback();
 }
 
 export function QueuePanel({ state, send, canManage, refresh }: Props) {
@@ -34,6 +39,7 @@ export function QueuePanel({ state, send, canManage, refresh }: Props) {
     setDropIndex(null);
     const target = droppedTrack(event, state);
     if (!target) return;
+    clearDraggedTrack();
     if (dragId) {
       if (!canManage) return;
       const before = state.queue[index]?.id || "";

@@ -1,6 +1,7 @@
 import { useState, type DragEvent } from "react";
 import { ListPlus, Play, Radio, Search } from "lucide-react";
 import { playlistAction, searchLibrary, searchMusic, type MusicSearchResult } from "../api";
+import { clearDraggedTrack, rememberDraggedTrack } from "../trackDrag";
 import type { PanelProps } from "./types";
 import { normalizeMediaInput } from "../mediaInput";
 
@@ -41,7 +42,9 @@ export function SearchPanel({ state, send }: PanelProps) {
   }
 
   function dragTrack(event: DragEvent, track: MusicSearchResult) {
+    rememberDraggedTrack(track);
     event.dataTransfer.setData("application/djgoo-track", JSON.stringify(track));
+    event.dataTransfer.setData("text/plain", JSON.stringify(track));
     event.dataTransfer.effectAllowed = "copy";
   }
 
@@ -61,7 +64,7 @@ export function SearchPanel({ state, send }: PanelProps) {
       </div>
       {error && <div className="banner error search-error">{error}</div>}
       <div className="search-results" aria-live="polite">
-        {results.map((track) => <div className="search-result" draggable key={track.id || track.uri} onDragStart={(event) => dragTrack(event, track)}>
+        {results.map((track) => <div className="search-result" draggable key={track.id || track.uri} onDragStart={(event) => dragTrack(event, track)} onDragEnd={() => window.setTimeout(clearDraggedTrack, 0)}>
           {track.artwork_url ? <img src={track.artwork_url} alt="" /> : <div className="search-art-placeholder"><Search size={18} /></div>}
           <div className="search-result-copy"><strong>{track.title}</strong><span>{track.artist || "Unknown artist"}{track.duration_seconds ? ` · ${duration(track.duration_seconds)}` : ""}</span></div>
           <div className="inline-actions">

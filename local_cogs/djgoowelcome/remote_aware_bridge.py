@@ -6,6 +6,7 @@ from typing import Any, Dict
 from voice.operational_log import log_event
 
 from .gaming_audio_bridge import GamingDjGooAudioBridge
+from .audio_bridge import _VoiceAuthorProxy
 
 
 _CURRENT_COMMAND: ContextVar[Dict[str, Any] | None] = ContextVar(
@@ -72,4 +73,18 @@ class RemoteAwareDjGooAudioBridge(GamingDjGooAudioBridge):
                 command_id=item.get("command_id"),
             )
             return None
+        if item and item.get("source") == "panel":
+            for guild in self.bot.guilds:
+                voice_channel = getattr(getattr(guild, "voice_client", None), "channel", None)
+                if voice_channel is None:
+                    continue
+                author = getattr(guild, "owner", None) or getattr(guild, "me", None)
+                channel = self._best_text_channel(guild)
+                if author is not None and channel is not None:
+                    log_event(
+                        "bridge.context.panel_player.selected",
+                        guild_id=guild.id,
+                        voice_channel_id=voice_channel.id,
+                    )
+                    return self._context_for(guild, _VoiceAuthorProxy(author, voice_channel), channel)
         return super()._context()

@@ -273,21 +273,22 @@ class DjGooWelcome(commands.Cog):
                 member = await guild.fetch_member(identity.user_id)
         if member is None:
             return AuthorizationResult(False, "The paired Discord member is not available")
-        voice_state = getattr(member, "voice", None)
-        member_channel = getattr(voice_state, "channel", None)
-        if member_channel is None and intent != "state.read":
-            return AuthorizationResult(False, "Join a Discord voice channel before using DjGoo Voice")
-
         voice_client = getattr(guild, "voice_client", None)
         bot_channel = getattr(voice_client, "channel", None)
+        permissions = getattr(member, "guild_permissions", None)
+        is_owner = int(member.id) == int(guild.owner_id)
+        is_manager = bool(getattr(permissions, "manage_guild", False)) or is_owner
+        voice_state = getattr(member, "voice", None)
+        member_channel = getattr(voice_state, "channel", None)
+        if member_channel is None and bot_channel is not None and is_manager:
+            member_channel = bot_channel
+        if member_channel is None and intent != "state.read":
+            return AuthorizationResult(False, "Join a Discord voice channel before using DjGoo Voice")
         if bot_channel is not None and member_channel is not None and int(bot_channel.id) != int(member_channel.id):
             return AuthorizationResult(False, "Join the same voice channel as DjGoo")
         if bot_channel is None and intent != "state.read" and intent not in JOINING_REMOTE_INTENTS:
             return AuthorizationResult(False, "Start a song or radio station before using that control")
 
-        permissions = getattr(member, "guild_permissions", None)
-        is_owner = int(member.id) == int(guild.owner_id)
-        is_manager = bool(getattr(permissions, "manage_guild", False)) or is_owner
         actor_role = "host" if is_owner else ("moderator" if is_manager else "member")
         if intent in DESTRUCTIVE_REMOTE_INTENTS and not is_manager:
             return AuthorizationResult(False, "That command requires Manage Server or server ownership")

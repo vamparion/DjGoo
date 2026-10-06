@@ -80,3 +80,34 @@ def test_remembered_request_is_consumed_once() -> None:
 
 def test_remote_bridge_keeps_game_first_behavior() -> None:
     assert issubclass(RemoteAwareDjGooAudioBridge, GameFirstDjGooAudioBridge)
+
+
+def test_panel_control_targets_the_connected_player() -> None:
+    voice_channel = SimpleNamespace(id=56)
+    owner = SimpleNamespace(id=99)
+    guild = SimpleNamespace(
+        id=42,
+        owner=owner,
+        me=None,
+        voice_client=SimpleNamespace(channel=voice_channel),
+    )
+    bridge = object.__new__(RemoteAwareDjGooAudioBridge)
+    bridge.bot = SimpleNamespace(guilds=[guild])
+    bridge._best_text_channel = lambda selected: SimpleNamespace(id=77)
+    bridge._context_for = lambda selected, author, channel: SimpleNamespace(
+        guild=selected,
+        author=author,
+        channel=channel,
+    )
+
+    token = __import__("local_cogs.djgoowelcome.remote_aware_bridge", fromlist=["_CURRENT_COMMAND"])._CURRENT_COMMAND.set(
+        {"source": "panel", "intent": "toggle_pause"}
+    )
+    try:
+        context = bridge._context()
+    finally:
+        __import__("local_cogs.djgoowelcome.remote_aware_bridge", fromlist=["_CURRENT_COMMAND"])._CURRENT_COMMAND.reset(token)
+
+    assert context.guild is guild
+    assert context.author.id == owner.id
+    assert context.author.voice.channel is voice_channel

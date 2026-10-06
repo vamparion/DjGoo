@@ -44,6 +44,37 @@ async def test_remote_state_is_available_when_member_is_not_in_voice() -> None:
     assert result.voice_channel_id == 0
 
 
+@pytest.mark.asyncio
+async def test_host_can_control_the_connected_player_without_rejoining_voice() -> None:
+    channel = type("Channel", (), {"id": 56})()
+
+    class Member:
+        id = 99
+        voice = None
+        guild_permissions = type("Permissions", (), {"manage_guild": False})()
+
+    class Guild:
+        owner_id = 99
+        voice_client = type("VoiceClient", (), {"channel": channel})()
+
+        def get_member(self, user_id):
+            return Member() if user_id == 99 else None
+
+    class Bot:
+        def get_guild(self, guild_id):
+            return Guild() if guild_id == 34 else None
+
+    cog = object.__new__(DjGooWelcome)
+    cog.bot = Bot()
+    identity = type("Identity", (), {"guild_id": 34, "user_id": 99})()
+
+    result = await cog._authorize_remote(identity, "toggle_pause")
+
+    assert result.allowed is True
+    assert result.actor_role == "host"
+    assert result.voice_channel_id == 56
+
+
 def store(tmp_path: Path) -> PairingStore:
     return PairingStore(tmp_path / "pairing.db", tmp_path / "secret.bin")
 
