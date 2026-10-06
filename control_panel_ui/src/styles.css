@@ -775,10 +775,6 @@ p {
 .result-destination { min-width: 112px; padding: 8px; }
 .search-error { margin-top: 10px; border-radius: 7px; }
 
-.history-drop-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin: 12px 0; }
-.history-drop-target { min-height: 52px; display: flex; align-items: center; gap: 9px; padding: 10px; border: 1px dashed var(--line); border-radius: 7px; background: var(--panel3); color: var(--muted); text-align: left; }
-.history-drop-target:hover { border-color: var(--cyan); color: var(--text); background: var(--panel2); }
-.sticky-drop-targets { position: sticky; top: 70px; z-index: 3; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, var(--panel) 94%, transparent); box-shadow: 0 10px 24px rgba(0,0,0,.28); backdrop-filter: blur(12px); }
 .history-list { display: grid; }
 .history-row { min-height: 62px; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto auto; align-items: center; gap: 9px; border-top: 1px solid var(--line); padding: 8px 0; animation: queue-arrive 220ms ease-out both; }
 .history-row:first-child { border-top: 0; }
@@ -789,8 +785,24 @@ p {
 .history-copy span { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .playlist-drop-row { grid-template-columns: 20px minmax(0, 1fr) auto; }
 .playlist-drop-row:hover { background: var(--panel3); outline: 1px dashed var(--cyan); outline-offset: -1px; }
+.playlist-dock .playlist-drop-list { max-height: min(28vh, 260px); overflow-y: auto; padding-right: 2px; scrollbar-width: thin; }
 .new-playlist-drop { width: 100%; min-height: 48px; display: flex; align-items: center; justify-content: center; gap: 8px; border: 1px dashed var(--cyan); border-radius: 7px; background: var(--panel3); color: var(--cyan); }
 .new-playlist-drop:hover { background: var(--panel2); color: var(--text); }
+
+.queue-dock { min-height: 150px; }
+.queue-dock .panel-title-row { margin-bottom: 8px; }
+.queue-sidebar-list { display: grid; max-height: min(46vh, 480px); overflow-y: auto; padding-right: 2px; scrollbar-width: thin; }
+.queue-sidebar-row { position: relative; min-height: 54px; display: grid; grid-template-columns: 18px minmax(0, 1fr) 30px; gap: 7px; align-items: center; border-top: 1px solid var(--line); padding: 7px 0; }
+.queue-sidebar-row:first-child { border-top: 0; }
+.queue-sidebar-row.drop-before::before { content: ""; position: absolute; top: -2px; left: 0; right: 0; height: 3px; border-radius: 3px; background: var(--cyan); box-shadow: 0 0 10px rgba(25,225,255,.55); }
+.queue-grip { color: var(--cyan); cursor: grab; }
+.queue-copy { min-width: 0; }
+.queue-copy strong, .queue-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queue-copy strong { font-size: 12px; }
+.queue-copy span { color: var(--muted); font-size: 10px; margin-top: 3px; }
+.queue-remove { width: 30px; height: 30px; }
+.queue-end-drop { min-height: 40px; display: flex; align-items: center; justify-content: center; gap: 7px; border: 1px dashed var(--line); border-radius: 7px; color: var(--muted); font-size: 11px; margin-top: 7px; }
+.queue-end-drop.active { border-color: var(--cyan); color: var(--cyan); background: var(--panel2); }
 
 .modal-backdrop {
   position: fixed;
@@ -968,6 +980,14 @@ p {
   display: grid;
   gap: 12px;
 }
+
+.player-summary { min-width: 0; }
+.player-activity { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 10px; }
+.player-activity h3 { margin-bottom: 7px; }
+.player-activity-row { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 9px; padding: 6px 0; border-top: 1px solid rgba(255,255,255,.05); }
+.player-activity-row > span { margin: 0; font-size: 10px; }
+.player-activity-row strong { font-size: 12px; }
+.player-activity-row p { margin-top: 2px; }
 
 .mini-grid {
   display: grid;
@@ -1156,8 +1176,6 @@ p {
   .playlist-selector { align-items: stretch; flex-direction: column; }
   .playlist-track-row { grid-template-columns: 20px minmax(0, 1fr); }
   .playlist-track-row > .inline-actions { grid-column: 2; justify-self: start; }
-  .sticky-drop-targets { top: 66px; display: flex; overflow-x: auto; flex-wrap: nowrap; }
-  .sticky-drop-targets .history-drop-target { min-width: 180px; }
   .player-row { grid-template-columns: 1fr; }
   .player-controls { justify-content: flex-start; }
   .station-summary, .radio-taste { grid-template-columns: 1fr 1fr; }

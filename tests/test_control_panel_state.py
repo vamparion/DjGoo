@@ -206,13 +206,31 @@ class ControlPanelStateTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (cache / "metadata.json").write_text(
-                json.dumps({"one.webm": {"title": "Song", "artist": "Correct Artist"}}),
+                json.dumps({"one.webm": {"title": "Song", "artist": "Correct Artist", "source_uri": "https://example.test/song"}}),
                 encoding="utf-8",
             )
 
             snapshot = build_state_snapshot(root)
 
         self.assertEqual(snapshot["history"][0]["artist"], "Correct Artist")
+        self.assertEqual(snapshot["history"][0]["uri"], "https://example.test/song")
+        self.assertNotIn("AppData", json.dumps(snapshot["history"][0]))
+
+    def test_history_never_exposes_unmapped_local_cache_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "data").mkdir()
+            cache = root / "cache" / "localtracks"
+            cache.mkdir(parents=True)
+            (root / "data" / "djgoo-mini-history.json").write_text(
+                json.dumps({"entries": [{"id": "one", "title": "Song", "uri": str(cache / "one.webm")}]}),
+                encoding="utf-8",
+            )
+            (cache / "metadata.json").write_text(json.dumps({"one.webm": {"title": "Song"}}), encoding="utf-8")
+
+            snapshot = build_state_snapshot(root)
+
+        self.assertNotIn("uri", snapshot["history"][0])
 
     def test_now_playing_uses_cached_local_track_artist_metadata(self):
         with tempfile.TemporaryDirectory() as temp_dir:

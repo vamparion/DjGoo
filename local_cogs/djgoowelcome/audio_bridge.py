@@ -996,11 +996,27 @@ class DjGooAudioBridge:
         if not uri:
             return None
         try:
-            import yt_dlp
-
             data_root = Path(os.environ.get("DJGOO_DATA_ROOT") or Path.home() / "AppData/Local/DjGoo")
             cache = data_root / "cache" / "localtracks"
             cache.mkdir(parents=True, exist_ok=True)
+            metadata_path = cache / "metadata.json"
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                metadata = {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            for filename, details in metadata.items():
+                if not isinstance(details, dict) or str(details.get("source_uri") or "").strip() != uri:
+                    continue
+                safe_name = Path(str(filename)).name
+                candidate = cache / safe_name
+                if safe_name == filename and candidate.is_file() and candidate.stat().st_size:
+                    log_event("media.cache.hit", uri=uri, filename=safe_name)
+                    return f"localtracks/{safe_name}"
+
+            import yt_dlp
+
             stem = hashlib.sha256(uri.encode("utf-8")).hexdigest()[:24]
             existing = next(cache.glob(f"{stem}.*"), None)
             options = {
@@ -1017,13 +1033,6 @@ class DjGooAudioBridge:
                 )
                 filename = existing or Path(extractor.prepare_filename(info))
             if filename.is_file():
-                metadata_path = cache / "metadata.json"
-                try:
-                    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    metadata = {}
-                if not isinstance(metadata, dict):
-                    metadata = {}
                 metadata[filename.name] = {
                     "title": str(info.get("title") or "").strip(),
                     "artist": str(
@@ -1448,6 +1457,10 @@ class DjGooAudioBridge:
                 data["title"] = str(local_metadata.get("title") or data["title"])
             if not data.get("artist") or data["artist"].lower() == "unknown artist":
                 data["artist"] = str(local_metadata.get("artist") or data.get("artist") or "")
+            source_uri = str(local_metadata.get("source_uri") or "").strip()
+            if source_uri.startswith(("https://", "http://")):
+                data["uri"] = source_uri
+                data["source_uri"] = source_uri
         artwork = (
             getattr(track, "artwork_url", "")
             or info.get("artworkUrl", "")

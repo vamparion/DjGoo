@@ -234,6 +234,7 @@ function remoteIntent(action: string) {
     ban: "station_ban_current",
     save_current: "mini_playlist_add_current",
     remove_queue: "mini_queue_remove",
+    queue_insert: "mini_queue_insert",
     undo: "mini_queue_undo",
   };
   return mapped[action] || action;

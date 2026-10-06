@@ -1,6 +1,6 @@
 import type { ControlState } from "../types";
 import type { CommandSender } from "./types";
-import { ListMusic, Pause, Play, SkipForward, Square } from "lucide-react";
+import { Pause, Play, SkipForward, Square } from "lucide-react";
 
 type Props = {
   state: ControlState;
@@ -18,7 +18,6 @@ export function PersistentFooter({ state, send, status }: Props) {
       <div className="footer-actions">
         <button className="icon-button" title={state.playback.playing ? "Pause" : "Resume"} onClick={() => void send("toggle_pause")}>{state.playback.playing ? <Pause size={17} /> : <Play size={17} />}</button>
         <button className="icon-button" title="Skip" onClick={() => void send("skip")}><SkipForward size={17} /></button>
-        <button className="icon-button" title="Queue" onClick={() => void send("queue")}><ListMusic size={17} /></button>
         <button className="icon-button danger" title="Stop and clear queue" onClick={() => void send("stop")}><Square size={15} /></button>
       </div>
     </footer>

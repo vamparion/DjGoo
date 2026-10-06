@@ -11,7 +11,7 @@ export function PlaylistPanel({ state, send, compact = false, expanded = false, 
   const [bulk, setBulk] = useState("");
   const playlist = state.playlists.find((item) => item.name === name) || state.playlists[0];
   useEffect(() => { if (!name && state.playlists[0]) setName(state.playlists[0].name); }, [name, state.playlists]);
-  async function action(kind: string, payload: Record<string, unknown> = {}) { if (!playlist) return; await playlistAction(kind, { playlist: playlist.name, ...payload }); await send("queue"); }
+  async function action(kind: string, payload: Record<string, unknown> = {}) { if (!playlist) return; await playlistAction(kind, { playlist: playlist.name, ...payload }); await refresh?.(); }
   async function addHistory(trackId: string, playlistName: string) { if (!trackId || !playlistName) return; await playlistAction("history-add", { playlist: playlistName, track_id: trackId }); await refresh?.(); }
   async function addDroppedTrack(raw: string, playlistName: string) { if (!raw || !playlistName) return; const track = JSON.parse(raw); await playlistAction("import", { playlist: playlistName, tracks: [track] }); await refresh?.(); }
   async function createPlaylist(trackId = "") {

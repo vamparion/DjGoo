@@ -69,6 +69,13 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
     ]
     current = now_playing.get("current") if isinstance(now_playing.get("current"), dict) else {}
     current = _hydrate_track_metadata(project_root, current)
+    playback_state = str(now_playing.get("playback_state") or "idle")
+    position_ms = int(now_playing.get("position_ms") or 0)
+    if not position_ms:
+        position_ms = int(float(now_playing.get("position_seconds") or 0) * 1000)
+    sampled_at = float(now_playing.get("started_at") or measured_at)
+    if playback_state == "playing":
+        position_ms += max(0, int((measured_at - sampled_at) * 1000))
     live_queue = now_playing.get("queue") if isinstance(now_playing.get("queue"), list) else []
     gaming = GamingSessionStore(project_root / "data" / "djgoo-gaming-session.json")
     history = _hydrate_history_metadata(
@@ -86,10 +93,10 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
             "remaining": str(now_playing.get("progress_text") or ""),
             "queue_count": len(live_queue),
             "requester": str(now_playing.get("requester") or ""),
-            "state": str(now_playing.get("playback_state") or "idle"),
-            "position_ms": int(now_playing.get("position_seconds") or 0) * 1000,
+            "state": playback_state,
+            "position_ms": position_ms,
             "duration_ms": int(current.get("duration_seconds") or 0) * 1000,
-            "playing": str(now_playing.get("playback_state") or "idle") == "playing",
+            "playing": playback_state == "playing",
             "measured_at": measured_at,
             "volume": int(now_playing.get("volume") or 0),
         },
@@ -171,6 +178,12 @@ def _hydrate_track_metadata(
     cached = metadata.get(uri.rsplit("/", 1)[-1])
     if not isinstance(cached, dict):
         return item
+    source_uri = str(cached.get("source_uri") or "").strip()
+    if source_uri.startswith(("https://", "http://")):
+        item["uri"] = source_uri
+        item["source_uri"] = source_uri
+    elif "localtracks" in uri.casefold():
+        item.pop("uri", None)
     artist = str(item.get("artist") or "").strip()
     if not artist or artist.casefold() == "unknown artist":
         item["artist"] = str(cached.get("artist") or artist)

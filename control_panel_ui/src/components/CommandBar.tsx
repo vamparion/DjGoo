@@ -65,7 +65,6 @@ export function CommandBar({ send }: Props) {
         </button>
       </div>
       <div className="top-actions">
-        <button className="btn" onClick={() => void send("queue")}>Queue</button>
         <button className="btn danger" onClick={() => void send("stop")}>Stop</button>
       </div>
     </header>

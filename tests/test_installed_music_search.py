@@ -61,6 +61,60 @@ def test_direct_media_query_returns_extracted_stream(tmp_path) -> None:
     assert metadata[resolved.removeprefix("localtracks/")]["title"] == "Darude - Sandstorm"
 
 
+def test_direct_media_query_reuses_verified_cached_source_without_extraction(tmp_path) -> None:
+    cache = tmp_path / "cache" / "localtracks"
+    cache.mkdir(parents=True)
+    (cache / "track.webm").write_bytes(b"audio")
+    (cache / "metadata.json").write_text(
+        '{"track.webm":{"source_uri":"https://www.youtube.com/watch?v=track"}}',
+        encoding="utf-8",
+    )
+
+    with patch("yt_dlp.YoutubeDL", side_effect=AssertionError("cache hit must not invoke yt-dlp")), patch.dict(
+        "os.environ", {"DJGOO_DATA_ROOT": str(tmp_path)}, clear=False
+    ):
+        resolved = DjGooAudioBridge._direct_media_query("https://www.youtube.com/watch?v=track")
+
+    assert resolved == "localtracks/track.webm"
+
+
+def test_direct_media_query_does_not_reuse_cache_for_another_source(tmp_path) -> None:
+    cache = tmp_path / "cache" / "localtracks"
+    cache.mkdir(parents=True)
+    (cache / "track.webm").write_bytes(b"audio")
+    (cache / "metadata.json").write_text(
+        '{"track.webm":{"source_uri":"https://www.youtube.com/watch?v=other"}}',
+        encoding="utf-8",
+    )
+
+    class Extractor:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def extract_info(self, uri, download):
+            assert uri == "https://www.youtube.com/watch?v=track"
+            assert download is True
+            path = self.options["outtmpl"].replace("%(ext)s", "webm")
+            __import__("pathlib").Path(path).write_bytes(b"correct audio")
+            return {"ext": "webm", "webpage_url": uri}
+
+        def prepare_filename(self, _info):
+            return self.options["outtmpl"].replace("%(ext)s", "webm")
+
+    with patch("yt_dlp.YoutubeDL", Extractor), patch.dict(
+        "os.environ", {"DJGOO_DATA_ROOT": str(tmp_path)}, clear=False
+    ):
+        resolved = DjGooAudioBridge._direct_media_query("https://www.youtube.com/watch?v=track")
+
+    assert resolved != "localtracks/track.webm"
+
+
 def test_local_media_metadata_replaces_lavalink_unknown_labels(tmp_path) -> None:
     cache = tmp_path / "cache" / "localtracks"
     cache.mkdir(parents=True)

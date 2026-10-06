@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ListMusic, Pause, Play, Search, SkipForward, Square, Volume1, Volume2 } from "lucide-react";
+import { Pause, Play, Search, SkipForward, Square, Volume1, Volume2 } from "lucide-react";
 import type { PanelProps } from "./types";
 import { playbackPosition } from "../playbackClock";
 
@@ -43,7 +43,6 @@ export function LivePanel({ state, send, openFind }: Props) {
         {duration > 0 && <div className="playback-progress"><progress max={duration} value={Math.min(elapsed, duration)} /><span>{clock(elapsed)} / {clock(duration)}</span></div>}
         {!hasTrack ? <div className="live-empty-actions">
           <button className="btn primary icon-action" onClick={openFind}><Search size={16} /><span>Find music</span></button>
-          <button className="btn icon-action" onClick={() => void send("queue")}><ListMusic size={16} /><span>View queue</span></button>
         </div> : <>
           <div className="transport-actions" aria-label="Playback controls">
             <button className="btn primary icon-action" onClick={() => void send("toggle_pause")}>
@@ -52,7 +51,6 @@ export function LivePanel({ state, send, openFind }: Props) {
             </button>
             <button className="btn primary icon-action" onClick={() => void send("skip")}><SkipForward size={16} /><span>Skip</span></button>
             <button className="btn danger icon-action" title="Stop playback and clear the queue" onClick={() => void send("stop")}><Square size={15} /><span>Stop</span></button>
-            <button className="btn icon-action" onClick={() => void send("queue")}><ListMusic size={16} /><span>Queue</span></button>
             <button className="icon-button" title="Volume down" aria-label="Volume down" onClick={() => void send("volume_down")}><Volume1 size={18} /></button>
             <button className="icon-button" title="Volume up" aria-label="Volume up" onClick={() => void send("volume_up")}><Volume2 size={18} /></button>
           </div>

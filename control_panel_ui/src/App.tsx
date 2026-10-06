@@ -7,7 +7,7 @@ import { LivePanel } from "./components/LivePanel";
 import { LogsPanel } from "./components/LogsPanel";
 import { PersistentFooter } from "./components/PersistentFooter";
 import { PlaylistPanel } from "./components/PlaylistPanel";
-import { QueueModal } from "./components/QueueModal";
+import { QueuePanel } from "./components/QueuePanel";
 import { SearchPanel } from "./components/SearchPanel";
 import { StationPanel } from "./components/StationPanel";
 import { GuestPanel } from "./components/GuestPanel";
@@ -15,7 +15,7 @@ import type { ControlState } from "./types";
 import type { DjGooProfile } from "./api";
 import { Onboarding } from "./components/Onboarding";
 import { GamingSettings } from "./components/GamingSettings";
-import { optimisticallyTogglePlayback } from "./playbackClock";
+import { optimisticallyTogglePlayback, reconcilePlaybackState } from "./playbackClock";
 
 const views = ["Live", "Find", "History", "Radio", "Lists", "Players", "Settings", "Logs"] as const;
 type View = (typeof views)[number];
@@ -27,7 +27,6 @@ export function App() {
   const [status, setStatus] = useState("Ready");
   const [activeView, setActiveView] = useState<View>("Live");
   const [profile, setProfile] = useState<DjGooProfile | null>(() => savedProfile());
-  const [queueOpen, setQueueOpen] = useState(false);
   const refreshStarted = useRef(0);
   const refreshApplied = useRef(0);
   const role = isRemoteSession() ? (state?.session?.role || profile?.role || "guest") : "host";
@@ -40,7 +39,7 @@ export function App() {
       const next = await getState();
       if (requestNumber < refreshApplied.current) return next;
       refreshApplied.current = requestNumber;
-      setState(next);
+      setState(current => reconcilePlaybackState(current, next));
       if (next.session) setProfile({ id: next.session.discord_user_id || "remote", token: "", username: next.session.display_name, role: next.session.role });
       setError("");
     } catch (err) {
@@ -69,7 +68,7 @@ export function App() {
     };
     const unsubscribeState = subscribeState(next => {
       refreshApplied.current = ++refreshStarted.current;
-      setState(next);
+      setState(current => reconcilePlaybackState(current, next));
       if (next.session) setProfile({ id: next.session.discord_user_id || "remote", token: "", username: next.session.display_name, role: next.session.role });
       setError("");
     });
@@ -83,11 +82,6 @@ export function App() {
   }, []);
 
   async function send(action: string, payload: Record<string, unknown> = {}) {
-    if (action === "queue") {
-      setQueueOpen(true);
-      await refresh();
-      return;
-    }
     setStatus(`Sending ${action}`);
     if (action === "toggle_pause") {
       setState(current => current ? optimisticallyTogglePlayback(current) : current);
@@ -141,7 +135,7 @@ export function App() {
       );
     }
     if (activeView === "Lists") {
-      return <PlaylistPanel state={state} send={send} expanded canManage={canManage} />;
+      return <PlaylistPanel state={state} send={send} expanded canManage={canManage} refresh={refresh} />;
     }
     if (activeView === "Players") {
       return <GuestPanel state={state} send={send} profile={profile} refresh={refresh} />;
@@ -186,11 +180,10 @@ export function App() {
         {!compact && <aside className="side">
           <HealthPanel state={state} send={send} />
           <PlaylistPanel state={state} send={send} compact canManage={canManage} refresh={refresh} />
-          {canManage && <LogsPanel state={state} send={send} />}
+          <QueuePanel state={state} send={send} canManage={canManage} refresh={refresh} />
         </aside>}
       </main>
       <PersistentFooter state={state} send={send} status={status} />
-      {queueOpen && <QueueModal state={state} send={send} close={() => setQueueOpen(false)} />}
     </div>
   );
 }

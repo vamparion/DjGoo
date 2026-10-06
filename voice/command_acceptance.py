@@ -57,6 +57,7 @@ WEB_INTENT_CAPABILITY = {
     "mini_queue_remove": "playback.control",
     "mini_queue_remove_many": "playback.control",
     "mini_queue_reorder": "playback.control",
+    "mini_queue_insert": "playback.control",
     "mini_queue_shuffle": "playback.control",
     "mini_queue_shuffle_requests": "playback.control",
     "mini_queue_clear": "playback.control",

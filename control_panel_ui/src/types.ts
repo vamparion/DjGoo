@@ -2,6 +2,7 @@ export type Track = {
   id?: string;
   title: string;
   uri?: string;
+  source_uri?: string;
   artist?: string;
   requester?: string;
   request_type?: string;

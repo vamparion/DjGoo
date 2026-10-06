@@ -33,6 +33,7 @@ ACTION_TO_INTENT = {
     "undo": "gaming_undo",
     "mute": "mini_mute",
     "remove_queue": "mini_queue_remove",
+    "queue_insert": "mini_queue_insert",
 }
 
 

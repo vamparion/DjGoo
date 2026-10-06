@@ -52,6 +52,7 @@ QUIET_WEB_INTENTS = {
     "station_ban_current", "save_current_to_playlist",
     "save_last_to_playlist", "gaming_undo", "mini_queue_remove",
     "mini_queue_reorder",
+    "mini_queue_insert",
 }
 
 
@@ -138,6 +139,7 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             "mini_queue_move_next",
             "mini_queue_play_now",
             "mini_queue_reorder",
+            "mini_queue_insert",
             "mini_queue_remove_many",
             "mini_queue_shuffle",
             "mini_queue_shuffle_requests",
@@ -722,6 +724,50 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         if intent in {"mini_stop_radio", "stop_radio"}:
             return await self._stop_radio_keep_requests(audio, ctx)
 
+        if intent == "mini_queue_insert":
+            query = str(item.get("query") or "").strip()
+            if not query:
+                return {"status": "failed", "message": "That song no longer has a playable source."}
+            insertion_index = max(0, int(payload.get("index") or 0))
+            try:
+                existing_player = lavalink.get_player(guild_id)
+                before_ids = {self._stable_track_id(track) for track in list(existing_player.queue)}
+            except (NodeNotFound, PlayerNotFound):
+                before_ids = set()
+            self._pending_request_context[guild_id] = self._request_metadata(ctx, timing="next", item=item)
+            self._pending_request_context[guild_id]["source"] = str(item.get("source") or "panel")
+            try:
+                result = await self._handle_timed_request(
+                    audio,
+                    ctx,
+                    query=query,
+                    source=str(item.get("source") or "panel"),
+                    timing="next",
+                )
+            finally:
+                self._pending_request_context.pop(guild_id, None)
+            try:
+                player = lavalink.get_player(guild_id)
+            except (NodeNotFound, PlayerNotFound):
+                return result
+            added = next((track for track in list(player.queue) if self._stable_track_id(track) not in before_ids), None)
+            if added is None:
+                current = getattr(player, "current", None)
+                if current is not None and self._track_identity(current) == self._track_identity({"uri": query}):
+                    return {"status": "completed", "message": "Started the requested song because the queue was idle."}
+                return result
+            self._remember_queue(guild_id, player)
+            queue = [track for track in list(player.queue) if track is not added]
+            queue.insert(min(insertion_index, len(queue)), added)
+            player.queue.clear()
+            player.queue.extend(queue)
+            self._persist_player_state(guild_id, reason="mini_queue_insert")
+            self._record_queue_transaction(guild_id, player, action="insert", reason="Dropped into queue")
+            return {
+                "status": "completed",
+                "message": f"Added {getattr(added, 'title', 'track')} at queue position {min(insertion_index, len(queue) - 1) + 1}.",
+            }
+
         try:
             player = lavalink.get_player(guild_id)
         except (NodeNotFound, PlayerNotFound):
@@ -1192,6 +1238,7 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                 "artwork_url": current["artwork_url"],
                 "duration_seconds": current["duration_seconds"],
                 "position_seconds": max(0, position),
+                "position_ms": max(0, int(getattr(player, "position", 0) or 0)),
                 "started_at": time.time(),
                 "paused": bool(getattr(player, "paused", False)),
                 "volume": int(getattr(player, "volume", 0) or 0),

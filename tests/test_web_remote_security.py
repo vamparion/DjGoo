@@ -175,7 +175,7 @@ def test_remote_frontend_erases_fragment_and_reuses_shared_app() -> None:
     assert "new WebSocket" in transport and "credentialWithInviteRoutes" in transport
     assert 'transport === "relay"' in transport and "RelaySocketSession" in transport
     assert "stateRefreshIntervalMs()" in app
-    assert "subscribeState" in app and "setState(next)" in app
+    assert "subscribeState" in app and "reconcilePlaybackState(current, next)" in app
     assert "reconnectRemote()" in app and "void poll()" in app
     assert "isRemoteDirectConnected(remoteCredential) ? 60000 : 8000" in api
     assert "HostRejection" in transport and "command_id: crypto.randomUUID()" in transport
@@ -183,20 +183,21 @@ def test_remote_frontend_erases_fragment_and_reuses_shared_app() -> None:
     assert "device_token" not in worker and "#pair=" not in worker
 
 
-def test_find_returns_choices_and_queue_uses_a_modal() -> None:
+def test_find_returns_choices_and_queue_stays_in_the_sidebar() -> None:
     root = Path(__file__).resolve().parents[1] / "control_panel_ui" / "src"
     app = (root / "App.tsx").read_text(encoding="utf-8")
     search = (root / "components" / "SearchPanel.tsx").read_text(encoding="utf-8")
-    queue_modal = (root / "components" / "QueueModal.tsx").read_text(encoding="utf-8")
+    queue_panel = (root / "components" / "QueuePanel.tsx").read_text(encoding="utf-8")
     styles = (root / "styles.css").read_text(encoding="utf-8")
 
-    assert 'if (action === "queue")' in app and "setQueueOpen(true)" in app
-    assert "<QueueModal" in app and "<QueuePanel" not in app
+    assert "setQueueOpen" not in app and "<QueueModal" not in app
+    assert "<QueuePanel" in app and "canManage={canManage}" in app
     assert "searchMusic(q)" in search
     assert 'event.key === "Enter"' in search and "void search()" in search
     assert 'send("play", { query: track.uri })' in search
     assert 'send("play_next", { query: track.uri })' in search
-    assert "position: fixed" in styles and "queue-modal" in queue_modal
+    assert "queue-sidebar-list" in styles and "mini_queue_reorder" in queue_panel
+    assert 'application/djgoo-track' in queue_panel and 'text/djgoo-history' in queue_panel
 
 
 def test_local_and_paired_web_use_shared_history_and_theme() -> None:
@@ -208,9 +209,9 @@ def test_local_and_paired_web_use_shared_history_and_theme() -> None:
 
     assert "return <App />" in remote
     assert '"History"' in app and "<HistoryPanel" in app
-    assert 'playlistAction("history-add"' in history
+    assert 'playlistAction("history-add"' in playlists
     assert 'playlistAction("history-delete"' in history
-    assert 'getData("text/djgoo-history")' in history
+    assert 'setData("text/djgoo-history",' in history
     assert 'playlistAction("create"' in playlists
     assert "new-playlist-drop" in playlists
     assert 'getData("text/djgoo-history")' in playlists
@@ -231,10 +232,12 @@ def test_live_and_playlist_surfaces_keep_controls_contextual() -> None:
     assert "Playlist details" in playlists and "Add from history" in playlists
 
 
-def test_game_first_ui_supports_sticky_drops_touch_destinations_and_stop() -> None:
+def test_game_first_ui_supports_persistent_queue_touch_destinations_and_stop() -> None:
     root = Path(__file__).resolve().parents[1] / "control_panel_ui" / "src"
     search = (root / "components" / "SearchPanel.tsx").read_text(encoding="utf-8")
+    app = (root / "App.tsx").read_text(encoding="utf-8")
     history = (root / "components" / "HistoryPanel.tsx").read_text(encoding="utf-8")
+    queue = (root / "components" / "QueuePanel.tsx").read_text(encoding="utf-8")
     player = (root / "components" / "LivePanel.tsx").read_text(encoding="utf-8")
     footer = (root / "components" / "PersistentFooter.tsx").read_text(encoding="utf-8")
     radio = (root / "components" / "StationPanel.tsx").read_text(encoding="utf-8")
@@ -242,10 +245,23 @@ def test_game_first_ui_supports_sticky_drops_touch_destinations_and_stop() -> No
 
     assert 'draggable key=' in search and 'application/djgoo-track' in search
     assert "Add to..." in search and 'value="queue"' in search
-    assert "sticky-drop-targets" in history and "position: sticky" in styles
+    assert "sticky-drop-targets" not in history
+    assert "<QueuePanel" in app and "position: sticky" in styles
+    assert "queue-end-drop" in queue and "drop-before" in queue
     assert 'send("stop")' in player and 'send("stop")' in footer
     assert "playback.artwork_url" in player and "playback.artwork_url" in footer
     assert "Advanced station settings" in radio and "Artist repeat spacing" in radio
+
+
+def test_player_activity_is_grouped_by_user_instead_of_the_sidebar() -> None:
+    root = Path(__file__).resolve().parents[1] / "control_panel_ui" / "src"
+    app = (root / "App.tsx").read_text(encoding="utf-8")
+    players = (root / "components" / "GuestPanel.tsx").read_text(encoding="utf-8")
+
+    sidebar = app.split('<aside className="side">', 1)[1].split("</aside>", 1)[0]
+    assert "LogsPanel" not in sidebar and "QueuePanel" in sidebar
+    assert "playerActivity" in players and "Recent activity" in players
+    assert "state.timeline.filter" in players and "track.requester" in players
 
 
 def test_hosted_relay_accepts_web_state_and_web_invites_can_offer_relay() -> None:

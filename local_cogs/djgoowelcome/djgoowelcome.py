@@ -101,6 +101,7 @@ QUIET_WEB_INTENTS = {
     "gaming_undo",
     "mini_queue_remove",
     "mini_queue_reorder",
+    "mini_queue_insert",
 }
 DESTRUCTIVE_REMOTE_INTENTS = {
     "clear_queue",
