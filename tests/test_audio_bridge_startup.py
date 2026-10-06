@@ -616,6 +616,25 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
                 {"title": "Metallica - One", "uri": "u:song", "duration_seconds": "447"}
             )
         )
+        self.assertFalse(
+            bridge._should_reject_playing_track(
+                {
+                    "title": "Hombres G - Devuelveme A Mi Chica (video clip)",
+                    "uri": "u:requested",
+                    "duration_seconds": "210",
+                },
+                reject_title=False,
+            )
+        )
+        self.assertTrue(
+            bridge._should_reject_playing_track(
+                {
+                    "title": "Hombres G - Devuelveme A Mi Chica (video clip)",
+                    "uri": "u:radio",
+                    "duration_seconds": "210",
+                }
+            )
+        )
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     def test_track_data_includes_duration_when_available(self):

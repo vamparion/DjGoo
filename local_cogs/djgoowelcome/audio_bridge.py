@@ -1655,12 +1655,18 @@ class DjGooAudioBridge:
             blocked.extend(track for track in station.get(bucket, []) if isinstance(track, dict))
         return key in {track_key(track) for track in blocked}
 
-    def _should_reject_playing_track(self, data: Dict[str, Any]) -> bool:
-        if self._is_bad_radio_title(str(data.get("title", ""))):
+    def _should_reject_playing_track(self, data: Dict[str, Any], *, reject_title: bool = True) -> bool:
+        if reject_title and self._is_bad_radio_title(str(data.get("title", ""))):
             return True
         with contextlib.suppress(TypeError, ValueError):
             return int(data.get("duration_seconds") or 0) > MAX_TRACK_SECONDS
         return False
+
+    def _reject_title_for_track(self, guild_id: int, track: Any) -> bool:
+        mode_for_track = getattr(self, "_mode_for_track", None)
+        if callable(mode_for_track):
+            return mode_for_track(guild_id, track) == "RADIO"
+        return self.stations.get_active(guild_id) is not None
 
     def _is_bad_radio_title(self, title: str) -> bool:
         lowered = f" {re.sub(r'[^a-z0-9]+', ' ', title.lower()).strip()} "
@@ -1734,7 +1740,8 @@ class DjGooAudioBridge:
         data = self._track_data(track)
         log_event("red_audio.track.start", guild_id=guild.id, track=data)
         self._persist_player_state(guild.id, reason="track_start")
-        if self._should_reject_playing_track(data):
+        reject_title = self._reject_title_for_track(guild.id, track)
+        if self._should_reject_playing_track(data, reject_title=reject_title):
             log.info("DjGoo blocking overlong or repeated-format track before controls: %s", data.get("title", ""))
             log_event("red_audio.track.blocked", guild_id=guild.id, reason="bad_title_or_duration", track=data)
             station = self.stations.get_active(guild.id)
@@ -1777,7 +1784,8 @@ class DjGooAudioBridge:
         track = self._current_track_for_controls(message.guild.id)
         if track is not None:
             data = self._track_data(track)
-            if self._should_reject_playing_track(data):
+            reject_title = self._reject_title_for_track(message.guild.id, track)
+            if self._should_reject_playing_track(data, reject_title=reject_title):
                 log_event(
                     "red_audio.visible_enqueue.blocked",
                     guild_id=message.guild.id,
@@ -1827,7 +1835,8 @@ class DjGooAudioBridge:
 
     async def _send_playback_controls(self, guild, track, *, preferred_channel=None, force: bool = False) -> None:
         data = self._track_data(track)
-        if self._should_reject_playing_track(data):
+        reject_title = self._reject_title_for_track(guild.id, track)
+        if self._should_reject_playing_track(data, reject_title=reject_title):
             log_event("discord.controls.blocked_bad_track", guild_id=guild.id, track=data)
             return
         if force:
