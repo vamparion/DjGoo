@@ -195,6 +195,105 @@ class ControlPanelStateTests(unittest.TestCase):
 
             self.assertEqual(read_recent_log_lines(path, limit=2), ["b", "c"])
 
+    def test_history_uses_cached_local_track_artist_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "data").mkdir()
+            cache = root / "cache" / "localtracks"
+            cache.mkdir(parents=True)
+            (root / "data" / "djgoo-mini-history.json").write_text(
+                json.dumps({"entries": [{"id": "one", "title": "Song", "artist": "Unknown artist", "uri": str(cache / "one.webm")}]}),
+                encoding="utf-8",
+            )
+            (cache / "metadata.json").write_text(
+                json.dumps({"one.webm": {"title": "Song", "artist": "Correct Artist", "source_uri": "https://example.test/song"}}),
+                encoding="utf-8",
+            )
+
+            snapshot = build_state_snapshot(root)
+
+        self.assertEqual(snapshot["history"][0]["artist"], "Correct Artist")
+        self.assertEqual(snapshot["history"][0]["uri"], "https://example.test/song")
+        self.assertNotIn("AppData", json.dumps(snapshot["history"][0]))
+
+    def test_history_uses_source_url_artist_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "data").mkdir()
+            cache = root / "cache" / "localtracks"
+            cache.mkdir(parents=True)
+            source = "https://www.youtube.com/watch?v=example"
+            (root / "data" / "djgoo-mini-history.json").write_text(
+                json.dumps({"entries": [{"id": "one", "title": "Song", "artist": "Unknown artist", "uri": source}]}),
+                encoding="utf-8",
+            )
+            (cache / "metadata.json").write_text(
+                json.dumps({"one.webm": {"title": "Song", "artist": "Correct Artist", "source_uri": source}}),
+                encoding="utf-8",
+            )
+
+            snapshot = build_state_snapshot(root)
+
+        self.assertEqual(snapshot["history"][0]["artist"], "Correct Artist")
+        self.assertEqual(snapshot["history"][0]["uri"], source)
+
+    def test_history_never_exposes_unmapped_local_cache_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "data").mkdir()
+            cache = root / "cache" / "localtracks"
+            cache.mkdir(parents=True)
+            (root / "data" / "djgoo-mini-history.json").write_text(
+                json.dumps({"entries": [{"id": "one", "title": "Song", "uri": str(cache / "one.webm")}]}),
+                encoding="utf-8",
+            )
+            (cache / "metadata.json").write_text(json.dumps({"one.webm": {"title": "Song"}}), encoding="utf-8")
+
+            snapshot = build_state_snapshot(root)
+
+        self.assertNotIn("uri", snapshot["history"][0])
+
+    def test_now_playing_uses_cached_local_track_artist_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "data").mkdir()
+            cache = root / "cache" / "localtracks"
+            cache.mkdir(parents=True)
+            (root / "data" / "djgoo-now-playing.json").write_text(
+                json.dumps({"current": {"title": "Song", "artist": "Unknown artist", "uri": str(cache / "one.webm")}}),
+                encoding="utf-8",
+            )
+            (cache / "metadata.json").write_text(
+                json.dumps({"one.webm": {"title": "Song", "artist": "Correct Artist", "artwork_url": "https://img.invalid/one.jpg"}}),
+                encoding="utf-8",
+            )
+
+            snapshot = build_state_snapshot(root)
+
+        self.assertEqual(snapshot["playback"]["artist"], "Correct Artist")
+        self.assertEqual(snapshot["playback"]["artwork_url"], "https://img.invalid/one.jpg")
+
+    def test_now_playing_uses_source_url_artist_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "data").mkdir()
+            cache = root / "cache" / "localtracks"
+            cache.mkdir(parents=True)
+            source = "https://www.youtube.com/watch?v=example"
+            stream = "https://media.example.test/videoplayback?id=example"
+            (root / "data" / "djgoo-now-playing.json").write_text(
+                json.dumps({"current": {"title": "Song", "artist": "Unknown artist", "uri": source}}),
+                encoding="utf-8",
+            )
+            (cache / "streams.json").write_text(
+                json.dumps({stream: {"title": "Song", "artist": "Correct Artist", "source_uri": source}}),
+                encoding="utf-8",
+            )
+
+            snapshot = build_state_snapshot(root)
+
+        self.assertEqual(snapshot["playback"]["artist"], "Correct Artist")
+
 
 if __name__ == "__main__":
     unittest.main()

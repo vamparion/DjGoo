@@ -2,6 +2,7 @@ export type Track = {
   id?: string;
   title: string;
   uri?: string;
+  source_uri?: string;
   artist?: string;
   requester?: string;
   request_type?: string;
@@ -48,8 +49,10 @@ export type ControlState = {
   session?: { role: string; display_name: string; discord_user_id?: string; guild_id?: string; device_id?: string };
   capabilities?: { system_management?: boolean; diagnostics?: boolean; library_management?: boolean; settings_management?: boolean };
   playback: {
+    track_id?: string;
     title: string;
     artist: string;
+    artwork_url?: string;
     station: string;
     source: string;
     remaining: string;

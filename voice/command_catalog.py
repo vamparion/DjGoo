@@ -13,22 +13,22 @@ class CommandHint:
 
 COMMAND_HINTS: tuple[CommandHint, ...] = (
     CommandHint(
-        "play next Sandstorm",
+        "play next [song title]",
         "Play one request after the current song, then return to radio",
         "Requests",
     ),
     CommandHint(
-        "play now Sandstorm",
+        "play now [song title]",
         "Interrupt with one request, then return to radio",
         "Requests",
     ),
     CommandHint(
-        "queue request Sandstorm",
+        "queue request [song title]",
         "Place a request after existing player requests but before radio",
         "Requests",
     ),
     CommandHint(
-        "radio balanced 2000s rock",
+        "radio balanced [artist or genre]",
         "Start a continuous station",
         "Radio",
     ),

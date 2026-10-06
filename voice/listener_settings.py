@@ -7,7 +7,7 @@ from typing import Any, Dict
 DEFAULT_COMMAND_HOTWORDS = (
     "DjGoo DJ Goo DeeJay play skip pause resume stop queue volume radio seek remove move "
     "shuffle repeat favorite history like this more like this less like this "
-    "don't play this again official audio Sandstorm"
+    "don't play this again official audio song artist album playlist"
 )
 
 
@@ -86,7 +86,7 @@ def voice_settings(voice_config: Dict[str, Any], project_root: Path) -> Dict[str
             voice_config.get(
                 "initial_prompt",
                 "A short English Discord music command. Preserve artist names and song titles exactly. "
-                "Examples: play Sandstorm; skip; seek one minute; remove number three; radio Metallica.",
+                "Examples: play a song title; skip; seek one minute; remove number three; start a radio station.",
             )
         ),
     }

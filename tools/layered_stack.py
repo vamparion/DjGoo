@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -91,6 +92,12 @@ def configure_core(
     def layered_specs():
         nonlocal missing_logged
         specs = list(original_build_specs())
+        specs = [
+            replace(spec, cwd=app)
+            if getattr(spec, "name", "") in {"redbot", "voice", "web"}
+            else spec
+            for spec in specs
+        ]
         if host_speech_available(root):
             return specs
         filtered = [spec for spec in specs if getattr(spec, "name", "") != "voice"]

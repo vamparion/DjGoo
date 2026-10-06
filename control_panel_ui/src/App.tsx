@@ -2,21 +2,22 @@ import { useEffect, useRef, useState } from "react";
 import { createProfile, getState, isDirectTransportHealthy, isRemoteSession, reconnectRemote, resetDjGoo, savedProfile, sendCommand, stateRefreshIntervalMs, subscribeConnection, subscribeState } from "./api";
 import { CommandBar } from "./components/CommandBar";
 import { HealthPanel } from "./components/HealthPanel";
+import { HistoryPanel } from "./components/HistoryPanel";
 import { LivePanel } from "./components/LivePanel";
 import { LogsPanel } from "./components/LogsPanel";
 import { PersistentFooter } from "./components/PersistentFooter";
 import { PlaylistPanel } from "./components/PlaylistPanel";
 import { QueuePanel } from "./components/QueuePanel";
 import { SearchPanel } from "./components/SearchPanel";
-import { SmartActions } from "./components/SmartActions";
 import { StationPanel } from "./components/StationPanel";
 import { GuestPanel } from "./components/GuestPanel";
 import type { ControlState } from "./types";
 import type { DjGooProfile } from "./api";
 import { Onboarding } from "./components/Onboarding";
 import { GamingSettings } from "./components/GamingSettings";
+import { optimisticallyTogglePlayback, reconcilePlaybackState } from "./playbackClock";
 
-const views = ["Live", "Find", "Radio", "Lists", "Players", "Settings", "Logs"] as const;
+const views = ["Live", "Find", "History", "Radio", "Lists", "Players", "Settings", "Logs"] as const;
 type View = (typeof views)[number];
 
 export function App() {
@@ -28,7 +29,7 @@ export function App() {
   const [profile, setProfile] = useState<DjGooProfile | null>(() => savedProfile());
   const refreshStarted = useRef(0);
   const refreshApplied = useRef(0);
-  const role = state?.session?.role || profile?.role || "guest";
+  const role = isRemoteSession() ? (state?.session?.role || profile?.role || "guest") : "host";
   const canManage = role === "host" || role === "moderator";
   const visibleViews = views.filter((view) => canManage || !["Players", "Settings", "Logs"].includes(view));
 
@@ -38,7 +39,7 @@ export function App() {
       const next = await getState();
       if (requestNumber < refreshApplied.current) return next;
       refreshApplied.current = requestNumber;
-      setState(next);
+      setState(current => reconcilePlaybackState(current, next));
       if (next.session) setProfile({ id: next.session.discord_user_id || "remote", token: "", username: next.session.display_name, role: next.session.role });
       setError("");
     } catch (err) {
@@ -67,7 +68,7 @@ export function App() {
     };
     const unsubscribeState = subscribeState(next => {
       refreshApplied.current = ++refreshStarted.current;
-      setState(next);
+      setState(current => reconcilePlaybackState(current, next));
       if (next.session) setProfile({ id: next.session.discord_user_id || "remote", token: "", username: next.session.display_name, role: next.session.role });
       setError("");
     });
@@ -82,6 +83,9 @@ export function App() {
 
   async function send(action: string, payload: Record<string, unknown> = {}) {
     setStatus(`Sending ${action}`);
+    if (action === "toggle_pause") {
+      setState(current => current ? optimisticallyTogglePlayback(current) : current);
+    }
     try {
       if (action === "reset") {
         await resetDjGoo();
@@ -89,7 +93,12 @@ export function App() {
         await sendCommand(action, payload);
       }
       setStatus(`Sent ${action}`);
-      await refresh();
+      if (action === "toggle_pause") {
+        window.setTimeout(() => void refresh(), 750);
+        window.setTimeout(() => void refresh(), 2500);
+      } else {
+        await refresh();
+      }
       if (!isDirectTransportHealthy() && ["play_next", "play_now", "play", "skip", "stop", "start_radio", "radio"].includes(action)) {
         window.setTimeout(() => void refresh(), 2000);
         window.setTimeout(() => void refresh(), 6000);
@@ -97,12 +106,14 @@ export function App() {
     } catch (err) {
       setError(String((err as Error).message || err));
       setStatus("Error");
+      if (action === "toggle_pause") void refresh();
     }
   }
 
   if (!state) {
     return (
       <main className="loading loading-state">
+        <img className="loading-mark" src="./icons/djgoo-192.png" alt="" />
         <strong>{error ? "DjGoo could not load" : "Loading DjGoo..."}</strong>
         {error && <><p>{error}</p><div className="inline-actions"><button className="btn primary" onClick={() => void refresh()}>Reconnect</button></div><p className="muted">Your paired device remains saved. Reconnecting does not require another Discord command.</p></>}
       </main>
@@ -113,16 +124,18 @@ export function App() {
     if (activeView === "Find") {
       return <SearchPanel state={state} send={send} />;
     }
+    if (activeView === "History") {
+      return <HistoryPanel state={state} send={send} canManage={canManage} refresh={refresh} />;
+    }
     if (activeView === "Radio") {
       return (
         <>
-          <StationPanel state={state} send={send} expanded />
-          <SmartActions state={state} send={send} mode="radio" />
+          <StationPanel state={state} send={send} expanded canManage={canManage} />
         </>
       );
     }
     if (activeView === "Lists") {
-      return <PlaylistPanel state={state} send={send} expanded />;
+      return <PlaylistPanel state={state} send={send} expanded canManage={canManage} refresh={refresh} />;
     }
     if (activeView === "Players") {
       return <GuestPanel state={state} send={send} profile={profile} refresh={refresh} />;
@@ -135,12 +148,7 @@ export function App() {
     }
     return (
       <>
-        <LivePanel state={state} send={send} />
-        <SmartActions state={state} send={send} />
-        <div className="split">
-          <QueuePanel state={state} send={send} />
-          <StationPanel state={state} send={send} />
-        </div>
+        <LivePanel state={state} send={send} openFind={() => setActiveView("Find")} />
       </>
     );
   }
@@ -167,12 +175,12 @@ export function App() {
           ))}
         </nav>}
         <section className="stack">
-          {compact ? <><LivePanel state={state} send={send} /><QueuePanel state={state} send={send} /></> : renderView()}
+          {compact ? <LivePanel state={state} send={send} openFind={() => setActiveView("Find")} /> : renderView()}
         </section>
         {!compact && <aside className="side">
           <HealthPanel state={state} send={send} />
-          <PlaylistPanel state={state} send={send} compact />
-          {canManage && <LogsPanel state={state} send={send} />}
+          <PlaylistPanel state={state} send={send} compact canManage={canManage} refresh={refresh} />
+          <QueuePanel state={state} send={send} canManage={canManage} refresh={refresh} />
         </aside>}
       </main>
       <PersistentFooter state={state} send={send} status={status} />

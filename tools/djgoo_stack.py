@@ -18,6 +18,8 @@ from typing import Any, Callable
 
 import psutil
 
+from tools.app_layout import resolve_java
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -32,12 +34,7 @@ SUPERVISOR_PID_PATH = PID_DIR / "supervisor.json"
 CONTROL_HOST = "127.0.0.1"
 CONTROL_PORT = int(os.environ.get("DJGOO_CONTROL_PORT", "49177"))
 
-JAVA = Path(
-    os.environ.get(
-        "DJGOO_JAVA",
-        r"C:\Program Files\Eclipse Adoptium\jdk-17.0.17.10-hotspot\bin\java.exe",
-    )
-)
+JAVA = resolve_java(PROJECT_ROOT)
 BOT_PYTHON = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
 VOICE_PYTHON = PROJECT_ROOT / ".voice-venv" / "Scripts" / "python.exe"
 PYTHONW = PROJECT_ROOT / ".venv" / "Scripts" / "pythonw.exe"

@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import functools
 import json
 from pathlib import Path
@@ -10,15 +11,18 @@ from . import djgoowelcome as cog_module
 from .guide_cog import DjGooGuide
 from .relay_cog import DjGooRelay
 from .remote_aware_bridge import RemoteAwareDjGooAudioBridge
-from tools.app_layout import package_root
+from tools.app_layout import mutable_data_root, package_root
 from tools.windows_firewall import ensure_gateway_firewall
 from voice.lan_discovery import DISCOVERY_PORT, LanDiscoveryResponder
 from voice.operational_log import log_event
 from voice.pairing_code_routes import install_route_safe_pairing_codes
 
 
-PROJECT_ROOT = package_root(Path(__file__).resolve().parents[2])
+PROJECT_ROOT = mutable_data_root(package_root(Path(__file__).resolve().parents[2]))
 TIMED_REQUEST_INTENTS = {"play_now", "queue_request"}
+_NATIVE_PLAY_BRIDGE_DEPTH = contextvars.ContextVar(
+    "djgoo_native_play_bridge_depth", default=0
+)
 
 
 # Select the complete DjGoo bridge at the package boundary while retaining one
@@ -185,35 +189,46 @@ def _install_native_play_routing(bot: Red, djgoo: DjGooWelcome) -> bool:
 
     @functools.wraps(original_callback)
     async def routed_play(audio_cog, ctx, *, query: str):
+        normalized_query = str(query).strip().replace("\\", "/").lower()
+        local_file = Path(str(query).strip()).is_file()
+        if (
+            _NATIVE_PLAY_BRIDGE_DEPTH.get() > 0
+            or normalized_query.startswith("localtracks/")
+            or local_file
+        ):
+            return await original_callback(audio_cog, ctx, query=query)
         bridge = djgoo._audio_bridge
         youtube_url = bridge._youtube_url_from_query(str(query))
         playlist_id = bridge._youtube_playlist_id(youtube_url)
-        if playlist_id and bridge._is_real_youtube_playlist_id(playlist_id):
-            author_voice = getattr(getattr(ctx, "author", None), "voice", None)
-            voice_channel = getattr(author_voice, "channel", None)
-            voice_channel_reason = "author"
-            if voice_channel is None:
-                candidates = [ctx.channel, bridge._configured_controls_channel(ctx.guild)]
-                candidates.extend(
-                    sorted(
-                        getattr(ctx.guild, "voice_channels", []),
-                        key=lambda channel: (
-                            str(getattr(channel, "name", "")).strip().lower() != "gaming",
-                            int(getattr(channel, "position", 0) or 0),
-                        ),
-                    )
-                )
-                voice_channel = next(
-                    (
-                        channel
-                        for channel in candidates
-                        if channel is not None
-                        and callable(getattr(channel, "connect", None))
-                        and hasattr(channel, "members")
+        author_voice = getattr(getattr(ctx, "author", None), "voice", None)
+        voice_channel = getattr(author_voice, "channel", None)
+        voice_channel_reason = "author"
+        if voice_channel is None:
+            candidates = [ctx.channel, bridge._configured_controls_channel(ctx.guild)]
+            candidates.extend(
+                sorted(
+                    getattr(ctx.guild, "voice_channels", []),
+                    key=lambda channel: (
+                        str(getattr(channel, "name", "")).strip().lower() != "gaming",
+                        int(getattr(channel, "position", 0) or 0),
                     ),
-                    None,
                 )
-                voice_channel_reason = "configured_or_command_channel" if voice_channel is not None else "missing"
+            )
+            voice_channel = next(
+                (
+                    channel
+                    for channel in candidates
+                    if channel is not None
+                    and callable(getattr(channel, "connect", None))
+                    and hasattr(channel, "members")
+                ),
+                None,
+            )
+            voice_channel_reason = "configured_or_command_channel" if voice_channel is not None else "missing"
+        is_playlist = bool(
+            playlist_id and bridge._is_real_youtube_playlist_id(playlist_id)
+        )
+        if is_playlist:
             log_event(
                 "native.play.playlist_routed",
                 guild_id=getattr(getattr(ctx, "guild", None), "id", None),
@@ -224,23 +239,36 @@ def _install_native_play_routing(bot: Red, djgoo: DjGooWelcome) -> bool:
                 target_voice_channel_reason=voice_channel_reason,
                 playlist_id=playlist_id,
             )
+        token = _NATIVE_PLAY_BRIDGE_DEPTH.set(_NATIVE_PLAY_BRIDGE_DEPTH.get() + 1)
+        try:
             result = await bridge.handle_from_discord_context(
                 {
                     "type": "command",
                     "intent": "play",
-                    "query": youtube_url,
+                    "query": youtube_url if is_playlist else str(query),
                     "raw": str(query),
                     "source": "chat",
                 },
                 ctx,
                 voice_channel=voice_channel,
             )
+        finally:
+            _NATIVE_PLAY_BRIDGE_DEPTH.reset(token)
+        if is_playlist:
             log_event("native.play.playlist_result", playlist_id=playlist_id, result=result)
-            return result
-        return await original_callback(audio_cog, ctx, query=query)
+        else:
+            log_event(
+                "native.play.track_result",
+                query=str(query),
+                voice_channel_id=getattr(voice_channel, "id", None),
+                voice_channel_reason=voice_channel_reason,
+                result=result,
+            )
+        return result
 
     play_command.callback = routed_play
     play_command._djgoo_playlist_routing = True
+    play_command._djgoo_original_callback = original_callback
     djgoo._djgoo_native_play_command = play_command
     djgoo._djgoo_native_play_callback = original_callback
     log_event("native.play.routing_installed")

@@ -10,7 +10,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Mapping
 
-from tools.app_layout import speech_runtime_ready
+from tools.app_layout import is_source_checkout, speech_runtime_ready
 from tools.update_auth import load_token
 from tools.update_client import read_installed_version
 
@@ -84,6 +84,10 @@ def _sha256(data: bytes) -> str:
 
 def install_speech_runtime(root: Path, token: str | None = None) -> Path:
     root = root.resolve()
+    if is_source_checkout(root):
+        raise SpeechRuntimeError(
+            "Developer Mode checkouts are not modified by the production speech installer."
+        )
     version = read_installed_version(root).text
     resolved_token = token if token is not None else load_token(root / "config" / "update-auth.json")
     assets = _release_assets(version, resolved_token)
@@ -132,7 +136,9 @@ def install_speech_runtime(root: Path, token: str | None = None) -> Path:
             raise SpeechRuntimeError("Speech runtime archive membership does not match its manifest")
         for relative, metadata in listed.items():
             data = archive.read(relative.as_posix())
-            if len(data) != int(metadata.get("size") or -1):
+            raw_size = metadata.get("size")
+            expected_size = int(raw_size) if raw_size is not None else -1
+            if len(data) != expected_size:
                 raise SpeechRuntimeError(f"Speech runtime size mismatch for {relative}")
             if _sha256(data) != str(metadata.get("sha256") or "").lower():
                 raise SpeechRuntimeError(f"Speech runtime hash mismatch for {relative}")

@@ -34,6 +34,33 @@ class DiscordNotificationDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(sent), 1)
         self.assertEqual(sent[0]["embeds"][0].title, "Skipping")
 
+    async def test_routine_web_controls_are_quiet_but_skip_is_announced(self) -> None:
+        from local_cogs.djgoowelcome.djgoowelcome import DjGooWelcome
+
+        sent = []
+        handled = []
+        cog = DjGooWelcome.__new__(DjGooWelcome)
+
+        async def send_payload(payload):
+            sent.append(payload)
+
+        async def handle(item):
+            handled.append(item)
+
+        cog._send_webhook_payload = send_payload
+        cog._audio_bridge = SimpleNamespace(handle=handle)
+
+        await cog._handle_queued_item(
+            {"source": "web_remote", "intent": "toggle_pause", "query": "", "value": 0}
+        )
+        await cog._handle_queued_item(
+            {"source": "web_remote", "intent": "skip", "query": "", "value": 0}
+        )
+
+        self.assertEqual(len(handled), 2)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("Skipping", sent[0]["content"])
+
 
 @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
 class DiscordDeckDeduplicationTests(unittest.IsolatedAsyncioTestCase):
@@ -82,7 +109,7 @@ class DiscordDeckDeduplicationTests(unittest.IsolatedAsyncioTestCase):
             "uri": "https://www.youtube.com/watch?v=abcdefghijk",
             "duration_seconds": "180",
         }
-        bridge._should_reject_playing_track = lambda _data: False
+        bridge._should_reject_playing_track = lambda _data, **_kwargs: False
         bridge._best_text_channel = lambda _guild: channel
         bridge._mode_for_track = lambda _guild_id, _track: "PLAYBACK"
         bridge._active_request_details = lambda _guild_id: {}

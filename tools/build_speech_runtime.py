@@ -24,6 +24,40 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def verify_bundle(bundle: Path, manifest: dict[str, object]) -> None:
+    raw_files = manifest.get("files")
+    if not isinstance(raw_files, list) or not raw_files:
+        raise SpeechRuntimeBuildError("Speech runtime manifest contains no files")
+    listed = {
+        str(item.get("path") or ""): item
+        for item in raw_files
+        if isinstance(item, dict)
+    }
+    if len(listed) != len(raw_files) or "" in listed:
+        raise SpeechRuntimeBuildError("Speech runtime manifest contains invalid file entries")
+    with zipfile.ZipFile(bundle, "r") as archive:
+        if archive.testzip() is not None:
+            raise SpeechRuntimeBuildError("Speech runtime ZIP failed its integrity check")
+        names = [info.filename for info in archive.infolist() if not info.is_dir()]
+        if len(names) != len(set(names)) or set(names) != set(listed):
+            raise SpeechRuntimeBuildError(
+                "Speech runtime ZIP membership does not match its manifest"
+            )
+        for name in names:
+            data = archive.read(name)
+            metadata = listed[name]
+            raw_size = metadata.get("size")
+            expected_size = int(raw_size) if raw_size is not None else -1
+            if len(data) != expected_size:
+                raise SpeechRuntimeBuildError(f"Speech runtime size mismatch for {name}")
+            if _sha256(data) != str(metadata.get("sha256") or "").lower():
+                raise SpeechRuntimeBuildError(f"Speech runtime hash mismatch for {name}")
+
+
 def build(layer: Path, output_zip: Path, output_manifest: Path, version: str) -> dict[str, object]:
     layer = layer.resolve()
     site_packages = layer / "Lib" / "site-packages"
@@ -43,12 +77,13 @@ def build(layer: Path, output_zip: Path, output_manifest: Path, version: str) ->
     ) as archive:
         for path in files:
             relative = Path("runtime") / "speech" / path.relative_to(layer)
-            archive.write(path, relative.as_posix())
+            data = path.read_bytes()
+            archive.writestr(relative.as_posix(), data)
             entries.append(
                 {
                     "path": relative.as_posix(),
-                    "size": path.stat().st_size,
-                    "sha256": sha256_file(path),
+                    "size": len(data),
+                    "sha256": _sha256(data),
                 }
             )
     normalized = version.strip().lstrip("v")
@@ -63,6 +98,7 @@ def build(layer: Path, output_zip: Path, output_manifest: Path, version: str) ->
         "runtime_generation": 4,
         "files": entries,
     }
+    verify_bundle(output_zip, manifest)
     temporary = output_manifest.with_suffix(output_manifest.suffix + ".tmp")
     temporary.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, output_manifest)

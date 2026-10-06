@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net6.0-windows</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>DjGoo</AssemblyName>
+    <ApplicationIcon>..\assets\djgoo.ico</ApplicationIcon>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\DjGoo.Product.Core\DjGoo.Product.Core.csproj" />
+    <EmbeddedResource Include="..\assets\djgoo-256.png" LogicalName="DjGoo.Brand.png" />
+  </ItemGroup>
+</Project>

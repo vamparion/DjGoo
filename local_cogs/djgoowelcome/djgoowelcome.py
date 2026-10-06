@@ -41,6 +41,36 @@ from .helpers import (
 
 
 log = logging.getLogger("red.djgoowelcome")
+
+
+def discord_gateway_connected(bot: Any) -> bool:
+    if not bot.is_ready():
+        return False
+    shards = getattr(bot, "shards", {})
+    for shard in shards.values():
+        is_closed = getattr(shard, "is_closed", None)
+        if callable(is_closed):
+            if is_closed():
+                return False
+            continue
+        websocket = getattr(shard, "ws", None)
+        if websocket is None or bool(getattr(websocket, "closed", True)):
+            return False
+    return True
+
+
+def resolve_command_queue_path(
+    project_root: Path, configured: object, filename: str, *, native_host: bool
+) -> Path:
+    if native_host:
+        return project_root / "data" / filename
+    text = str(configured or "").strip()
+    if text:
+        path = Path(text)
+        return path if path.is_absolute() else project_root / path
+    return project_root / "data" / filename
+
+
 FAST_CONTROL_INTENTS = {
     "skip",
     "stop",
@@ -52,6 +82,26 @@ FAST_CONTROL_INTENTS = {
     "seek",
     "remove_queue",
     "shuffle_queue",
+}
+QUIET_WEB_INTENTS = {
+    "queue",
+    "pause",
+    "resume",
+    "toggle_pause",
+    "stop",
+    "stop_radio",
+    "volume_up",
+    "volume_down",
+    "station_like_current",
+    "station_more_like_current",
+    "station_less_like_current",
+    "station_ban_current",
+    "save_current_to_playlist",
+    "save_last_to_playlist",
+    "gaming_undo",
+    "mini_queue_remove",
+    "mini_queue_reorder",
+    "mini_queue_insert",
 }
 DESTRUCTIVE_REMOTE_INTENTS = {
     "clear_queue",
@@ -86,6 +136,7 @@ class DjGooWelcome(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+        self._discord_gateway_connected = False
         self._last_sent: Dict[Tuple[int, int], float] = {}
         self._cooldown_seconds = 300
         self._audio_bridge = EnhancedDjGooAudioBridge(
@@ -117,6 +168,8 @@ class DjGooWelcome(commands.Cog):
             native_play_command.callback = native_play_callback
             with contextlib.suppress(AttributeError):
                 del native_play_command._djgoo_playlist_routing
+            with contextlib.suppress(AttributeError):
+                del native_play_command._djgoo_original_callback
         self._queue_task.cancel()
         if self._gateway_task is not None:
             self._gateway_task.cancel()
@@ -128,6 +181,26 @@ class DjGooWelcome(commands.Cog):
         if user_id is None:
             return
         await asyncio.to_thread(self._pairing_store.delete_user, int(user_id))
+
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        self._discord_gateway_connected = True
+
+    @commands.Cog.listener()
+    async def on_shard_ready(self, _shard_id: int) -> None:
+        self._discord_gateway_connected = True
+
+    @commands.Cog.listener()
+    async def on_shard_resumed(self, _shard_id: int) -> None:
+        self._discord_gateway_connected = True
+
+    @commands.Cog.listener()
+    async def on_disconnect(self) -> None:
+        self._discord_gateway_connected = False
+
+    @commands.Cog.listener()
+    async def on_shard_disconnect(self, _shard_id: int) -> None:
+        self._discord_gateway_connected = False
 
     def _secrets_path(self) -> Path:
         configured = os.environ.get("DJGOO_SECRETS_FILE")
@@ -202,21 +275,22 @@ class DjGooWelcome(commands.Cog):
                 member = await guild.fetch_member(identity.user_id)
         if member is None:
             return AuthorizationResult(False, "The paired Discord member is not available")
-        voice_state = getattr(member, "voice", None)
-        member_channel = getattr(voice_state, "channel", None)
-        if member_channel is None and intent != "state.read":
-            return AuthorizationResult(False, "Join a Discord voice channel before using DjGoo Voice")
-
         voice_client = getattr(guild, "voice_client", None)
         bot_channel = getattr(voice_client, "channel", None)
+        permissions = getattr(member, "guild_permissions", None)
+        is_owner = int(member.id) == int(guild.owner_id)
+        is_manager = bool(getattr(permissions, "manage_guild", False)) or is_owner
+        voice_state = getattr(member, "voice", None)
+        member_channel = getattr(voice_state, "channel", None)
+        if member_channel is None and bot_channel is not None and is_manager:
+            member_channel = bot_channel
+        if member_channel is None and intent != "state.read":
+            return AuthorizationResult(False, "Join a Discord voice channel before using DjGoo Voice")
         if bot_channel is not None and member_channel is not None and int(bot_channel.id) != int(member_channel.id):
             return AuthorizationResult(False, "Join the same voice channel as DjGoo")
         if bot_channel is None and intent != "state.read" and intent not in JOINING_REMOTE_INTENTS:
             return AuthorizationResult(False, "Start a song or radio station before using that control")
 
-        permissions = getattr(member, "guild_permissions", None)
-        is_owner = int(member.id) == int(guild.owner_id)
-        is_manager = bool(getattr(permissions, "manage_guild", False)) or is_owner
         actor_role = "host" if is_owner else ("moderator" if is_manager else "member")
         if intent in DESTRUCTIVE_REMOTE_INTENTS and not is_manager:
             return AuthorizationResult(False, "That command requires Manage Server or server ownership")
@@ -280,25 +354,30 @@ class DjGooWelcome(commands.Cog):
         }
         return state
 
+    async def _remote_search(self, _identity: DeviceIdentity, query: str, limit: int) -> list[dict[str, Any]]:
+        return await self._audio_bridge.search_candidates(query, limit=limit)
+
     def _cooldown_key(self, member, channel) -> Tuple[int, int]:
         return (int(member.id), int(channel.id))
 
     def _queue_path(self) -> Path:
         secrets = load_secrets(self._secrets_path())
         voice = secrets.get("voice", {}) if isinstance(secrets.get("voice", {}), dict) else {}
-        configured = voice.get("queue_path", "")
-        if configured:
-            configured_path = Path(str(configured))
-            return configured_path if configured_path.is_absolute() else PROJECT_ROOT / configured_path
-        return PROJECT_ROOT / "data" / "voice-command-queue.jsonl"
+        return resolve_command_queue_path(
+            PROJECT_ROOT,
+            voice.get("queue_path", ""),
+            "voice-command-queue.jsonl",
+            native_host=os.environ.get("DJGOO_NATIVE_HOST") == "1",
+        )
 
     def _remote_queue_path(self) -> Path:
         settings = self._gateway_settings()
-        configured = str(settings.get("queue_path") or "").strip()
-        if configured:
-            path = Path(configured)
-            return path if path.is_absolute() else PROJECT_ROOT / path
-        return PROJECT_ROOT / "data" / "remote-command-queue.jsonl"
+        return resolve_command_queue_path(
+            PROJECT_ROOT,
+            settings.get("queue_path"),
+            "remote-command-queue.jsonl",
+            native_host=os.environ.get("DJGOO_NATIVE_HOST") == "1",
+        )
 
     def _is_on_cooldown(self, member, channel) -> bool:
         key = self._cooldown_key(member, channel)
@@ -387,7 +466,10 @@ class DjGooWelcome(commands.Cog):
         )
         source = str(item.get("source") or "")
         command_id = str(item.get("command_id") or "")
-        if source != "mini_player":
+        quiet_web_control = source in {"panel", "web_remote"} and item.get("intent") in QUIET_WEB_INTENTS
+        if quiet_web_control:
+            log_event("discord.web_control.notification_suppressed", intent=item.get("intent"), source=source)
+        elif source != "mini_player":
             if item.get("intent") not in FAST_CONTROL_INTENTS:
                 await self._send_webhook_payload(build_voice_command_payload(item))
             else:
@@ -440,6 +522,7 @@ class DjGooWelcome(commands.Cog):
         await self._audio_bridge.resume_saved_playback()
         next_heartbeat = 0.0
         queue_paths = (self._queue_path(), self._remote_queue_path())
+        log_event("voice.queue.ready", paths=[str(path) for path in queue_paths])
         while True:
             try:
                 now = time.monotonic()
@@ -448,7 +531,10 @@ class DjGooWelcome(commands.Cog):
                         "redbot.heartbeat",
                         guild_count=len(self.bot.guilds),
                         audio_loaded=self.bot.get_cog("Audio") is not None,
-                        discord_ready=self.bot.is_ready(),
+                        discord_ready=(
+                            self._discord_gateway_connected
+                            and discord_gateway_connected(self.bot)
+                        ),
                         voice_gateway_ready=self._gateway_ready,
                     )
                     publish_state = getattr(
@@ -503,7 +589,7 @@ class DjGooWelcome(commands.Cog):
         """Start or stop a persistent, station-specific DjGoo radio."""
         seed = seed.strip()
         if not seed:
-            await ctx.send("Choose a station seed, for example `!radio 80s`.")
+            await ctx.send("Choose a station seed, such as an artist, song, genre, or playlist.")
             return
         parsed = parse_command(f"radio {seed}", require_wake=False)
         item = command_to_queue_item(

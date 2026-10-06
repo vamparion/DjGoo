@@ -1,5 +1,5 @@
 import type { ControlState } from "./types";
-import { isRemoteDirectConnected, remoteCommand, remoteState, requestDirectReconnect, subscribeDirectConnection, subscribeRemoteState, type WebCredential } from "./remoteTransport";
+import { isRemoteDirectConnected, remoteCommand, remoteMusicSearch, remoteState, requestDirectReconnect, subscribeDirectConnection, subscribeRemoteState, type WebCredential } from "./remoteTransport";
 
 const API_BASE = import.meta.env.VITE_DJGOO_API_BASE || "";
 const PROFILE_KEY = "djgoo-profile";
@@ -141,6 +141,15 @@ export async function revokePlayer(discordUserId: string, guildId = "15130111812
   });
 }
 
+export async function setPairedPlayerRole(discordUserId: string, role: string, guildId = "1513011181202309290") {
+  if (remoteCredential) throw new Error("Player access is managed from the host control panel.");
+  const profile = savedProfile();
+  return request<{ ok: true; updated: number }>("/api/player/role", {
+    method: "POST",
+    body: JSON.stringify({ token: profile?.token || "", discord_user_id: discordUserId, guild_id: guildId, role }),
+  });
+}
+
 export async function stationAction(action: string, payload: Record<string, unknown>) {
   if (remoteCredential) return remoteCommand(remoteCredential, "remote_station_action", { payload: { action, ...payload } });
   const profile = savedProfile();
@@ -182,6 +191,18 @@ export async function searchNuclear(query: string) {
   return request<{ ok: true; query: string; result: string | null }>(`/api/search?q=${encodeURIComponent(query)}`);
 }
 
+export type MusicSearchResult = {
+  id: string; title: string; artist: string; uri: string; duration_seconds: number;
+  artwork_url?: string; source?: string;
+};
+
+export async function searchMusic(query: string) {
+  if (remoteCredential) {
+    return await remoteMusicSearch(remoteCredential, query, 12) as { query: string; results: MusicSearchResult[] };
+  }
+  return request<{ ok: true; query: string; results: MusicSearchResult[] }>(`/api/music/search?q=${encodeURIComponent(query)}`);
+}
+
 export async function resetDjGoo() {
   if (remoteCredential) throw new Error("Recovery is available from the Windows Control Center.");
   return request<{ ok: true }>("/api/system/reset", { method: "POST", body: "{}" });
@@ -213,6 +234,7 @@ function remoteIntent(action: string) {
     ban: "station_ban_current",
     save_current: "mini_playlist_add_current",
     remove_queue: "mini_queue_remove",
+    queue_insert: "mini_queue_insert",
     undo: "mini_queue_undo",
   };
   return mapped[action] || action;

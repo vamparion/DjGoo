@@ -124,6 +124,20 @@ def test_startup_forces_audio_and_djgoo_cogs_from_absolute_path(tmp_path: Path) 
     assert tuple(argv[load_index:]) == STARTUP_COGS == ("audio", "djgoowelcome")
 
 
+def test_startup_uses_active_layer_cogs(tmp_path: Path) -> None:
+    version = "0.3.0-alpha.29"
+    app = tmp_path / "app" / version
+    (app / "local_cogs" / "djgoowelcome").mkdir(parents=True)
+    (tmp_path / "current.json").write_text(
+        json.dumps({"schema": 1, "version": version, "path": f"app/{version}"}),
+        encoding="utf-8",
+    )
+
+    argv = redbot_argv(tmp_path)
+
+    assert Path(argv[argv.index("--cog-path") + 1]) == (app / "local_cogs").resolve()
+
+
 def test_console_preflight_repairs_old_list_schema(tmp_path: Path, monkeypatch) -> None:
     config_dir = red_config_dir(tmp_path)
     config_dir.mkdir(parents=True)

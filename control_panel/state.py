@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -66,23 +68,36 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
         if str((health.get(name) or {}).get("status") or "") != "online"
     ]
     current = now_playing.get("current") if isinstance(now_playing.get("current"), dict) else {}
+    current = _hydrate_track_metadata(project_root, current)
+    playback_state = str(now_playing.get("playback_state") or "idle")
+    position_ms = int(now_playing.get("position_ms") or 0)
+    if not position_ms:
+        position_ms = int(float(now_playing.get("position_seconds") or 0) * 1000)
+    sampled_at = float(now_playing.get("started_at") or measured_at)
+    if playback_state == "playing":
+        position_ms += max(0, int((measured_at - sampled_at) * 1000))
     live_queue = now_playing.get("queue") if isinstance(now_playing.get("queue"), list) else []
     gaming = GamingSessionStore(project_root / "data" / "djgoo-gaming-session.json")
-    history = MiniPlayerHistory(project_root / "data" / "djgoo-mini-history.json").entries()
+    history = _hydrate_history_metadata(
+        project_root,
+        MiniPlayerHistory(project_root / "data" / "djgoo-mini-history.json").entries(),
+    )
     players = _paired_players(project_root, active_guild_id)
     return {
         "playback": {
+            "track_id": str(current.get("id") or ""),
             "title": str(current.get("title") or last_title),
             "artist": str(current.get("artist") or ""),
+            "artwork_url": str(current.get("artwork_url") or ""),
             "station": str((now_playing.get("station_details") or {}).get("name") or (active_station["name"] if active_station else "")),
             "source": str(now_playing.get("mode") or ("Station memory" if last_title else "")),
             "remaining": str(now_playing.get("progress_text") or ""),
             "queue_count": len(live_queue),
             "requester": str(now_playing.get("requester") or ""),
-            "state": str(now_playing.get("playback_state") or "idle"),
-            "position_ms": int(now_playing.get("position_seconds") or 0) * 1000,
+            "state": playback_state,
+            "position_ms": position_ms,
             "duration_ms": int(current.get("duration_seconds") or 0) * 1000,
-            "playing": str(now_playing.get("playback_state") or "idle") == "playing",
+            "playing": playback_state == "playing",
             "measured_at": measured_at,
             "volume": int(now_playing.get("volume") or 0),
         },
@@ -133,6 +148,64 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
     }
 
 
+def _hydrate_history_metadata(
+    project_root: Path,
+    entries: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    metadata = _cached_media_metadata(project_root)
+    if not metadata:
+        return entries
+    hydrated: List[Dict[str, Any]] = []
+    for entry in entries:
+        hydrated.append(_hydrate_track_metadata(project_root, entry, metadata=metadata))
+    return hydrated
+
+
+def _cached_media_metadata(project_root: Path) -> Dict[str, Any]:
+    cache = project_root / "cache" / "localtracks"
+    metadata = read_json_file(cache / "metadata.json", {})
+    streams = read_json_file(cache / "streams.json", {})
+    hints = read_json_file(cache / "source-hints.json", {})
+    by_source = {
+        str(value.get("source_uri") or key): value
+        for document in (metadata, streams, hints)
+        for key, value in document.items()
+        if isinstance(value, dict) and str(value.get("source_uri") or key).startswith(("https://", "http://"))
+    }
+    return {**metadata, **{source: value for source, value in by_source.items()}}
+
+
+def _hydrate_track_metadata(
+    project_root: Path,
+    track: Dict[str, Any],
+    *,
+    metadata: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    item = dict(track)
+    metadata = metadata if metadata is not None else _cached_media_metadata(project_root)
+    uri = str(item.get("uri") or "").replace("\\", "/")
+    cached = metadata.get(uri) or metadata.get(uri.rsplit("/", 1)[-1])
+    if not isinstance(cached, dict):
+        return item
+    source_uri = str(cached.get("source_uri") or "").strip()
+    if source_uri.startswith(("https://", "http://")):
+        item["uri"] = source_uri
+        item["source_uri"] = source_uri
+    elif "localtracks" in uri.casefold():
+        item.pop("uri", None)
+    artist = str(item.get("artist") or "").strip()
+    if not artist or artist.casefold() == "unknown artist":
+        item["artist"] = str(cached.get("artist") or artist)
+    title = str(item.get("title") or "").strip()
+    if not title or title.casefold() in {"unknown title", "unknown track"}:
+        item["title"] = str(cached.get("title") or title)
+    if not item.get("artwork_url") and cached.get("artwork_url"):
+        item["artwork_url"] = cached["artwork_url"]
+    if not item.get("duration_seconds") and cached.get("duration_seconds"):
+        item["duration_seconds"] = cached["duration_seconds"]
+    return item
+
+
 def build_remote_state_snapshot(project_root: Path, *, privileged: bool = False) -> Dict[str, Any]:
     """Return the immediately useful state that fits Discord's inline relay."""
     full = build_state_snapshot(project_root)
@@ -166,7 +239,7 @@ def build_remote_state_snapshot(project_root: Path, *, privileged: bool = False)
         "players": list(full.get("players") or []) if privileged else [],
         "logs": {},
         "timeline": list(full.get("timeline") or [])[:4] if privileged else [],
-        "history": [],
+        "history": list(full.get("history") or [])[:50],
         "capabilities": {
         "system_management": False,
         "diagnostics": privileged,
@@ -324,10 +397,8 @@ def _heartbeat_status(
     *,
     max_age_seconds: float,
 ) -> Dict[str, Any] | None:
-    heartbeat = read_json_file(
-        project_root / "data" / "health" / f"{component}.json",
-        {},
-    )
+    health_root = Path(os.environ.get("DJGOO_HEALTH_DIR") or project_root / "data" / "health")
+    heartbeat = read_json_file(health_root / f"{component}.json", {})
     if not heartbeat:
         return None
     try:
@@ -374,6 +445,24 @@ def _component_status(
 
 
 def build_health(project_root: Path) -> Dict[str, Any]:
+    if os.environ.get("DJGOO_NATIVE_HOST") == "1":
+        red = _heartbeat_status(project_root, "redbot", max_age_seconds=120.0) or {
+            "status": "starting", "detail": "Music heartbeat is pending", "source": "heartbeat"
+        }
+        try:
+            with socket.create_connection(("::1", 2333), timeout=0.35):
+                lavalink = {"status": "online", "detail": "Audio Engine is accepting connections", "source": "socket"}
+        except OSError:
+            lavalink = {"status": "starting", "detail": "Audio Engine is starting", "source": "socket"}
+        voice = _heartbeat_status(project_root, "voice", max_age_seconds=90.0) or {
+            "status": "online", "detail": "Optional speech runtime is not active", "source": "optional"
+        }
+        return {
+            "redbot": red,
+            "lavalink": lavalink,
+            "voice": voice,
+            "web": {"status": "online", "detail": "Web remote is serving this request", "source": "service"},
+        }
     return {
         "redbot": _component_status(
             project_root,
@@ -489,6 +578,8 @@ def _active_station(data: Dict[str, Any]) -> Dict[str, Any] | None:
 
 
 def _process_status(process_name: str, command_marker: str) -> Dict[str, Any]:
+    if os.environ.get("DJGOO_NATIVE_HOST") == "1":
+        return {"status": "unknown", "detail": "Native Host owns component state", "source": "native-host"}
     script = (
         "Get-CimInstance Win32_Process | "
         f"Where-Object {{$_.Name -eq '{process_name}' -and $_.CommandLine -like '*{command_marker}*'}} | "

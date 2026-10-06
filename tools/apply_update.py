@@ -14,7 +14,7 @@ from ctypes import wintypes
 from pathlib import Path, PurePosixPath
 from typing import Callable, Iterable, Mapping
 
-from tools.app_layout import active_app_root, runtime_python
+from tools.app_layout import active_app_root, is_source_checkout, runtime_python
 from tools.portable_environment import portable_environment
 
 
@@ -576,6 +576,10 @@ def restart_launcher(root: Path, log: Callable[[str], None]) -> None:
 
 def run_update(root: Path, bundle: Path, manifest_path: Path, parent_pid: int) -> int:
     root = root.resolve()
+    if is_source_checkout(root):
+        raise UpdateApplyError(
+            "Developer Mode checkouts cannot be modified by the DjGoo production updater."
+        )
     logs_dir = root / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     log_path = logs_dir / "update.log"

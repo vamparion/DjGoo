@@ -53,6 +53,12 @@ async def handle_host_envelope(
             result = await processor.remote_state(
                 str(payload.get("device_token") or ""),
             )
+        elif action == "web/search":
+            result = await processor.search(
+                str(payload.get("device_token") or ""),
+                str(payload.get("query") or ""),
+                limit=int(payload.get("limit") or 12),
+            )
         elif action == "webrtc/signal":
             result = await processor.webrtc_signal(payload)
         else:

@@ -22,6 +22,7 @@ from voice.sqlite_stations import SqliteDjGooStations
 from voice.mini_player_protocol import MiniPlayerHistory
 from voice.pairing_store import PairingStore
 from voice.tls_identity import ensure_tls_identity
+from voice.media_policy import candidates_from_ytmusic, ranked_search_candidates
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -40,6 +41,11 @@ def create_handler_class(project_root: Path, static_root: Path | None = None):
 class ControlPanelHandler(BaseHTTPRequestHandler):
     root: Path = PROJECT_ROOT
     static_root: Path = PROJECT_ROOT / "control_panel_dist"
+
+    def log_message(self, format: str, *args: object) -> None:
+        if self.path in {"/api/healthz", "/api/state"}:
+            return
+        super().log_message(format, *args)
 
     @classmethod
     def route_get(cls, path: str) -> Tuple[int, Dict[str, Any]]:
@@ -61,6 +67,11 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                 return 400, error("Missing search query")
             resolved = NuclearResolver().resolve_track_query(query)
             return 200, ok({"query": query, "result": resolved})
+        if parsed.path == "/api/music/search":
+            query = _query_param(parsed.query, "q").strip()
+            if not query:
+                return 400, error("Missing search query")
+            return 200, ok({"query": query, "results": search_music_candidates(query)})
         if parsed.path == "/api/backup":
             snapshot = build_state_snapshot(cls.root)
             return 200, ok({"backup": {key: snapshot.get(key) for key in ("playlists", "stations", "gaming", "timeline")}})
@@ -91,10 +102,11 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                     str(payload.get("username") or ""),
                     role=role,
                     device_id=str(payload.get("device_id") or ""),
+                    resume_existing=is_local,
                 )
                 return 200, ok({"profile": profile})
             profile = gaming.profile(str(payload.get("token") or ""))
-            actor_role = str((profile or {}).get("role") or ("host" if is_local else "guest"))
+            actor_role = "host" if is_local else str((profile or {}).get("role") or "guest")
             if path == "/api/settings":
                 return 200, ok({"settings": gaming.update_settings(0, payload.get("settings") or {}, actor_role=actor_role)})
             if path == "/api/audio-input":
@@ -122,6 +134,13 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                 guild_id = int(str(payload.get("guild_id") or "1513011181202309290"))
                 pairing = PairingStore(cls.root / "data" / "djgoo-pairing.db", cls.root / "data" / "djgoo-pairing-secret.bin")
                 return 200, ok({"revoked": pairing.revoke_web_devices(user_id, guild_id)})
+            if path == "/api/player/role":
+                if not is_local or actor_role != "host":
+                    raise PermissionError("Only the local DjGoo host can manage player access")
+                user_id = int(str(payload.get("discord_user_id") or "0"))
+                guild_id = int(str(payload.get("guild_id") or "1513011181202309290"))
+                pairing = PairingStore(cls.root / "data" / "djgoo-pairing.db", cls.root / "data" / "djgoo-pairing-secret.bin")
+                return 200, ok({"updated": pairing.set_user_role(user_id, guild_id, str(payload.get("role") or "member"))})
             if path == "/api/command":
                 command = dict(payload)
                 command.update(
@@ -144,6 +163,7 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                 elif action == "restore": result = stations.restore_snapshot(seed, str(payload.get("snapshot_id") or ""))
                 elif action == "clone": result = stations.clone(seed, str(payload.get("new_seed") or ""))
                 elif action == "merge": result = stations.merge([str(value) for value in payload.get("seeds", [])], str(payload.get("new_seed") or ""))
+                elif action == "delete": result = stations.delete(seed)
                 else: return 404, error("Unknown station action", status=404)
                 return 200, ok({"result": result})
             if path.startswith("/api/playlist/"):
@@ -152,11 +172,13 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                 name = str(payload.get("playlist") or "")
                 playlists = DjGooPlaylists(cls.root / "data" / "djgoo-playlists.json")
                 action = path.rsplit("/", 1)[-1]
-                if action == "metadata": result = playlists.update_metadata(name, payload.get("metadata") or {})
+                if action == "create": result = dict(zip(("name", "created"), playlists.create(name)))
+                elif action == "metadata": result = playlists.update_metadata(name, payload.get("metadata") or {})
                 elif action == "reorder": result = {"name": playlists.reorder_tracks(name, [str(value) for value in payload.get("track_ids", [])])}
                 elif action == "cleanup": result = playlists.cleanup(name)
                 elif action == "replace": result = {"name": playlists.replace_track(name, str(payload.get("track_id") or ""), payload.get("replacement") or {})}
                 elif action == "remove": result = dict(zip(("name", "removed"), playlists.remove_tracks(name, [str(value) for value in payload.get("track_ids", [])])))
+                elif action == "delete": result = {"name": playlists.delete(name)}
                 elif action == "import":
                     reviewed = [item for item in payload.get("tracks", []) if isinstance(item, dict)]
                     results = [playlists.add_track(name, item) for item in reviewed]
@@ -166,6 +188,17 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                     history = MiniPlayerHistory(cls.root / "data" / "djgoo-mini-history.json").entries()
                     results = [playlists.add_track(name, item) for item in reversed(history) if float(item.get("played_at") or 0) >= cutoff]
                     result = {"name": name, "added": sum(int(item.added) for item in results), "duplicates": sum(int(not item.added) for item in results)}
+                elif action == "history-add":
+                    track_id = str(payload.get("track_id") or "")
+                    history = MiniPlayerHistory(cls.root / "data" / "djgoo-mini-history.json").entries()
+                    track = next((item for item in history if str(item.get("id") or "") == track_id), None)
+                    if track is None:
+                        raise ValueError("That recent song is no longer available")
+                    added = playlists.add_track(name, track)
+                    result = {"name": added.playlist_name, "added": int(added.added), "duplicates": int(not added.added)}
+                elif action == "history-delete":
+                    removed = MiniPlayerHistory(cls.root / "data" / "djgoo-mini-history.json").remove(str(payload.get("track_id") or ""))
+                    result = {"removed": removed}
                 else: return 404, error("Unknown playlist action", status=404)
                 return 200, ok({"result": result})
             if path == "/api/system/reset":
@@ -245,15 +278,38 @@ def _query_param(query: str, name: str) -> str:
     return unquote(values[0])
 
 
+def search_music_candidates(query: str, *, limit: int = 12) -> List[Dict[str, Any]]:
+    from ytmusicapi import YTMusic
+
+    items = YTMusic().search(str(query).strip(), filter="songs", limit=max(12, limit * 2))
+    ranked = ranked_search_candidates(candidates_from_ytmusic(items or []), None)
+    results = []
+    for _score, candidate in ranked[: max(1, min(20, limit))]:
+        video_id = candidate.uri.split("v=", 1)[-1].split("&", 1)[0]
+        results.append(
+            {
+                "id": video_id or candidate.uri,
+                "title": candidate.title,
+                "artist": ", ".join(candidate.artists),
+                "uri": candidate.uri,
+                "duration_seconds": candidate.duration_seconds,
+                "artwork_url": f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg" if video_id else "",
+                "source": "YouTube Music",
+            }
+        )
+    return results
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project-root", default=str(PROJECT_ROOT))
+    parser.add_argument("--static-root")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--tls", action="store_true")
     args = parser.parse_args()
     root = Path(args.project_root).resolve()
-    handler = create_handler_class(root)
+    handler = create_handler_class(root, Path(args.static_root).resolve() if args.static_root else None)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     scheme = "http"
     if args.tls:

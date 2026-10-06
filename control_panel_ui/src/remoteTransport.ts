@@ -688,6 +688,16 @@ export async function remoteState(c: WebCredential) {
   }
 }
 
+export async function remoteMusicSearch(c: WebCredential, query: string, limit = 12) {
+  return await exchangeCredentialImpl(c, "web/search", {
+    device_token: c.device_token,
+    device_id: c.device_id,
+    guild_id: c.guild_id,
+    query,
+    limit,
+  });
+}
+
 let exchangeCredentialImpl = exchangeCredential;
 
 export async function remoteCommand(c: WebCredential, intent: string, values: Record<string, unknown> = {}) {

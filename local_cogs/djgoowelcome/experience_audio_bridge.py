@@ -45,6 +45,15 @@ PLAYBACK_INTENTS = {
     "mini_queue_play_now",
     "mini_stop_radio",
 }
+QUIET_WEB_INTENTS = {
+    "queue", "pause", "resume", "toggle_pause", "stop", "stop_radio",
+    "volume_up", "volume_down", "station_like_current",
+    "station_more_like_current", "station_less_like_current",
+    "station_ban_current", "save_current_to_playlist",
+    "save_last_to_playlist", "gaming_undo", "mini_queue_remove",
+    "mini_queue_reorder",
+    "mini_queue_insert",
+}
 
 
 class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
@@ -82,6 +91,10 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
     async def _notice(self, description: str) -> None:
         if self._mini_command_depth > 0:
             log_event("mini_player.notice.suppressed", description=description[:500])
+            return
+        command = _EXPERIENCE_COMMAND.get() or {}
+        if str(command.get("source") or "") in {"panel", "web_remote"} and str(command.get("intent") or "") in QUIET_WEB_INTENTS:
+            log_event("web_control.notice.suppressed", intent=command.get("intent"), description=description[:500])
             return
         await super()._notice(description)
 
@@ -126,6 +139,7 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             "mini_queue_move_next",
             "mini_queue_play_now",
             "mini_queue_reorder",
+            "mini_queue_insert",
             "mini_queue_remove_many",
             "mini_queue_shuffle",
             "mini_queue_shuffle_requests",
@@ -209,16 +223,19 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             elif action == "restore": result = self.stations.restore_snapshot(seed, str(payload.get("snapshot_id") or ""))
             elif action == "clone": result = self.stations.clone(seed, str(payload.get("new_seed") or ""))
             elif action == "merge": result = self.stations.merge([str(value) for value in payload.get("seeds", [])], str(payload.get("new_seed") or ""))
+            elif action == "delete": result = self.stations.delete(seed)
             else: return {"status": "failed", "message": "Unknown station action."}
             return {"status": "completed", "message": "Station updated.", "result": result}
         if intent == "remote_playlist_action":
             action = str(payload.get("action") or "")
             name = str(payload.get("playlist") or "")
-            if action == "metadata": result = self.playlists.update_metadata(name, payload.get("metadata") or {})
+            if action == "create": result = dict(zip(("name", "created"), self.playlists.create(name)))
+            elif action == "metadata": result = self.playlists.update_metadata(name, payload.get("metadata") or {})
             elif action == "reorder": result = {"name": self.playlists.reorder_tracks(name, [str(value) for value in payload.get("track_ids", [])])}
             elif action == "cleanup": result = self.playlists.cleanup(name)
             elif action == "replace": result = {"name": self.playlists.replace_track(name, str(payload.get("track_id") or ""), payload.get("replacement") or {})}
             elif action == "remove": result = dict(zip(("name", "removed"), self.playlists.remove_tracks(name, [str(value) for value in payload.get("track_ids", [])])))
+            elif action == "delete": result = {"name": self.playlists.delete(name)}
             elif action == "import":
                 reviewed = [value for value in payload.get("tracks", []) if isinstance(value, dict)]
                 changes = [self.playlists.add_track(name, value) for value in reviewed]
@@ -227,6 +244,15 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                 cutoff = time.time() - max(60, int(payload.get("seconds") or 3600))
                 changes = [self.playlists.add_track(name, value) for value in reversed(self.mini_history.entries()) if float(value.get("played_at") or 0) >= cutoff]
                 result = {"name": name, "added": sum(int(value.added) for value in changes), "duplicates": sum(int(not value.added) for value in changes)}
+            elif action == "history-add":
+                track_id = str(payload.get("track_id") or "")
+                track = next((value for value in self.mini_history.entries() if str(value.get("id") or "") == track_id), None)
+                if track is None:
+                    return {"status": "failed", "message": "That recent song is no longer available."}
+                added = self.playlists.add_track(name, track)
+                result = {"name": added.playlist_name, "added": int(added.added), "duplicates": int(not added.added)}
+            elif action == "history-delete":
+                result = {"removed": self.mini_history.remove(str(payload.get("track_id") or ""))}
             else: return {"status": "failed", "message": "Unknown playlist action."}
             return {"status": "completed", "message": "Playlist updated.", "result": result}
         return {"status": "failed", "message": "Unknown DjGoo management action."}
@@ -698,6 +724,52 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         if intent in {"mini_stop_radio", "stop_radio"}:
             return await self._stop_radio_keep_requests(audio, ctx)
 
+        if intent == "mini_queue_insert":
+            query = str(item.get("query") or "").strip()
+            if not query:
+                return {"status": "failed", "message": "That song no longer has a playable source."}
+            insertion_index = max(0, int(payload.get("index") or 0))
+            track_hint = payload.get("track") if isinstance(payload.get("track"), dict) else {}
+            self._remember_source_hint(query, track_hint)
+            try:
+                existing_player = lavalink.get_player(guild_id)
+                before_ids = {self._stable_track_id(track) for track in list(existing_player.queue)}
+            except (NodeNotFound, PlayerNotFound):
+                before_ids = set()
+            self._pending_request_context[guild_id] = self._request_metadata(ctx, timing="next", item=item)
+            self._pending_request_context[guild_id]["source"] = str(item.get("source") or "panel")
+            try:
+                result = await self._handle_timed_request(
+                    audio,
+                    ctx,
+                    query=query,
+                    source=str(item.get("source") or "panel"),
+                    timing="next",
+                )
+            finally:
+                self._pending_request_context.pop(guild_id, None)
+            try:
+                player = lavalink.get_player(guild_id)
+            except (NodeNotFound, PlayerNotFound):
+                return result
+            added = next((track for track in list(player.queue) if self._stable_track_id(track) not in before_ids), None)
+            if added is None:
+                current = getattr(player, "current", None)
+                if current is not None and self._track_identity(current) == self._track_identity({"uri": query}):
+                    return {"status": "completed", "message": "Started the requested song because the queue was idle."}
+                return result
+            self._remember_queue(guild_id, player)
+            queue = [track for track in list(player.queue) if track is not added]
+            queue.insert(min(insertion_index, len(queue)), added)
+            player.queue.clear()
+            player.queue.extend(queue)
+            self._persist_player_state(guild_id, reason="mini_queue_insert")
+            self._record_queue_transaction(guild_id, player, action="insert", reason="Dropped into queue")
+            return {
+                "status": "completed",
+                "message": f"Added {getattr(added, 'title', 'track')} at queue position {min(insertion_index, len(queue) - 1) + 1}.",
+            }
+
         try:
             player = lavalink.get_player(guild_id)
         except (NodeNotFound, PlayerNotFound):
@@ -942,7 +1014,8 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         force: bool = False,
     ) -> None:
         data = self._track_data(track)
-        if self._should_reject_playing_track(data):
+        reject_title = self._mode_for_track(guild.id, track) == "RADIO"
+        if self._should_reject_playing_track(data, reject_title=reject_title):
             log_event(
                 "discord.deck.blocked_bad_track",
                 guild_id=guild.id,
@@ -1139,9 +1212,7 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                 else "playback"
             ),
         )
-        position = int(getattr(player, "position", 0) or 0)
-        if position > max(10_000, int(current.get("duration_seconds") or 0) * 10):
-            position //= 1000
+        position = self._player_position_seconds(player, current)
         station_payload = None
         if station is not None:
             station_mode = str(station.get("mode") or "").strip().lower()
@@ -1170,6 +1241,7 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                 "artwork_url": current["artwork_url"],
                 "duration_seconds": current["duration_seconds"],
                 "position_seconds": max(0, position),
+                "position_ms": max(0, int(getattr(player, "position", 0) or 0)),
                 "started_at": time.time(),
                 "paused": bool(getattr(player, "paused", False)),
                 "volume": int(getattr(player, "volume", 0) or 0),

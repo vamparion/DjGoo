@@ -14,7 +14,7 @@ ACTION_TO_INTENT = {
     "start_radio": "start_radio",
     "stop_radio": "stop_radio",
     "skip": "skip",
-    "toggle_pause": "pause",
+    "toggle_pause": "toggle_pause",
     "pause": "pause",
     "resume": "resume",
     "stop": "stop",
@@ -33,6 +33,7 @@ ACTION_TO_INTENT = {
     "undo": "gaming_undo",
     "mute": "mini_mute",
     "remove_queue": "mini_queue_remove",
+    "queue_insert": "mini_queue_insert",
 }
 
 

@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Callable, Iterable, Mapping
 from urllib.parse import urlsplit
 
+from tools.app_layout import is_source_checkout
+
 
 OWNER = "vamparion"
 REPOSITORY = "DjGoo"
@@ -230,6 +232,11 @@ def select_update(
 
 
 def check_for_update(project_root: Path, token: str | None = None) -> UpdateOffer | None:
+    if is_source_checkout(project_root):
+        raise UpdateError(
+            "Developer Mode checkouts are not managed by the DjGoo production updater. "
+            "Use Git to update this checkout."
+        )
     installed = read_installed_version(project_root)
     return select_update(fetch_releases(token), installed)
 

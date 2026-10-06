@@ -50,7 +50,7 @@ export function RemoteApp({ invite }: { invite: string }) {
     return (
       <main className="remote-shell remote-pairing">
         <section className="remote-pair">
-          <div className="remote-brand-mark"><img src="./djgoo-mark.svg" alt="" /></div>
+          <div className="remote-brand-mark"><img src="./icons/djgoo-192.png" alt="" /></div>
           <span className="remote-kicker">PRIVATE PLAYER ACCESS</span>
           <h1>Connect to DjGoo</h1>
           <p>In Discord, run <strong>/djgoo web</strong>, then open the new private link on this device.</p>
@@ -77,7 +77,7 @@ export function RemoteApp({ invite }: { invite: string }) {
   return (
     <main className="remote-shell remote-pairing">
       <section className="remote-pair">
-        <div className="remote-brand-mark"><img src="./djgoo-mark.svg" alt="" /></div>
+        <div className="remote-brand-mark"><img src="./icons/djgoo-192.png" alt="" /></div>
         <span className="remote-kicker">PRIVATE PLAYER ACCESS</span>
         <h1>Connect to DjGoo</h1>
         <p>Use the same DjGoo controls from this device.</p>

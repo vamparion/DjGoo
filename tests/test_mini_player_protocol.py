@@ -61,6 +61,18 @@ def test_history_dedupes_repeated_track_start_events(tmp_path: Path) -> None:
     assert len(history.entries()) == 1
 
 
+def test_history_entry_can_be_removed_by_id(tmp_path: Path) -> None:
+    history = MiniPlayerHistory(tmp_path / "history.json")
+    history.add(
+        {"id": "bad-track", "title": "Wrong song", "uri": "https://example.test/wrong"},
+        mode="PLAYBACK",
+    )
+
+    assert history.remove("bad-track") is True
+    assert history.entries() == []
+    assert history.remove("bad-track") is False
+
+
 def test_playlist_creation_and_rich_duplicate_prevention(tmp_path: Path) -> None:
     playlists = DjGooPlaylists(tmp_path / "playlists.json")
     name, created = playlists.create("80s")
@@ -359,6 +371,70 @@ async def test_queue_reorder_and_remove_use_stable_track_ids(monkeypatch) -> Non
         "status": "completed",
         "message": "Removed 1 queued track(s).",
     }
+
+
+@pytest.mark.asyncio
+async def test_queue_insert_is_atomic_and_places_the_exact_new_track(monkeypatch) -> None:
+    from local_cogs.djgoowelcome import experience_audio_bridge as module
+
+    bridge = module.ExperienceDjGooAudioBridge.__new__(module.ExperienceDjGooAudioBridge)
+    bridge.bot = SimpleNamespace(get_cog=lambda _name: object())
+    bridge._context = lambda: SimpleNamespace(guild=SimpleNamespace(id=42), author=None)
+    bridge._queue_item_ids = {}
+    bridge._queue_undo = {}
+    bridge._pending_request_context = {}
+    bridge._request_metadata = lambda *_args, **_kwargs: {"requester_name": "Host"}
+    bridge._remember_queue = lambda *_args, **_kwargs: None
+    bridge._persist_player_state = lambda *_args, **_kwargs: None
+    bridge._record_queue_transaction = lambda *_args, **_kwargs: None
+    first = SimpleNamespace(title="First", uri="track:first")
+    last = SimpleNamespace(title="Last", uri="track:last")
+    inserted = SimpleNamespace(title="Dragged song", uri="track:exact")
+    player = SimpleNamespace(queue=[first, last], current=SimpleNamespace(title="Playing"))
+    monkeypatch.setattr(module.lavalink, "get_player", lambda _guild_id: player)
+
+    async def enqueue(_audio, _ctx, *, query, source, timing):
+        assert (query, source, timing) == ("track:exact", "panel", "next")
+        player.queue.append(inserted)
+        return "Queued"
+
+    bridge._handle_timed_request = enqueue
+    result = await bridge._handle_mini_intent(
+        {"intent": "mini_queue_insert", "source": "panel", "query": "track:exact", "payload": {"index": 1}}
+    )
+
+    assert result["status"] == "completed"
+    assert [track.title for track in player.queue] == ["First", "Dragged song", "Last"]
+
+
+@pytest.mark.asyncio
+async def test_queue_insert_starts_exact_drop_when_player_is_idle(monkeypatch) -> None:
+    from local_cogs.djgoowelcome import experience_audio_bridge as module
+
+    bridge = module.ExperienceDjGooAudioBridge.__new__(module.ExperienceDjGooAudioBridge)
+    bridge.bot = SimpleNamespace(get_cog=lambda _name: object())
+    bridge._context = lambda: SimpleNamespace(guild=SimpleNamespace(id=42), author=None)
+    bridge._pending_request_context = {}
+    bridge._request_metadata = lambda *_args, **_kwargs: {}
+    bridge._track_identity = lambda value: str(value.get("uri") if isinstance(value, dict) else value.uri)
+    player = SimpleNamespace(queue=[], current=SimpleNamespace(title="Exact song", uri="track:exact"))
+    calls = 0
+
+    def get_player(_guild_id):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise module.PlayerNotFound()
+        return player
+
+    monkeypatch.setattr(module.lavalink, "get_player", get_player)
+    bridge._handle_timed_request = lambda *_args, **_kwargs: _async_result("Playing exact song")
+
+    result = await bridge._handle_mini_intent(
+        {"intent": "mini_queue_insert", "source": "panel", "query": "track:exact", "payload": {"index": 0}}
+    )
+
+    assert result == {"status": "completed", "message": "Started the requested song because the queue was idle."}
 
 
 @pytest.mark.asyncio
