@@ -729,6 +729,8 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             if not query:
                 return {"status": "failed", "message": "That song no longer has a playable source."}
             insertion_index = max(0, int(payload.get("index") or 0))
+            track_hint = payload.get("track") if isinstance(payload.get("track"), dict) else {}
+            self._remember_source_hint(query, track_hint)
             try:
                 existing_player = lavalink.get_player(guild_id)
                 before_ids = {self._stable_track_id(track) for track in list(existing_player.queue)}

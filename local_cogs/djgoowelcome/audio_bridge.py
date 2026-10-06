@@ -1015,6 +1015,21 @@ class DjGooAudioBridge:
                     log_event("media.cache.hit", uri=uri, filename=safe_name)
                     return f"localtracks/{safe_name}"
 
+            streams_path = cache / "streams.json"
+            try:
+                streams = json.loads(streams_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                streams = {}
+            if not isinstance(streams, dict):
+                streams = {}
+            now = time.time()
+            for stream_uri, details in streams.items():
+                if not isinstance(details, dict) or str(details.get("source_uri") or "") != uri:
+                    continue
+                if float(details.get("expires_at") or 0) > now + 300:
+                    log_event("media.stream_cache.hit", uri=uri)
+                    return str(stream_uri)
+
             import yt_dlp
 
             stem = hashlib.sha256(uri.encode("utf-8")).hexdigest()[:24]
@@ -1025,13 +1040,47 @@ class DjGooAudioBridge:
                 "format": "bestaudio",
                 "outtmpl": str(cache / f"{stem}.%(ext)s"),
                 "noplaylist": True,
+                "skip_download": True,
+                "socket_timeout": 8,
+                "retries": 1,
             }
             with yt_dlp.YoutubeDL(options) as extractor:
-                info = extractor.extract_info(
-                    uri,
-                    download=not bool(existing and existing.stat().st_size),
-                )
-                filename = existing or Path(extractor.prepare_filename(info))
+                info = extractor.extract_info(uri, download=False)
+                stream_uri = str(
+                    info.get("url")
+                    or ((info.get("requested_downloads") or [{}])[0].get("url"))
+                    or ""
+                ).strip()
+                if stream_uri.startswith(("https://", "http://")):
+                    try:
+                        hints = json.loads((cache / "source-hints.json").read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        hints = {}
+                    hint = hints.get(uri, {}) if isinstance(hints, dict) else {}
+                    expires_at = float((parse_qs(urlparse(stream_uri).query).get("expire") or [now + 1800])[0])
+                    streams[stream_uri] = {
+                        "title": str(hint.get("title") or info.get("title") or "").strip(),
+                        "artist": str(
+                            hint.get("artist")
+                            or info.get("artist")
+                            or info.get("uploader")
+                            or info.get("channel")
+                            or ""
+                        ).strip(),
+                        "artwork_url": str(hint.get("artwork_url") or info.get("thumbnail") or "").strip(),
+                        "duration_seconds": int(float(hint.get("duration_seconds") or info.get("duration") or 0)),
+                        "source_uri": str(info.get("webpage_url") or uri).strip(),
+                        "expires_at": expires_at,
+                    }
+                    temporary = streams_path.with_suffix(".json.tmp")
+                    temporary.write_text(json.dumps(streams, indent=2) + "\n", encoding="utf-8")
+                    os.replace(temporary, streams_path)
+                    log_event("media.stream.ready", uri=uri, expires_at=expires_at)
+                    return stream_uri
+                download_options = {**options, "skip_download": False}
+                with yt_dlp.YoutubeDL(download_options) as downloader:
+                    info = downloader.extract_info(uri, download=not bool(existing and existing.stat().st_size))
+                    filename = existing or Path(downloader.prepare_filename(info))
             if filename.is_file():
                 metadata[filename.name] = {
                     "title": str(info.get("title") or "").strip(),
@@ -1483,17 +1532,61 @@ class DjGooAudioBridge:
         return data
 
     def _local_media_metadata(self, uri: str) -> Dict[str, Any]:
-        if not uri or "localtracks" not in uri.lower():
+        if not uri:
             return {}
-        name = Path(uri.replace("\\", "/")).name
         root = Path(getattr(self, "project_root", PROJECT_ROOT))
-        path = root / "cache" / "localtracks" / "metadata.json"
+        cache = root / "cache" / "localtracks"
+        value: Dict[str, Any] = {}
+        if "localtracks" in uri.lower():
+            name = Path(uri.replace("\\", "/")).name
+            path = cache / "metadata.json"
+            try:
+                document = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                document = {}
+            candidate = document.get(name) if isinstance(document, dict) else None
+            if isinstance(candidate, dict):
+                value = dict(candidate)
+        elif uri.startswith(("https://", "http://")):
+            try:
+                document = json.loads((cache / "streams.json").read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                document = {}
+            candidate = document.get(uri) if isinstance(document, dict) else None
+            if isinstance(candidate, dict):
+                value = dict(candidate)
+        source_uri = str(value.get("source_uri") or "")
+        try:
+            hints = json.loads((cache / "source-hints.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            hints = {}
+        hint = hints.get(source_uri, {}) if source_uri and isinstance(hints, dict) else {}
+        if isinstance(hint, dict):
+            value.update({key: item for key, item in hint.items() if item not in (None, "", 0)})
+        return value
+
+    def _remember_source_hint(self, source_uri: str, hint: Dict[str, Any]) -> None:
+        if not source_uri.startswith(("https://", "http://")):
+            return
+        cache = Path(getattr(self, "project_root", PROJECT_ROOT)) / "cache" / "localtracks"
+        cache.mkdir(parents=True, exist_ok=True)
+        path = cache / "source-hints.json"
         try:
             document = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return {}
-        value = document.get(name) if isinstance(document, dict) else None
-        return value if isinstance(value, dict) else {}
+            document = {}
+        if not isinstance(document, dict):
+            document = {}
+        document[source_uri] = {
+            "title": str(hint.get("title") or "").strip(),
+            "artist": str(hint.get("artist") or "").strip(),
+            "artwork_url": str(hint.get("artwork_url") or "").strip(),
+            "duration_seconds": int(hint.get("duration_seconds") or 0),
+            "source_uri": source_uri,
+        }
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
 
     async def _pause_or_resume(self, audio, ctx, *, want_pause: bool) -> None:
         try:
