@@ -178,7 +178,12 @@ class DjGooAudioContext:
         return True
 
     async def invoke(self, command, *args, **kwargs):
-        callback = getattr(command, "callback", None)
+        # Commands initiated inside the bridge have already been normalized and
+        # must not re-enter the public !play router. Re-entry can turn a radio
+        # seed into a second radio request and reject the track that should start.
+        callback = getattr(command, "_djgoo_original_callback", None)
+        if callback is None:
+            callback = getattr(command, "callback", None)
         if callback is None:
             return await command(self, *args, **kwargs)
         bound_self = getattr(callback, "__self__", None)
@@ -523,7 +528,9 @@ class DjGooAudioBridge:
             args=[str(arg) for arg in args],
             kwargs=kwargs,
         )
-        callback = getattr(command, "callback", None)
+        callback = getattr(command, "_djgoo_original_callback", None)
+        if callback is None:
+            callback = getattr(command, "callback", None)
         if callback is None:
             return await command(ctx, *args, **kwargs)
         cog = self.bot.get_cog("Audio")

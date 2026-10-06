@@ -168,6 +168,8 @@ class DjGooWelcome(commands.Cog):
             native_play_command.callback = native_play_callback
             with contextlib.suppress(AttributeError):
                 del native_play_command._djgoo_playlist_routing
+            with contextlib.suppress(AttributeError):
+                del native_play_command._djgoo_original_callback
         self._queue_task.cancel()
         if self._gateway_task is not None:
             self._gateway_task.cancel()

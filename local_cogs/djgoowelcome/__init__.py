@@ -268,6 +268,7 @@ def _install_native_play_routing(bot: Red, djgoo: DjGooWelcome) -> bool:
 
     play_command.callback = routed_play
     play_command._djgoo_playlist_routing = True
+    play_command._djgoo_original_callback = original_callback
     djgoo._djgoo_native_play_command = play_command
     djgoo._djgoo_native_play_callback = original_callback
     log_event("native.play.routing_installed")

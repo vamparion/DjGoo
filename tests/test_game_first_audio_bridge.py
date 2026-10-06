@@ -111,3 +111,27 @@ def test_panel_control_targets_the_connected_player() -> None:
     assert context.guild is guild
     assert context.author.id == owner.id
     assert context.author.voice.channel is voice_channel
+
+
+@pytest.mark.asyncio
+async def test_internal_play_invocation_bypasses_public_play_router() -> None:
+    calls = []
+
+    async def routed(_audio, _ctx, **_kwargs):
+        calls.append("routed")
+
+    async def original(_audio, _ctx, **kwargs):
+        calls.append(("original", kwargs["query"]))
+
+    command = SimpleNamespace(
+        qualified_name="play",
+        callback=routed,
+        _djgoo_original_callback=original,
+    )
+    bridge = object.__new__(RemoteAwareDjGooAudioBridge)
+    bridge.bot = SimpleNamespace(get_cog=lambda name: object() if name == "Audio" else None)
+    ctx = SimpleNamespace(guild=SimpleNamespace(id=42), channel=SimpleNamespace(id=77))
+
+    await bridge._invoke(command, ctx, query="https://example.test/track")
+
+    assert calls == [("original", "https://example.test/track")]
