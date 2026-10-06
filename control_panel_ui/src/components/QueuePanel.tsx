@@ -32,10 +32,10 @@ export function QueuePanel({ state, send, canManage, refresh }: Props) {
   async function insert(event: React.DragEvent, index: number) {
     event.preventDefault();
     setDropIndex(null);
-    if (!canManage) return;
     const target = droppedTrack(event, state);
     if (!target) return;
     if (dragId) {
+      if (!canManage) return;
       const before = state.queue[index]?.id || "";
       if (before) {
         await reorder(dragId, before);
@@ -66,8 +66,8 @@ export function QueuePanel({ state, send, canManage, refresh }: Props) {
           <div className={`queue-sidebar-row ${dropIndex === index ? "drop-before" : ""}`} draggable={canManage} key={track.id || `${track.uri || track.title}-${index}`}
             onDragStart={(event) => { setDragId(track.id || ""); event.dataTransfer.effectAllowed = "move"; }}
             onDragEnd={() => { setDragId(""); setDropIndex(null); }}
-            onDragEnter={() => canManage && setDropIndex(index)}
-            onDragOver={(event) => { if (canManage) event.preventDefault(); }}
+            onDragEnter={() => setDropIndex(index)}
+            onDragOver={(event) => event.preventDefault()}
             onDrop={(event) => void insert(event, index)}>
             {canManage && <GripVertical className="queue-grip" size={16} />}
             <div className="queue-copy"><strong>{track.title || "Untitled track"}</strong><span>{index === 0 ? "Next" : `#${index + 1}`} · {track.requester ? `Requested by ${track.requester}` : track.artist || "DjGoo"}</span></div>
@@ -75,8 +75,8 @@ export function QueuePanel({ state, send, canManage, refresh }: Props) {
           </div>
         ))}
         <div className={`queue-end-drop ${dropIndex === state.queue.length ? "active" : ""}`}
-          onDragEnter={() => canManage && setDropIndex(state.queue.length)}
-          onDragOver={(event) => { if (canManage) event.preventDefault(); }}
+          onDragEnter={() => setDropIndex(state.queue.length)}
+          onDragOver={(event) => event.preventDefault()}
           onDrop={(event) => void insert(event, state.queue.length)}>
           <ListEnd size={16} /><span>{state.queue.length ? "Drop at end" : "Drop into queue"}</span>
         </div>

@@ -6,6 +6,7 @@ function state(playing: boolean): ControlState {
   return {
     playback: {
       title: "With You",
+      track_id: "track-1",
       artist: "LINKIN PARK",
       station: "",
       source: "PLAYBACK",
@@ -71,6 +72,7 @@ describe("playback clock", () => {
 
   it("accepts a new track even when its position is behind", () => {
     const next = state(true);
+    next.playback.track_id = "track-2";
     next.playback.title = "Next track";
     next.playback.position_ms = 0;
     next.playback.measured_at = 105;
@@ -88,5 +90,25 @@ describe("playback clock", () => {
     const reconciled = reconcilePlaybackState(null, next, 200_000);
 
     expect(playbackPosition(reconciled.playback, 201_000)).toBe(43_000);
+  });
+
+  it("resets when a new instance of the same song starts", () => {
+    const next = state(true);
+    next.playback.track_id = "track-2";
+    next.playback.position_ms = 2_000;
+    next.playback.measured_at = 105;
+
+    const reconciled = reconcilePlaybackState(state(true), next, 105_000);
+
+    expect(playbackPosition(reconciled.playback, 105_000)).toBe(2_000);
+  });
+
+  it("never displays elapsed time beyond the track duration", () => {
+    const playback = state(true).playback;
+    playback.position_ms = 250_000;
+    playback.duration_ms = 255_000;
+    playback.measured_at = 100;
+
+    expect(playbackPosition(playback, 120_000)).toBe(255_000);
   });
 });

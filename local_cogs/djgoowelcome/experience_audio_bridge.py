@@ -1014,7 +1014,8 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
         force: bool = False,
     ) -> None:
         data = self._track_data(track)
-        if self._should_reject_playing_track(data):
+        reject_title = self._mode_for_track(guild.id, track) == "RADIO"
+        if self._should_reject_playing_track(data, reject_title=reject_title):
             log_event(
                 "discord.deck.blocked_bad_track",
                 guild_id=guild.id,

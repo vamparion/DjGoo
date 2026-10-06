@@ -40,7 +40,7 @@ export function LivePanel({ state, send, openFind }: Props) {
           <span>{playback.remaining || "time unknown"}</span>
           <span>Queue: {playback.queue_count}</span>
         </div>
-        {duration > 0 && <div className="playback-progress"><progress max={duration} value={Math.min(elapsed, duration)} /><span>{clock(elapsed)} / {clock(duration)}</span></div>}
+        {duration > 0 && <div className="playback-progress"><progress max={duration} value={elapsed} /><span>{clock(elapsed)} / {clock(duration)}</span></div>}
         {!hasTrack ? <div className="live-empty-actions">
           <button className="btn primary icon-action" onClick={openFind}><Search size={16} /><span>Find music</span></button>
         </div> : <>

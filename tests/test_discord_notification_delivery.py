@@ -109,7 +109,7 @@ class DiscordDeckDeduplicationTests(unittest.IsolatedAsyncioTestCase):
             "uri": "https://www.youtube.com/watch?v=abcdefghijk",
             "duration_seconds": "180",
         }
-        bridge._should_reject_playing_track = lambda _data: False
+        bridge._should_reject_playing_track = lambda _data, **_kwargs: False
         bridge._best_text_channel = lambda _guild: channel
         bridge._mode_for_track = lambda _guild_id, _track: "PLAYBACK"
         bridge._active_request_details = lambda _guild_id: {}

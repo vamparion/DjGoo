@@ -85,6 +85,7 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
     players = _paired_players(project_root, active_guild_id)
     return {
         "playback": {
+            "track_id": str(current.get("id") or ""),
             "title": str(current.get("title") or last_title),
             "artist": str(current.get("artist") or ""),
             "artwork_url": str(current.get("artwork_url") or ""),

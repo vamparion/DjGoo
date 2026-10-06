@@ -176,6 +176,9 @@ def test_remote_frontend_erases_fragment_and_reuses_shared_app() -> None:
     assert 'transport === "relay"' in transport and "RelaySocketSession" in transport
     assert "stateRefreshIntervalMs()" in app
     assert "subscribeState" in app and "reconcilePlaybackState(current, next)" in app
+    queue_panel = (root / "src" / "components" / "QueuePanel.tsx").read_text(encoding="utf-8")
+    assert "if (!canManage) return;" in queue_panel
+    assert queue_panel.index("if (!canManage) return;") > queue_panel.index("if (dragId)")
     assert "reconnectRemote()" in app and "void poll()" in app
     assert "isRemoteDirectConnected(remoteCredential) ? 60000 : 8000" in api
     assert "HostRejection" in transport and "command_id: crypto.randomUUID()" in transport
