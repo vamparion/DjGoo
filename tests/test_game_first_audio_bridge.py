@@ -135,3 +135,49 @@ async def test_internal_play_invocation_bypasses_public_play_router() -> None:
     await bridge._invoke(command, ctx, query="https://example.test/track")
 
     assert calls == [("original", "https://example.test/track")]
+
+
+@pytest.mark.asyncio
+async def test_normal_query_uses_public_red_play_command(monkeypatch) -> None:
+    monkeypatch.setenv("DJGOO_NATIVE_HOST", "1")
+    bridge = object.__new__(RemoteAwareDjGooAudioBridge)
+    bridge._invoke_silently = AsyncMock()
+    command = object()
+    audio = SimpleNamespace(command_play=command)
+    ctx = SimpleNamespace(guild=SimpleNamespace(id=42))
+
+    await bridge._enqueue_resolved_query(audio, ctx, "https://www.youtube.com/watch?v=track")
+
+    bridge._invoke_silently.assert_awaited_once_with(
+        command,
+        ctx,
+        query="https://www.youtube.com/watch?v=track",
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolved_googlevideo_stream_uses_trusted_enqueue(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("DJGOO_NATIVE_HOST", "1")
+    bridge = object.__new__(RemoteAwareDjGooAudioBridge)
+    bridge._invoke_silently = AsyncMock()
+    enqueue = AsyncMock()
+    player = SimpleNamespace(store=lambda *_args: None)
+    monkeypatch.setattr(
+        "local_cogs.djgoowelcome.audio_bridge.lavalink.get_player",
+        lambda _guild_id: player,
+    )
+    audio = SimpleNamespace(
+        command_play=object(),
+        _enqueue_tracks=enqueue,
+        local_folder_current_path=tmp_path,
+        _eq_check=AsyncMock(),
+        set_player_settings=AsyncMock(),
+    )
+    ctx = SimpleNamespace(guild=SimpleNamespace(id=42), channel=SimpleNamespace(id=77))
+    stream = "https://rr1---sn-test.googlevideo.com/videoplayback?id=one"
+
+    await bridge._enqueue_resolved_query(audio, ctx, stream)
+
+    enqueue.assert_awaited_once()
+    assert str(enqueue.await_args.args[1]) == stream
+    bridge._invoke_silently.assert_not_awaited()

@@ -273,6 +273,27 @@ class ControlPanelStateTests(unittest.TestCase):
         self.assertEqual(snapshot["playback"]["artist"], "Correct Artist")
         self.assertEqual(snapshot["playback"]["artwork_url"], "https://img.invalid/one.jpg")
 
+    def test_now_playing_uses_source_url_artist_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "data").mkdir()
+            cache = root / "cache" / "localtracks"
+            cache.mkdir(parents=True)
+            source = "https://www.youtube.com/watch?v=example"
+            stream = "https://media.example.test/videoplayback?id=example"
+            (root / "data" / "djgoo-now-playing.json").write_text(
+                json.dumps({"current": {"title": "Song", "artist": "Unknown artist", "uri": source}}),
+                encoding="utf-8",
+            )
+            (cache / "streams.json").write_text(
+                json.dumps({stream: {"title": "Song", "artist": "Correct Artist", "source_uri": source}}),
+                encoding="utf-8",
+            )
+
+            snapshot = build_state_snapshot(root)
+
+        self.assertEqual(snapshot["playback"]["artist"], "Correct Artist")
+
 
 if __name__ == "__main__":
     unittest.main()

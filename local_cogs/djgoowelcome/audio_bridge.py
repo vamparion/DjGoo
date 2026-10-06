@@ -1204,6 +1204,11 @@ class DjGooAudioBridge:
                 },
             )
         log_event("radio.start.play_seed", guild_id=ctx.guild.id, seed=seed, play_query=play_query)
+        if os.environ.get("DJGOO_NATIVE_HOST") == "1":
+            play_query = (
+                await asyncio.to_thread(self._direct_media_query, play_query)
+                or play_query
+            )
         if not await self._play_query_when_ready(audio, ctx, play_query):
             self.stations.clear_active(ctx.guild.id)
             await self._notice(
@@ -1303,7 +1308,7 @@ class DjGooAudioBridge:
         log_event("play.command.start", guild_id=ctx.guild.id, query=queries[0], query_count=len(queries))
         added_tracks = []
         for query in queries:
-            await self._invoke_silently(audio.command_play, ctx, query=query)
+            await self._enqueue_resolved_query(audio, ctx, query)
             if player is not None:
                 candidates = [player.current, *list(player.queue)]
                 added = next(
@@ -1352,6 +1357,43 @@ class DjGooAudioBridge:
         success = await self._wait_for_track_after_play(ctx.guild.id)
         log_event("play.command.result", guild_id=ctx.guild.id, query=queries[0], query_count=len(queries), track_detected=success)
         return success
+
+    async def _enqueue_resolved_query(self, audio: Any, ctx: Any, query: str) -> None:
+        """Enqueue a trusted yt-dlp stream without Red's public URL filter."""
+
+        parsed = urlparse(str(query))
+        is_resolved_stream = (
+            os.environ.get("DJGOO_NATIVE_HOST") == "1"
+            and parsed.scheme in {"http", "https"}
+            and parsed.hostname is not None
+            and parsed.hostname.endswith(".googlevideo.com")
+        )
+        enqueue = getattr(audio, "_enqueue_tracks", None)
+        if is_resolved_stream and callable(enqueue):
+            from redbot.cogs.audio.audio_dataclasses import Query
+
+            try:
+                player = lavalink.get_player(ctx.guild.id)
+            except (NodeNotFound, PlayerNotFound):
+                voice_channel = getattr(getattr(ctx.author, "voice", None), "channel", None)
+                if voice_channel is None:
+                    raise RuntimeError("No voice channel is available for resolved playback.")
+                player = await lavalink.connect(
+                    voice_channel,
+                    self_deaf=await audio.config.guild_from_id(ctx.guild.id).auto_deafen(),
+                )
+            player.store("notify_channel", ctx.channel.id)
+            await audio._eq_check(ctx, player)
+            await audio.set_player_settings(ctx)
+            processed = Query.process_input(query, audio.local_folder_current_path)
+            await enqueue(ctx, processed)
+            log_event(
+                "play.resolved_stream.enqueued",
+                guild_id=ctx.guild.id,
+                host=parsed.hostname,
+            )
+            return
+        await self._invoke_silently(audio.command_play, ctx, query=query)
 
     async def _wait_for_lavalink_node(self, guild_id: int, *, timeout: float = 35.0) -> bool:
         deadline = time.monotonic() + timeout

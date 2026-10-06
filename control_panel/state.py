@@ -152,6 +152,16 @@ def _hydrate_history_metadata(
     project_root: Path,
     entries: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
+    metadata = _cached_media_metadata(project_root)
+    if not metadata:
+        return entries
+    hydrated: List[Dict[str, Any]] = []
+    for entry in entries:
+        hydrated.append(_hydrate_track_metadata(project_root, entry, metadata=metadata))
+    return hydrated
+
+
+def _cached_media_metadata(project_root: Path) -> Dict[str, Any]:
     cache = project_root / "cache" / "localtracks"
     metadata = read_json_file(cache / "metadata.json", {})
     streams = read_json_file(cache / "streams.json", {})
@@ -162,13 +172,7 @@ def _hydrate_history_metadata(
         for key, value in document.items()
         if isinstance(value, dict) and str(value.get("source_uri") or key).startswith(("https://", "http://"))
     }
-    metadata = {**metadata, **{source: value for source, value in by_source.items()}}
-    if not metadata:
-        return entries
-    hydrated: List[Dict[str, Any]] = []
-    for entry in entries:
-        hydrated.append(_hydrate_track_metadata(project_root, entry, metadata=metadata))
-    return hydrated
+    return {**metadata, **{source: value for source, value in by_source.items()}}
 
 
 def _hydrate_track_metadata(
@@ -178,10 +182,7 @@ def _hydrate_track_metadata(
     metadata: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     item = dict(track)
-    metadata = metadata if metadata is not None else read_json_file(
-        project_root / "cache" / "localtracks" / "metadata.json",
-        {},
-    )
+    metadata = metadata if metadata is not None else _cached_media_metadata(project_root)
     uri = str(item.get("uri") or "").replace("\\", "/")
     cached = metadata.get(uri) or metadata.get(uri.rsplit("/", 1)[-1])
     if not isinstance(cached, dict):
