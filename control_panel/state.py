@@ -68,6 +68,7 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
         if str((health.get(name) or {}).get("status") or "") != "online"
     ]
     current = now_playing.get("current") if isinstance(now_playing.get("current"), dict) else {}
+    current = _hydrate_track_metadata(project_root, current)
     live_queue = now_playing.get("queue") if isinstance(now_playing.get("queue"), list) else []
     gaming = GamingSessionStore(project_root / "data" / "djgoo-gaming-session.json")
     history = _hydrate_history_metadata(
@@ -79,6 +80,7 @@ def build_state_snapshot(project_root: Path) -> Dict[str, Any]:
         "playback": {
             "title": str(current.get("title") or last_title),
             "artist": str(current.get("artist") or ""),
+            "artwork_url": str(current.get("artwork_url") or ""),
             "station": str((now_playing.get("station_details") or {}).get("name") or (active_station["name"] if active_station else "")),
             "source": str(now_playing.get("mode") or ("Station memory" if last_title else "")),
             "remaining": str(now_playing.get("progress_text") or ""),
@@ -150,22 +152,36 @@ def _hydrate_history_metadata(
         return entries
     hydrated: List[Dict[str, Any]] = []
     for entry in entries:
-        item = dict(entry)
-        uri = str(item.get("uri") or "").replace("\\", "/")
-        cached = metadata.get(uri.rsplit("/", 1)[-1])
-        if isinstance(cached, dict):
-            artist = str(item.get("artist") or "").strip()
-            if not artist or artist.casefold() == "unknown artist":
-                item["artist"] = str(cached.get("artist") or artist)
-            title = str(item.get("title") or "").strip()
-            if not title or title.casefold() == "unknown track":
-                item["title"] = str(cached.get("title") or title)
-            if not item.get("artwork_url") and cached.get("artwork_url"):
-                item["artwork_url"] = cached["artwork_url"]
-            if not item.get("duration_seconds") and cached.get("duration_seconds"):
-                item["duration_seconds"] = cached["duration_seconds"]
-        hydrated.append(item)
+        hydrated.append(_hydrate_track_metadata(project_root, entry, metadata=metadata))
     return hydrated
+
+
+def _hydrate_track_metadata(
+    project_root: Path,
+    track: Dict[str, Any],
+    *,
+    metadata: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    item = dict(track)
+    metadata = metadata if metadata is not None else read_json_file(
+        project_root / "cache" / "localtracks" / "metadata.json",
+        {},
+    )
+    uri = str(item.get("uri") or "").replace("\\", "/")
+    cached = metadata.get(uri.rsplit("/", 1)[-1])
+    if not isinstance(cached, dict):
+        return item
+    artist = str(item.get("artist") or "").strip()
+    if not artist or artist.casefold() == "unknown artist":
+        item["artist"] = str(cached.get("artist") or artist)
+    title = str(item.get("title") or "").strip()
+    if not title or title.casefold() in {"unknown title", "unknown track"}:
+        item["title"] = str(cached.get("title") or title)
+    if not item.get("artwork_url") and cached.get("artwork_url"):
+        item["artwork_url"] = cached["artwork_url"]
+    if not item.get("duration_seconds") and cached.get("duration_seconds"):
+        item["duration_seconds"] = cached["duration_seconds"]
+    return item
 
 
 def build_remote_state_snapshot(project_root: Path, *, privileged: bool = False) -> Dict[str, Any]:

@@ -50,6 +50,7 @@ export type ControlState = {
   playback: {
     title: string;
     artist: string;
+    artwork_url?: string;
     station: string;
     source: string;
     remaining: string;

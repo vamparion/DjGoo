@@ -231,6 +231,23 @@ def test_live_and_playlist_surfaces_keep_controls_contextual() -> None:
     assert "Playlist details" in playlists and "Add from history" in playlists
 
 
+def test_game_first_ui_supports_sticky_drops_touch_destinations_and_stop() -> None:
+    root = Path(__file__).resolve().parents[1] / "control_panel_ui" / "src"
+    search = (root / "components" / "SearchPanel.tsx").read_text(encoding="utf-8")
+    history = (root / "components" / "HistoryPanel.tsx").read_text(encoding="utf-8")
+    player = (root / "components" / "LivePanel.tsx").read_text(encoding="utf-8")
+    footer = (root / "components" / "PersistentFooter.tsx").read_text(encoding="utf-8")
+    radio = (root / "components" / "StationPanel.tsx").read_text(encoding="utf-8")
+    styles = (root / "styles.css").read_text(encoding="utf-8")
+
+    assert 'draggable key=' in search and 'application/djgoo-track' in search
+    assert "Add to..." in search and 'value="queue"' in search
+    assert "sticky-drop-targets" in history and "position: sticky" in styles
+    assert 'send("stop")' in player and 'send("stop")' in footer
+    assert "playback.artwork_url" in player and "playback.artwork_url" in footer
+    assert "Advanced station settings" in radio and "Artist repeat spacing" in radio
+
+
 def test_hosted_relay_accepts_web_state_and_web_invites_can_offer_relay() -> None:
     root = Path(__file__).resolve().parents[1]
     relay_host = (root / "voice" / "relay_host.py").read_text(encoding="utf-8")

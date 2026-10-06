@@ -298,6 +298,11 @@ textarea { width: 100%; min-height: 70px; resize: vertical; border: 1px solid va
   gap: 8px;
   margin-bottom: 16px;
 }
+.player-row { grid-template-columns: minmax(0, 1fr) minmax(250px, auto); }
+.player-id { opacity: .75; }
+.player-controls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.player-controls label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; font-weight: 800; }
+.player-controls select { padding: 7px 9px; }
 
 .ranked-mode .side,
 .ranked-mode .hint-strip,
@@ -498,6 +503,8 @@ select {
   align-content: start;
   min-width: 0;
 }
+
+.side { position: sticky; top: 72px; max-height: calc(100vh - 128px); overflow: auto; scrollbar-width: thin; }
 
 .stack > .panel {
   animation: panel-arrive 220ms ease-out both;
@@ -764,11 +771,14 @@ p {
 .search-result-copy strong, .search-result-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-result-copy strong { font-size: 13px; }
 .search-result-copy span { margin-top: 4px; color: var(--muted); font-size: 12px; }
+.search-result[draggable="true"] { cursor: grab; }
+.result-destination { min-width: 112px; padding: 8px; }
 .search-error { margin-top: 10px; border-radius: 7px; }
 
 .history-drop-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin: 12px 0; }
 .history-drop-target { min-height: 52px; display: flex; align-items: center; gap: 9px; padding: 10px; border: 1px dashed var(--line); border-radius: 7px; background: var(--panel3); color: var(--muted); text-align: left; }
 .history-drop-target:hover { border-color: var(--cyan); color: var(--text); background: var(--panel2); }
+.sticky-drop-targets { position: sticky; top: 70px; z-index: 3; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, var(--panel) 94%, transparent); box-shadow: 0 10px 24px rgba(0,0,0,.28); backdrop-filter: blur(12px); }
 .history-list { display: grid; }
 .history-row { min-height: 62px; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto auto; align-items: center; gap: 9px; border-top: 1px solid var(--line); padding: 8px 0; animation: queue-arrive 220ms ease-out both; }
 .history-row:first-child { border-top: 0; }
@@ -816,18 +826,13 @@ p {
   color: var(--text);
 }
 
-.health {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.health-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-top: 10px;
-}
+.health-panel { padding: 11px 13px; }
+.health-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.health-title h2 { margin: 0; }
+.health-title > span { color: var(--muted); font-size: 11px; font-weight: 800; }
+.health { display: flex; flex-wrap: wrap; gap: 7px 12px; margin-top: 9px; }
+.health-led { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+.health-problems { display: grid; gap: 7px; margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); }
 
 .metric {
   border: 1px solid #29323b;
@@ -895,6 +900,8 @@ p {
   z-index: 4;
 }
 
+.footer-art { width: 42px; height: 42px; border-radius: 6px; object-fit: cover; border: 1px solid var(--line); }
+
 .mini-title {
   white-space: nowrap;
   overflow: hidden;
@@ -902,11 +909,27 @@ p {
   font-size: 13px;
   color: var(--muted);
 }
+.mini-title strong, .mini-title span { display: block; overflow: hidden; text-overflow: ellipsis; }
+.mini-title strong { color: var(--text); font-size: 12px; }
+.mini-title span { margin-top: 2px; font-size: 11px; }
 
 .footer-actions {
   display: flex;
   gap: 8px;
 }
+
+.station-picker { display: grid; gap: 5px; max-width: 420px; color: var(--muted); font-size: 12px; font-weight: 800; }
+.station-summary { display: grid; grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(90px, 1fr)); gap: 8px; margin: 14px 0; }
+.station-summary > div { min-width: 0; padding: 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel3); }
+.station-summary span, .station-summary strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.station-summary span { color: var(--muted); font-size: 11px; }
+.station-summary strong { margin-top: 5px; font-size: 14px; }
+.radio-taste { display: grid; grid-template-columns: minmax(220px, 1fr) repeat(2, minmax(180px, 1fr)); gap: 10px; align-items: stretch; margin: 14px 0; }
+.radio-taste > div { padding: 10px 0; }
+.radio-feedback { margin-bottom: 14px; }
+.advanced-radio { margin-top: 14px; }
+.advanced-radio summary { cursor: pointer; font-weight: 850; }
+.advanced-radio[open] summary { margin-bottom: 10px; }
 
 .phone-preview {
   border: 1px solid var(--line);
@@ -1039,6 +1062,9 @@ p {
   .side {
     grid-column: 2;
     grid-template-columns: 1fr 1fr;
+    position: static;
+    max-height: none;
+    overflow: visible;
   }
 
   .actions {
@@ -1120,6 +1146,9 @@ p {
   }
 
   .search-command, .search-result { grid-template-columns: 1fr; }
+  .search-result { grid-template-columns: 64px minmax(0, 1fr); }
+  .search-result .inline-actions { grid-column: 1 / -1; }
+  .result-destination { grid-column: 1 / -1; width: 100%; }
   .history-row { grid-template-columns: 20px minmax(0, 1fr); }
   .history-row > button { grid-column: 2; justify-self: start; }
   .playlist-tools { grid-template-columns: 1fr; }
@@ -1127,6 +1156,12 @@ p {
   .playlist-selector { align-items: stretch; flex-direction: column; }
   .playlist-track-row { grid-template-columns: 20px minmax(0, 1fr); }
   .playlist-track-row > .inline-actions { grid-column: 2; justify-self: start; }
+  .sticky-drop-targets { top: 66px; display: flex; overflow-x: auto; flex-wrap: nowrap; }
+  .sticky-drop-targets .history-drop-target { min-width: 180px; }
+  .player-row { grid-template-columns: 1fr; }
+  .player-controls { justify-content: flex-start; }
+  .station-summary, .radio-taste { grid-template-columns: 1fr 1fr; }
+  .station-summary > div:first-child, .radio-taste > div:first-child { grid-column: 1 / -1; }
   .search-result img, .search-art-placeholder { width: 64px; height: 64px; }
   .search-result .inline-actions { display: grid; grid-template-columns: repeat(3, 1fr); }
 

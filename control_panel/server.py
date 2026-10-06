@@ -134,6 +134,13 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                 guild_id = int(str(payload.get("guild_id") or "1513011181202309290"))
                 pairing = PairingStore(cls.root / "data" / "djgoo-pairing.db", cls.root / "data" / "djgoo-pairing-secret.bin")
                 return 200, ok({"revoked": pairing.revoke_web_devices(user_id, guild_id)})
+            if path == "/api/player/role":
+                if not is_local or actor_role != "host":
+                    raise PermissionError("Only the local DjGoo host can manage player access")
+                user_id = int(str(payload.get("discord_user_id") or "0"))
+                guild_id = int(str(payload.get("guild_id") or "1513011181202309290"))
+                pairing = PairingStore(cls.root / "data" / "djgoo-pairing.db", cls.root / "data" / "djgoo-pairing-secret.bin")
+                return 200, ok({"updated": pairing.set_user_role(user_id, guild_id, str(payload.get("role") or "member"))})
             if path == "/api/command":
                 command = dict(payload)
                 command.update(

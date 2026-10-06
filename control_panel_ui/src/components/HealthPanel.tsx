@@ -9,24 +9,16 @@ const labels: Record<string, string> = {
 };
 
 export function HealthPanel({ state, send }: PanelProps) {
+  const unhealthy = Object.entries(state.health).filter(([, item]) => !["online", "configured"].includes(item.status));
   return (
-    <section className="panel">
-      <h2>System Health</h2>
-      <div className="health">
+    <section className="panel health-panel">
+      <div className="health-title"><h2>DjGoo</h2><span>{unhealthy.length ? "Needs attention" : "Running"}</span></div>
+      <div className="health" aria-label="Component health">
         {Object.entries(state.health).map(([key, item]) => (
-          <div className="metric" key={key}>
-            <span><i className={item.status === "online" || item.status === "configured" ? "dot ok-bg" : "dot warn-bg"} />{labels[key] || key}</span>
-            <strong className={item.status === "online" || item.status === "configured" ? "ok" : "warn"}>
-              {item.status}
-            </strong>
-            {item.pid && <em>PID {item.pid}</em>}
-          </div>
+          <span className="health-led" key={key} title={`${labels[key] || key}: ${item.status}${item.detail ? ` - ${item.detail}` : ""}`}><i className={["online", "configured"].includes(item.status) ? "dot ok-bg" : "dot warn-bg"} />{labels[key] || key}</span>
         ))}
       </div>
-      <div className="health-actions">
-        {state.capabilities?.system_management !== false && <button className="btn danger" onClick={() => void send("reset")}>Reset DjGoo</button>}
-        <button className="btn" onClick={() => void send("queue")}>Check Queue</button>
-      </div>
+      {unhealthy.length > 0 && <div className="health-problems">{unhealthy.map(([key, item]) => <p key={key}><strong>{labels[key] || key}</strong>: {item.detail || item.status}</p>)}{state.capabilities?.system_management !== false && <button className="btn danger" onClick={() => void send("reset")}>Repair now</button>}</div>}
     </section>
   );
 }

@@ -198,7 +198,7 @@ class PairingStore:
         now = time.time()
         with self._lock, self._connect() as connection:
             row = connection.execute(
-                "SELECT device_id, user_id, guild_id, device_name, created_at, last_seen_at, device_type, capabilities "
+                "SELECT device_id, user_id, guild_id, device_name, created_at, last_seen_at, device_type, capabilities, display_name, role "
                 "FROM devices WHERE token_hash = ? AND revoked_at IS NULL",
                 (token_hash,),
             ).fetchone()
@@ -208,16 +208,8 @@ class PairingStore:
                 "UPDATE devices SET last_seen_at = ? WHERE device_id = ?",
                 (now, str(row["device_id"])),
             )
-        return DeviceIdentity(
-            device_id=str(row["device_id"]),
-            user_id=int(row["user_id"]),
-            guild_id=int(row["guild_id"]),
-            device_name=str(row["device_name"]),
-            created_at=float(row["created_at"]),
-            last_seen_at=now,
-            device_type=self._device_type(str(row["device_type"])),
-            capabilities=self._capabilities(row["capabilities"]),
-        )
+        identity = self._identity_from_row(row)
+        return DeviceIdentity(**{**identity.__dict__, "last_seen_at": now})
 
     def claim_command(self, command_id: str, device_id: str) -> bool:
         try:
@@ -239,24 +231,12 @@ class PairingStore:
     def list_devices(self, user_id: int, guild_id: int) -> list[DeviceIdentity]:
         with self._lock, self._connect() as connection:
             rows = connection.execute(
-                "SELECT device_id, user_id, guild_id, device_name, created_at, last_seen_at, device_type, capabilities "
+                "SELECT device_id, user_id, guild_id, device_name, created_at, last_seen_at, device_type, capabilities, display_name, role "
                 "FROM devices WHERE user_id = ? AND guild_id = ? AND revoked_at IS NULL "
                 "ORDER BY last_seen_at DESC",
                 (int(user_id), int(guild_id)),
             ).fetchall()
-        return [
-            DeviceIdentity(
-                device_id=str(row["device_id"]),
-                user_id=int(row["user_id"]),
-                guild_id=int(row["guild_id"]),
-                device_name=str(row["device_name"]),
-                created_at=float(row["created_at"]),
-                last_seen_at=float(row["last_seen_at"]),
-                device_type=self._device_type(str(row["device_type"])),
-                capabilities=self._capabilities(row["capabilities"]),
-            )
-            for row in rows
-        ]
+        return [self._identity_from_row(row) for row in rows]
 
     def list_guild_devices(self, guild_id: int) -> list[DeviceIdentity]:
         with self._lock, self._connect() as connection:
@@ -310,6 +290,15 @@ class PairingStore:
                 "UPDATE devices SET revoked_at = ? WHERE user_id = ? AND guild_id = ? "
                 "AND device_type = 'web' AND revoked_at IS NULL",
                 (time.time(), int(user_id), int(guild_id)),
+            )
+        return int(cursor.rowcount)
+
+    def set_user_role(self, user_id: int, guild_id: int, role: str) -> int:
+        clean_role = role if role in {"host", "moderator", "member"} else "member"
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE devices SET role = ? WHERE user_id = ? AND guild_id = ? AND revoked_at IS NULL",
+                (clean_role, int(user_id), int(guild_id)),
             )
         return int(cursor.rowcount)
 

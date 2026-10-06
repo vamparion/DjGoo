@@ -259,6 +259,32 @@ class ControlPanelServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body["result"], {"name": "new mix", "created": True})
 
+    def test_local_host_can_manage_paired_player_role(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            handler_cls = create_handler_class(root)
+            _, host = handler_cls.route_post(
+                "/api/profile", {"username": "Host", "device_id": "desktop"}, is_local=True
+            )
+            from voice.pairing_store import PairingStore
+            pairing = PairingStore(root / "data" / "djgoo-pairing.db", root / "data" / "djgoo-pairing-secret.bin")
+            _, device_token = pairing.redeem_pairing_code(
+                pairing.create_pairing_code(44, 55, device_type="web"), "Phone"
+            )
+
+            status, body = handler_cls.route_post(
+                "/api/player/role",
+                {"token": host["profile"]["token"], "discord_user_id": "44", "guild_id": "55", "role": "moderator"},
+                is_local=True,
+            )
+            updated_role = pairing.authenticate(device_token).role
+            del pairing
+            gc.collect()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["updated"], 1)
+        self.assertEqual(updated_role, "moderator")
+
 
 if __name__ == "__main__":
     unittest.main()

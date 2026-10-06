@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ListMusic, Pause, Play, Search, SkipForward, Volume1, Volume2 } from "lucide-react";
+import { ListMusic, Pause, Play, Search, SkipForward, Square, Volume1, Volume2 } from "lucide-react";
 import type { PanelProps } from "./types";
 import { playbackPosition } from "../playbackClock";
 
@@ -29,7 +29,7 @@ export function LivePanel({ state, send, openFind }: Props) {
   return (
     <section className="panel hero">
       <div className={`art ${playback.playing ? "playing" : ""}`}>
-        <img src="./icons/djgoo-192.png" alt="" />
+        <img src={playback.artwork_url || "./icons/djgoo-192.png"} alt="" />
         <span>{hasTrack ? "ON" : "IDLE"}</span>
       </div>
       <div>
@@ -51,6 +51,7 @@ export function LivePanel({ state, send, openFind }: Props) {
               <span>{playback.playing ? "Pause" : "Resume"}</span>
             </button>
             <button className="btn primary icon-action" onClick={() => void send("skip")}><SkipForward size={16} /><span>Skip</span></button>
+            <button className="btn danger icon-action" title="Stop playback and clear the queue" onClick={() => void send("stop")}><Square size={15} /><span>Stop</span></button>
             <button className="btn icon-action" onClick={() => void send("queue")}><ListMusic size={16} /><span>Queue</span></button>
             <button className="icon-button" title="Volume down" aria-label="Volume down" onClick={() => void send("volume_down")}><Volume1 size={18} /></button>
             <button className="icon-button" title="Volume up" aria-label="Volume up" onClick={() => void send("volume_up")}><Volume2 size={18} /></button>

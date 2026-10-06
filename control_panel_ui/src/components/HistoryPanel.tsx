@@ -29,7 +29,7 @@ export function HistoryPanel({ state, send, canManage, refresh }: Props) {
         <Clock3 size={20} />
       </div>
       {canManage && state.playlists.length > 0 && (
-        <div className="history-drop-grid" aria-label="Playlist drop targets">
+        <div className="history-drop-grid sticky-drop-targets" aria-label="Playlist drop targets">
           {state.playlists.map((playlist) => (
             <button
               className="history-drop-target"
