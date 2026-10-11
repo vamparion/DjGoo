@@ -292,7 +292,7 @@ def test_player_activity_is_grouped_by_user_instead_of_the_sidebar() -> None:
     app = (root / "App.tsx").read_text(encoding="utf-8")
     players = (root / "components" / "GuestPanel.tsx").read_text(encoding="utf-8")
 
-    sidebar = app.split('<aside className="side">', 1)[1].split("</aside>", 1)[0]
+    sidebar = app.split('<aside className="side"', 1)[1].split("</aside>", 1)[0]
     assert "LogsPanel" not in sidebar and "QueuePanel" in sidebar
     assert "playerActivity" in players and "Recent activity" in players
     assert "state.timeline.filter" in players and "track.requester" in players

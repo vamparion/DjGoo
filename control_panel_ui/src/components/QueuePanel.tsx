@@ -1,4 +1,4 @@
-import { GripVertical, ListEnd, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, GripVertical, ListEnd, Trash2 } from "lucide-react";
 import { useState } from "react";
 import type { ControlState, Track } from "../types";
 import type { PanelProps } from "./types";
@@ -31,6 +31,15 @@ export function QueuePanel({ state, send, canManage, refresh }: Props) {
     if (from < 0 || to < 0) return;
     ids.splice(to, 0, ids.splice(from, 1)[0]);
     setDragId("");
+    await send("mini_queue_reorder", { payload: { track_ids: ids } });
+  }
+
+  async function move(trackId: string, direction: -1 | 1) {
+    const ids = state.queue.map((item) => item.id || "").filter(Boolean);
+    const from = ids.indexOf(trackId);
+    const to = from + direction;
+    if (from < 0 || to < 0 || to >= ids.length) return;
+    [ids[from], ids[to]] = [ids[to], ids[from]];
     await send("mini_queue_reorder", { payload: { track_ids: ids } });
   }
 
@@ -77,7 +86,7 @@ export function QueuePanel({ state, send, canManage, refresh }: Props) {
             onDrop={(event) => void insert(event, index)}>
             {canManage && <GripVertical className="queue-grip" size={16} />}
             <div className="queue-copy"><strong>{track.title || "Untitled track"}</strong><span>{index === 0 ? "Next" : `#${index + 1}`} · {track.requester ? `Requested by ${track.requester}` : track.artist || "DjGoo"}</span></div>
-            {canManage && <button className="icon-button queue-remove" title={`Remove ${track.title}`} aria-label={`Remove ${track.title}`} onClick={() => void send("remove_queue", { payload: { track_id: track.id } })}><Trash2 size={14} /></button>}
+            {canManage && <div className="queue-touch-actions"><button className="icon-button" disabled={index === 0} title="Move earlier" aria-label={`Move ${track.title} earlier`} onClick={() => void move(track.id || "", -1)}><ChevronUp size={15} /></button><button className="icon-button" disabled={index === state.queue.length - 1} title="Move later" aria-label={`Move ${track.title} later`} onClick={() => void move(track.id || "", 1)}><ChevronDown size={15} /></button><button className="icon-button queue-remove" title={`Remove ${track.title}`} aria-label={`Remove ${track.title}`} onClick={() => void send("remove_queue", { payload: { track_id: track.id } })}><Trash2 size={14} /></button></div>}
           </div>
         ))}
         <div className={`queue-end-drop ${dropIndex === state.queue.length ? "active" : ""}`}

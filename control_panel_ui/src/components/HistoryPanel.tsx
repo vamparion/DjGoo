@@ -16,6 +16,12 @@ export function HistoryPanel({ state, send, canManage, refresh }: Props) {
     await refresh();
   }
 
+  async function addToPlaylist(trackId: string, playlist: string) {
+    if (!trackId || !playlist) return;
+    await playlistAction("history-add", { track_id: trackId, playlist });
+    await refresh();
+  }
+
   return (
     <section className="panel history-panel">
       <div className="panel-title-row">
@@ -41,6 +47,7 @@ export function HistoryPanel({ state, send, canManage, refresh }: Props) {
             <button className="btn icon-action" disabled={!playable} title={playable ? "Play this exact source next" : "Original source unavailable"} onClick={() => void send("play_next", { query: source })}>
               <Play size={15} /><span>Play next</span>
             </button>
+            {canManage && <select className="history-destination" aria-label={`Add ${track.title} to playlist`} defaultValue="" onChange={(event) => { const value = event.target.value; event.target.value = ""; void addToPlaylist(track.id || "", value); }}><option value="" disabled>Add to...</option>{state.playlists.map((playlist) => <option key={playlist.name} value={playlist.name}>{playlist.name}</option>)}</select>}
             {canManage && <button className="icon-button history-remove" title="Remove from history" aria-label={`Remove ${track.title} from history`} onClick={() => void remove(track.id || "")}><Trash2 size={15} /></button>}
           </article>
           );

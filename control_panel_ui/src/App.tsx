@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ListMusic, X } from "lucide-react";
 import { createProfile, getState, isDirectTransportHealthy, isRemoteSession, reconnectRemote, resetDjGoo, savedProfile, sendCommand, stateRefreshIntervalMs, subscribeConnection, subscribeState } from "./api";
 import { CommandBar } from "./components/CommandBar";
 import { HealthPanel } from "./components/HealthPanel";
@@ -26,6 +27,7 @@ export function App() {
   const [error, setError] = useState("");
   const [status, setStatus] = useState("Ready");
   const [activeView, setActiveView] = useState<View>("Live");
+  const [mobileDock, setMobileDock] = useState<"playlists" | "queue" | null>(null);
   const [profile, setProfile] = useState<DjGooProfile | null>(() => savedProfile());
   const refreshStarted = useRef(0);
   const refreshApplied = useRef(0);
@@ -177,12 +179,16 @@ export function App() {
         <section className="stack">
           {compact ? <LivePanel state={state} send={send} openFind={() => setActiveView("Find")} /> : renderView()}
         </section>
-        {!compact && <aside className="side">
-          <HealthPanel state={state} send={send} />
-          <PlaylistPanel state={state} send={send} compact canManage={canManage} refresh={refresh} />
-          <QueuePanel state={state} send={send} canManage={canManage} refresh={refresh} />
+        {!compact && <aside className="side" data-open={mobileDock ? "true" : "false"}>
+          <button className="mobile-dock-close" title="Close" aria-label="Close music drawer" onClick={() => setMobileDock(null)}><X size={20} /></button>
+          <div className={mobileDock && mobileDock !== "playlists" ? "mobile-dock-hidden" : ""}><HealthPanel state={state} send={send} /><PlaylistPanel state={state} send={send} compact canManage={canManage} refresh={refresh} /></div>
+          <div className={mobileDock && mobileDock !== "queue" ? "mobile-dock-hidden" : ""}><QueuePanel state={state} send={send} canManage={canManage} refresh={refresh} /></div>
         </aside>}
       </main>
+      {!compact && <div className="mobile-dock-tabs" aria-label="Music lists">
+        <button className={mobileDock === "playlists" ? "active" : ""} onClick={() => setMobileDock(current => current === "playlists" ? null : "playlists")}><ListMusic size={18} /><span>Playlists</span></button>
+        <button className={mobileDock === "queue" ? "active" : ""} onClick={() => setMobileDock(current => current === "queue" ? null : "queue")}><span className="queue-count">{state.queue.length}</span><span>Queue</span></button>
+      </div>}
       <PersistentFooter state={state} send={send} status={status} />
     </div>
   );
