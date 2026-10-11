@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ListMusic, X } from "lucide-react";
+import { House, ListMusic, Menu, Search, X } from "lucide-react";
 import { createProfile, getState, isDirectTransportHealthy, isRemoteSession, reconnectRemote, resetDjGoo, savedProfile, sendCommand, stateRefreshIntervalMs, subscribeConnection, subscribeState } from "./api";
 import { CommandBar } from "./components/CommandBar";
 import { HealthPanel } from "./components/HealthPanel";
@@ -28,12 +28,20 @@ export function App() {
   const [status, setStatus] = useState("Ready");
   const [activeView, setActiveView] = useState<View>("Live");
   const [mobileDock, setMobileDock] = useState<"playlists" | "queue" | null>(null);
+  const [mobileMenu, setMobileMenu] = useState(false);
   const [profile, setProfile] = useState<DjGooProfile | null>(() => savedProfile());
   const refreshStarted = useRef(0);
   const refreshApplied = useRef(0);
   const role = isRemoteSession() ? (state?.session?.role || profile?.role || "guest") : "host";
   const canManage = role === "host" || role === "moderator";
   const visibleViews = views.filter((view) => canManage || !["Players", "Settings", "Logs"].includes(view));
+
+  function navigate(view: View) {
+    setActiveView(view);
+    setMobileDock(null);
+    setMobileMenu(false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
 
   async function refresh() {
     const requestNumber = ++refreshStarted.current;
@@ -150,7 +158,7 @@ export function App() {
     }
     return (
       <>
-        <LivePanel state={state} send={send} openFind={() => setActiveView("Find")} />
+        <LivePanel state={state} send={send} openFind={() => navigate("Find")} />
       </>
     );
   }
@@ -169,7 +177,7 @@ export function App() {
             <button
               className={activeView === view ? "active" : ""}
               key={view}
-              onClick={() => setActiveView(view)}
+              onClick={() => navigate(view)}
               type="button"
             >
               {view}
@@ -177,7 +185,7 @@ export function App() {
           ))}
         </nav>}
         <section className="stack">
-          {compact ? <LivePanel state={state} send={send} openFind={() => setActiveView("Find")} /> : renderView()}
+          {compact ? <LivePanel state={state} send={send} openFind={() => navigate("Find")} /> : renderView()}
         </section>
         {!compact && <aside className="side" data-open={mobileDock ? "true" : "false"}>
           <button className="mobile-dock-close" title="Close" aria-label="Close music drawer" onClick={() => setMobileDock(null)}><X size={20} /></button>
@@ -185,10 +193,23 @@ export function App() {
           <div className={mobileDock && mobileDock !== "queue" ? "mobile-dock-hidden" : ""}><QueuePanel state={state} send={send} canManage={canManage} refresh={refresh} /></div>
         </aside>}
       </main>
-      {!compact && <div className="mobile-dock-tabs" aria-label="Music lists">
-        <button className={mobileDock === "playlists" ? "active" : ""} onClick={() => setMobileDock(current => current === "playlists" ? null : "playlists")}><ListMusic size={18} /><span>Playlists</span></button>
-        <button className={mobileDock === "queue" ? "active" : ""} onClick={() => setMobileDock(current => current === "queue" ? null : "queue")}><span className="queue-count">{state.queue.length}</span><span>Queue</span></button>
-      </div>}
+      {!compact && mobileMenu && <>
+        <button className="mobile-menu-backdrop" aria-label="Close navigation" onClick={() => setMobileMenu(false)} />
+        <section className="mobile-more-menu" aria-label="More DjGoo pages">
+          <div className="mobile-more-heading"><strong>More</strong><button className="icon-button" aria-label="Close navigation" onClick={() => setMobileMenu(false)}><X size={19} /></button></div>
+          <div className="mobile-more-grid">
+            {visibleViews.filter(view => !["Live", "Find", "Lists"].includes(view)).map(view => <button className={activeView === view ? "active" : ""} key={view} onClick={() => navigate(view)}>{view}</button>)}
+            <button onClick={() => { setMobileMenu(false); setMobileDock("playlists"); }}>Playlists</button>
+          </div>
+        </section>
+      </>}
+      {!compact && <nav className="mobile-app-nav" aria-label="DjGoo mobile navigation">
+        <button className={activeView === "Live" && !mobileDock ? "active" : ""} onClick={() => navigate("Live")}><House size={19} /><span>Live</span></button>
+        <button className={activeView === "Find" && !mobileDock ? "active" : ""} onClick={() => navigate("Find")}><Search size={19} /><span>Find</span></button>
+        <button className={mobileDock === "queue" ? "active" : ""} onClick={() => { setMobileMenu(false); setMobileDock(current => current === "queue" ? null : "queue"); }}><span className="queue-count">{state.queue.length}</span><span>Queue</span></button>
+        <button className={activeView === "Lists" && !mobileDock ? "active" : ""} onClick={() => navigate("Lists")}><ListMusic size={19} /><span>Lists</span></button>
+        <button className={mobileMenu || ["History", "Radio", "Players", "Settings", "Logs"].includes(activeView) ? "active" : ""} onClick={() => { setMobileDock(null); setMobileMenu(current => !current); }}><Menu size={19} /><span>More</span></button>
+      </nav>}
       <PersistentFooter state={state} send={send} status={status} />
     </div>
   );
