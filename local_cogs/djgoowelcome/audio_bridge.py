@@ -1770,14 +1770,14 @@ class DjGooAudioBridge:
     async def handle_station_track_start(self, guild, track) -> None:
         station = self.stations.get_active(guild.id)
         data = self._track_data(track)
+        if station is None:
+            return
         if self._should_reject_playing_track(data):
             log.info("DjGoo auto-skipping overlong or non-song track: %s", data.get("title", ""))
             log_event("radio.track.rejected_playing", guild_id=guild.id, reason="bad_title_or_duration", track=data)
             if station is not None:
                 self.stations.add_feedback(station["seed"], "banned", data)
             await self._skip_rejected_station_track(guild.id)
-            return
-        if station is None:
             return
         if self._station_rejects_track(station, data):
             log.info("DjGoo auto-skipping repeated radio track in %s: %s", station["name"], data.get("title", ""))

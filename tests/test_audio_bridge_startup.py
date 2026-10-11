@@ -695,6 +695,37 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bridge.controls, [])
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_radio_title_filter_does_not_skip_manual_playback_without_station(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            class Track:
+                title = "Denpai Snake - 80's remix (The lost MGSV Edit)"
+                uri = "https://www.youtube.com/watch?v=MDR3TJ1tZyA"
+                length = 190000
+                info = {}
+
+            bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+            bridge.stations = DjGooStations(Path(temp_dir) / "stations.json")
+            bridge.skips = []
+            bridge.controls = []
+            bridge._persist_player_state = lambda *args, **kwargs: None
+
+            async def skip_rejected(guild_id, *, top_up_station=False):
+                bridge.skips.append((guild_id, top_up_station))
+
+            async def send_controls(*args, **kwargs):
+                bridge.controls.append((args, kwargs))
+
+            bridge._skip_rejected_track = skip_rejected
+            bridge._send_playback_controls = send_controls
+
+            await bridge.handle_track_start(FakeGuild(), Track())
+
+        self.assertEqual(bridge.skips, [])
+        self.assertEqual(len(bridge.controls), 1)
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     async def test_rejected_track_bypasses_vote_skip_and_advances_player_directly(self):
         from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
 
