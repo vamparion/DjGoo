@@ -262,6 +262,36 @@ async def test_restore_seeks_current_track_before_restoring_queue(monkeypatch) -
     assert calls == [("seek", 97_000), ("queue", "next")]
 
 
+def test_timed_request_keeps_stable_youtube_url_when_player_is_active(monkeypatch) -> None:
+    from local_cogs.djgoowelcome import request_semantics_bridge as module
+
+    bridge = module.RequestSemanticsDjGooAudioBridge.__new__(module.RequestSemanticsDjGooAudioBridge)
+    monkeypatch.setattr(module.lavalink, "get_player", lambda _guild_id: SimpleNamespace(current=object()))
+
+    query = bridge._stable_query_for_timed_request(
+        42,
+        original_query="https://www.youtube.com/watch?v=track",
+        resolved_query="https://rr1---sn.example.googlevideo.com/videoplayback?expire=1",
+        timing="next",
+    )
+
+    assert query == "https://www.youtube.com/watch?v=track"
+
+
+def test_play_now_may_use_resolved_stream_immediately() -> None:
+    from local_cogs.djgoowelcome.request_semantics_bridge import RequestSemanticsDjGooAudioBridge
+
+    bridge = RequestSemanticsDjGooAudioBridge.__new__(RequestSemanticsDjGooAudioBridge)
+    stream = "https://rr1---sn.example.googlevideo.com/videoplayback?expire=1"
+
+    assert bridge._stable_query_for_timed_request(
+        42,
+        original_query="https://www.youtube.com/watch?v=track",
+        resolved_query=stream,
+        timing="now",
+    ) == stream
+
+
 @pytest.mark.asyncio
 async def test_playlist_enqueue_always_skips_duplicates(
     monkeypatch,

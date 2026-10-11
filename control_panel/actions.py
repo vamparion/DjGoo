@@ -9,7 +9,7 @@ from voice.command_queue import append_queue_item
 
 
 ACTION_TO_INTENT = {
-    "play": "play",
+    "play": "play_now",
     "play_next": "play",
     "start_radio": "start_radio",
     "stop_radio": "stop_radio",
