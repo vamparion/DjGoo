@@ -177,6 +177,24 @@ def test_stream_metadata_uses_find_artist(tmp_path) -> None:
     assert data["uri"] == "https://youtube.test/watch?v=track"
 
 
+def test_source_hint_enriches_original_url_track(tmp_path) -> None:
+    cache = tmp_path / "cache" / "localtracks"
+    cache.mkdir(parents=True)
+    uri = "https://www.youtube.com/watch?v=FTQbiNvZqaY"
+    (cache / "source-hints.json").write_text(
+        __import__("json").dumps({uri: {"title": "Africa", "artist": "Toto", "source_uri": uri}}),
+        encoding="utf-8",
+    )
+    bridge = object.__new__(DjGooAudioBridge)
+    bridge.project_root = tmp_path
+    track = type("Track", (), {"title": "Africa", "author": "Unknown artist", "uri": uri, "info": {}, "length": 0})()
+
+    data = bridge._track_data(track)
+
+    assert data["title"] == "Africa"
+    assert data["artist"] == "Toto"
+
+
 def test_local_media_metadata_replaces_lavalink_unknown_labels(tmp_path) -> None:
     cache = tmp_path / "cache" / "localtracks"
     cache.mkdir(parents=True)

@@ -50,7 +50,7 @@ export function SearchPanel({ state, send }: PanelProps) {
 
   async function addTo(destination: string, track: MusicSearchResult) {
     if (!destination) return;
-    if (destination === "queue") await send("play_next", { query: track.uri });
+    if (destination === "queue") await send("play_next", { query: track.uri, track });
     else await playlistAction("import", { playlist: destination, tracks: [track] });
   }
 
@@ -68,9 +68,9 @@ export function SearchPanel({ state, send }: PanelProps) {
           {track.artwork_url ? <img src={track.artwork_url} alt="" /> : <div className="search-art-placeholder"><Search size={18} /></div>}
           <div className="search-result-copy"><strong>{track.title}</strong><span>{track.artist || "Unknown artist"}{track.duration_seconds ? ` · ${duration(track.duration_seconds)}` : ""}</span></div>
           <div className="inline-actions">
-            <button className="btn primary icon-action" title="Play now" onClick={() => void send("play", { query: track.uri })}><Play size={15} /><span>Now</span></button>
-            <button className="btn icon-action" title="Add next" onClick={() => void send("play_next", { query: track.uri })}><ListPlus size={15} /><span>Next</span></button>
-            <button className="btn amber icon-action" title="Start radio from this song" onClick={() => void send("start_radio", { query: track.uri })}><Radio size={15} /><span>Radio</span></button>
+            <button className="btn primary icon-action" title="Play now" onClick={() => void send("play", { query: track.uri, track })}><Play size={15} /><span>Now</span></button>
+            <button className="btn icon-action" title="Add next" onClick={() => void send("play_next", { query: track.uri, track })}><ListPlus size={15} /><span>Next</span></button>
+            <button className="btn amber icon-action" title="Start radio from this song" onClick={() => void send("start_radio", { query: track.uri, track })}><Radio size={15} /><span>Radio</span></button>
             <select className="result-destination" aria-label={`Add ${track.title} to queue or playlist`} defaultValue="" onChange={(event) => { const value = event.target.value; event.target.value = ""; void addTo(value, track); }}><option value="" disabled>Add to...</option><option value="queue">Queue</option>{state.playlists.map((playlist) => <option key={playlist.name} value={playlist.name}>{playlist.name}</option>)}</select>
           </div>
         </div>)}

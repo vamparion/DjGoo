@@ -66,6 +66,11 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
         if intent not in {"play", "play_now", "queue_request"}:
             return await super().handle(item)
 
+        query = str(item.get("query") or "").strip()
+        track_hint = item.get("track") if isinstance(item.get("track"), dict) else {}
+        if query and track_hint:
+            self._remember_source_hint(query, track_hint)
+
         audio = self.bot.get_cog("Audio")
         ctx = self._context()
         if audio is None or ctx is None:
@@ -102,7 +107,7 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
             return await self._handle_timed_request(
                 audio,
                 ctx,
-                query=str(item.get("query") or "").strip(),
+                query=query,
                 source=str(item.get("source") or ""),
                 timing=timing,
             )
@@ -266,7 +271,13 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
         self._apply_request_fairness(ctx.guild.id, force_front=timing == "now")
 
         data = self._track_data(requested_track)
-        display = data.get("title") or query
+        title = str(data.get("title") or query).strip()
+        artist = str(data.get("artist") or "").strip()
+        if artist.casefold() == "unknown artist":
+            artist = ""
+        display = title
+        if artist and artist.casefold() not in title.casefold():
+            display = f"{artist} - {title}"
         self._persist_player_state(
             ctx.guild.id,
             reason=f"request_{timing}_enqueued",

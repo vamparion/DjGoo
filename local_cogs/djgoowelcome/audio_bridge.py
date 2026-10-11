@@ -724,6 +724,12 @@ class DjGooAudioBridge:
         }
         self._write_playback_state(guild_id, state)
 
+    def checkpoint_playback_state(self, *, reason: str = "periodic_checkpoint") -> None:
+        """Persist active players so a Host restart resumes near the live position."""
+
+        for guild in list(getattr(self.bot, "guilds", []) or []):
+            self._persist_player_state(int(guild.id), reason=reason)
+
     def _player_position_seconds(self, player: Any, current: Dict[str, Any]) -> int:
         # Lavalink reports player position in milliseconds, including during
         # the first seconds of a track. Guessing the unit from its magnitude
@@ -1609,7 +1615,8 @@ class DjGooAudioBridge:
             hints = json.loads((cache / "source-hints.json").read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             hints = {}
-        hint = hints.get(source_uri, {}) if source_uri and isinstance(hints, dict) else {}
+        hint_key = source_uri or uri
+        hint = hints.get(hint_key, {}) if hint_key and isinstance(hints, dict) else {}
         if isinstance(hint, dict):
             value.update({key: item for key, item in hint.items() if item not in (None, "", 0)})
         return value

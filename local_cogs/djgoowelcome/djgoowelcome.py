@@ -160,8 +160,12 @@ class DjGooWelcome(commands.Cog):
             self.bot.loop.create_task(self._start_gateway()) if self._gateway is not None else None
         )
         self._queue_task = self.bot.loop.create_task(self._command_queue_loop())
+        self._playback_checkpoint_task = self.bot.loop.create_task(
+            self._playback_checkpoint_loop()
+        )
 
     def cog_unload(self):
+        self._audio_bridge.checkpoint_playback_state(reason="cog_unload")
         native_play_command = getattr(self, "_djgoo_native_play_command", None)
         native_play_callback = getattr(self, "_djgoo_native_play_callback", None)
         if native_play_command is not None and native_play_callback is not None:
@@ -171,6 +175,7 @@ class DjGooWelcome(commands.Cog):
             with contextlib.suppress(AttributeError):
                 del native_play_command._djgoo_original_callback
         self._queue_task.cancel()
+        self._playback_checkpoint_task.cancel()
         if self._gateway_task is not None:
             self._gateway_task.cancel()
         if self._gateway is not None:
@@ -250,6 +255,12 @@ class DjGooWelcome(commands.Cog):
             port=self._gateway.port,
             fingerprint=self._gateway.fingerprint,
         )
+
+    async def _playback_checkpoint_loop(self) -> None:
+        await self.bot.wait_until_red_ready()
+        while True:
+            await asyncio.sleep(5)
+            self._audio_bridge.checkpoint_playback_state()
 
     def _advertised_gateway_url(self) -> str:
         settings = self._gateway_settings()

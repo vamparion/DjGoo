@@ -228,8 +228,8 @@ def test_find_returns_choices_and_queue_stays_in_the_sidebar() -> None:
     assert "<QueuePanel" in app and "canManage={canManage}" in app
     assert "searchMusic(q)" in search
     assert 'event.key === "Enter"' in search and "void search()" in search
-    assert 'send("play", { query: track.uri })' in search
-    assert 'send("play_next", { query: track.uri })' in search
+    assert 'send("play", { query: track.uri, track })' in search
+    assert 'send("play_next", { query: track.uri, track })' in search
     assert "queue-sidebar-list" in styles and "mini_queue_reorder" in queue_panel
     assert 'application/djgoo-track' in queue_panel and 'text/djgoo-history' in queue_panel
 

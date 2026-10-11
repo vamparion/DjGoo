@@ -235,6 +235,34 @@ async def test_restore_starts_current_before_appending_saved_queue() -> None:
 
 
 @pytest.mark.asyncio
+async def test_restore_seeks_current_track_before_restoring_queue(monkeypatch) -> None:
+    from local_cogs.djgoowelcome import audio_bridge as module
+
+    bridge = module.DjGooAudioBridge.__new__(module.DjGooAudioBridge)
+    calls: list[tuple[str, object]] = []
+    player = SimpleNamespace(seek=lambda position: calls.append(("seek", position)))
+    monkeypatch.setattr(module.lavalink, "get_player", lambda _guild_id: player)
+    bridge._play_query_when_ready = lambda *_args: _async_result(True)
+
+    async def invoke(_command, _ctx, **kwargs) -> None:
+        calls.append(("queue", kwargs.get("query")))
+
+    bridge._invoke_silently = invoke
+    audio = SimpleNamespace(command_play=object(), command_volume=object(), command_pause=object())
+    ctx = SimpleNamespace(guild=SimpleNamespace(id=42))
+
+    restored = await bridge._restore_playback_queries(
+        audio,
+        ctx,
+        ["current", "next"],
+        position_seconds=97,
+    )
+
+    assert restored is True
+    assert calls == [("seek", 97_000), ("queue", "next")]
+
+
+@pytest.mark.asyncio
 async def test_playlist_enqueue_always_skips_duplicates(
     monkeypatch,
 ) -> None:

@@ -47,6 +47,19 @@ class FakeResumeGuild:
 
 class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_checkpoint_persists_each_active_guild(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge.bot = type("Bot", (), {"guilds": [type("Guild", (), {"id": 11})(), type("Guild", (), {"id": 22})()]})()
+        saved = []
+        bridge._persist_player_state = lambda guild_id, *, reason: saved.append((guild_id, reason))
+
+        bridge.checkpoint_playback_state()
+
+        self.assertEqual(saved, [(11, "periodic_checkpoint"), (22, "periodic_checkpoint")])
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     async def test_web_toggle_pause_controls_the_active_player(self):
         from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
 
