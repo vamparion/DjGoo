@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from pathlib import Path
@@ -326,6 +327,7 @@ async def test_playlist_enqueue_always_skips_duplicates(
 
     bridge._invoke = invoke
     bridge._notice = notice
+    bridge._remember_source_hint = lambda *_args, **_kwargs: None
     audio = SimpleNamespace(command_play=object())
     ctx = SimpleNamespace(guild=SimpleNamespace(id=42))
 
@@ -338,6 +340,41 @@ async def test_playlist_enqueue_always_skips_duplicates(
     assert "Skipped 1" in first
     assert "already playing or queued" in second
     assert notices == [first, second]
+
+
+@pytest.mark.asyncio
+async def test_installed_playlist_resolves_each_youtube_track_before_enqueue(
+    monkeypatch,
+) -> None:
+    from local_cogs.djgoowelcome import audio_bridge as module
+
+    bridge = module.DjGooAudioBridge.__new__(module.DjGooAudioBridge)
+    source = "https://www.youtube.com/watch?v=BBBBBBBBBBB"
+    stream = "https://rr1---sn.example.googlevideo.com/videoplayback?expire=9999999999"
+    bridge.playlists = SimpleNamespace(
+        get_tracks=lambda _name: [{"title": "New Song", "artist": "Artist", "uri": source}]
+    )
+    bridge._direct_media_query = lambda query: stream if query == source else None
+    bridge._remember_source_hint = lambda *_args, **_kwargs: None
+    bridge._station_enqueue_depth = {}
+    player = SimpleNamespace(current=None, queue=[])
+    monkeypatch.setattr(module.lavalink, "get_player", lambda _guild_id: player)
+    monkeypatch.setenv("DJGOO_NATIVE_HOST", "1")
+    queued: list[str] = []
+
+    async def invoke(_command, _ctx, *, query: str) -> None:
+        queued.append(query)
+        player.queue.append(SimpleNamespace(title="Queued", uri=query, info={}))
+
+    bridge._invoke = invoke
+    bridge._notice = lambda _message: asyncio.sleep(0)
+    audio = SimpleNamespace(command_play=object())
+    ctx = SimpleNamespace(guild=SimpleNamespace(id=42))
+
+    await bridge._play_playlist(audio, ctx, "KnockOut", shuffle=False)
+
+    assert queued == [stream]
+    assert bridge._station_enqueue_depth == {}
 
 
 def test_mini_player_track_duplicate_checks_current_and_queue(monkeypatch) -> None:

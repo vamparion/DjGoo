@@ -856,17 +856,35 @@ class DjGooAudioBridge:
             if identity:
                 existing.add(identity)
 
-        for track in queued_tracks:
-            query = track.get("uri") or track.get("title")
-            if query:
-                previous_ids = self._player_object_ids(guild_id)
-                await self._invoke(audio.command_play, ctx, query=str(query))
-                self._remember_new_queue_origin(
-                    guild_id,
-                    previous_ids,
-                    source="playlist",
-                    label=playlist_name,
-                )
+        enqueue_depth = getattr(self, "_station_enqueue_depth", None)
+        if isinstance(enqueue_depth, dict):
+            enqueue_depth[guild_id] = enqueue_depth.get(guild_id, 0) + 1
+        try:
+            for track in queued_tracks:
+                query = track.get("uri") or track.get("title")
+                if query:
+                    query = str(query)
+                    self._remember_source_hint(query, track)
+                    if os.environ.get("DJGOO_NATIVE_HOST") == "1":
+                        query = (
+                            await asyncio.to_thread(self._direct_media_query, query)
+                            or query
+                        )
+                    previous_ids = self._player_object_ids(guild_id)
+                    await self._invoke(audio.command_play, ctx, query=query)
+                    self._remember_new_queue_origin(
+                        guild_id,
+                        previous_ids,
+                        source="playlist",
+                        label=playlist_name,
+                    )
+        finally:
+            if isinstance(enqueue_depth, dict):
+                remaining = enqueue_depth.get(guild_id, 1) - 1
+                if remaining > 0:
+                    enqueue_depth[guild_id] = remaining
+                else:
+                    enqueue_depth.pop(guild_id, None)
         if not queued_tracks:
             message = f"All {skipped} track(s) from `{playlist_name}` are already playing or queued."
         else:
