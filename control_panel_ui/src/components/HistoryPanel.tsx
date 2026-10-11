@@ -1,6 +1,7 @@
 import { Clock3, GripVertical, Play, Trash2 } from "lucide-react";
 import { playlistAction } from "../api";
 import type { PanelProps } from "./types";
+import { TouchTrackHandle } from "./TouchTrackHandle";
 
 type Props = PanelProps & { canManage: boolean; refresh: () => Promise<unknown> };
 
@@ -41,7 +42,7 @@ export function HistoryPanel({ state, send, canManage, refresh }: Props) {
           >
             <GripVertical className={canManage ? "history-grip" : "history-grip disabled"} size={18} />
             <div className="history-copy">
-              <strong>{track.title}</strong>
+              <div className="search-result-title"><strong>{track.title}</strong>{canManage && playable && <TouchTrackHandle track={track} queueLength={state.queue.length} />}</div>
               <span>{track.artist || track.mode || "DjGoo"} · {playedAt(track.played_at)}</span>
             </div>
             <button className="btn icon-action" disabled={!playable} title={playable ? "Play this exact source next" : "Original source unavailable"} onClick={() => void send("play_next", { query: source })}>

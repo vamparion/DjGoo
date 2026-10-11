@@ -17,6 +17,7 @@ import type { DjGooProfile } from "./api";
 import { Onboarding } from "./components/Onboarding";
 import { GamingSettings } from "./components/GamingSettings";
 import { optimisticallyTogglePlayback, reconcilePlaybackState } from "./playbackClock";
+import { TOUCH_TRACK_MOVE, type TouchTrackMoveDetail } from "./trackDrag";
 
 const views = ["Live", "Find", "History", "Radio", "Lists", "Players", "Settings", "Logs"] as const;
 type View = (typeof views)[number];
@@ -89,6 +90,20 @@ export function App() {
     document.addEventListener("visibilitychange", visibilityChanged);
     void poll();
     return () => { stopped = true; window.clearTimeout(timer); unsubscribeState(); unsubscribeConnection(); document.removeEventListener("visibilitychange", visibilityChanged); };
+  }, []);
+
+  useEffect(() => {
+    const move = (event: Event) => {
+      const { x, y } = (event as CustomEvent<TouchTrackMoveDetail>).detail || {};
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      const target = document.elementFromPoint(x, y);
+      if (target?.closest("[data-touch-queue-target]")) {
+        setMobileMenu(false);
+        setMobileDock("queue");
+      }
+    };
+    window.addEventListener(TOUCH_TRACK_MOVE, move);
+    return () => window.removeEventListener(TOUCH_TRACK_MOVE, move);
   }, []);
 
   async function send(action: string, payload: Record<string, unknown> = {}) {
@@ -206,7 +221,7 @@ export function App() {
       {!compact && <nav className="mobile-app-nav" aria-label="DjGoo mobile navigation">
         <button className={activeView === "Live" && !mobileDock ? "active" : ""} onClick={() => navigate("Live")}><House size={19} /><span>Live</span></button>
         <button className={activeView === "Find" && !mobileDock ? "active" : ""} onClick={() => navigate("Find")}><Search size={19} /><span>Find</span></button>
-        <button className={mobileDock === "queue" ? "active" : ""} onClick={() => { setMobileMenu(false); setMobileDock(current => current === "queue" ? null : "queue"); }}><span className="queue-count">{state.queue.length}</span><span>Queue</span></button>
+        <button data-touch-queue-target className={mobileDock === "queue" ? "active" : ""} onClick={() => { setMobileMenu(false); setMobileDock(current => current === "queue" ? null : "queue"); }}><span className="queue-count">{state.queue.length}</span><span>Queue</span></button>
         <button className={activeView === "Lists" && !mobileDock ? "active" : ""} onClick={() => navigate("Lists")}><ListMusic size={19} /><span>Lists</span></button>
         <button className={mobileMenu || ["History", "Radio", "Players", "Settings", "Logs"].includes(activeView) ? "active" : ""} onClick={() => { setMobileDock(null); setMobileMenu(current => !current); }}><Menu size={19} /><span>More</span></button>
       </nav>}

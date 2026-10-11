@@ -4,6 +4,7 @@ import { playlistAction, searchLibrary, searchMusic, type MusicSearchResult } fr
 import { clearDraggedTrack, rememberDraggedTrack } from "../trackDrag";
 import type { PanelProps } from "./types";
 import { normalizeMediaInput } from "../mediaInput";
+import { TouchTrackHandle } from "./TouchTrackHandle";
 
 function duration(seconds: number) {
   if (!seconds) return "";
@@ -66,7 +67,7 @@ export function SearchPanel({ state, send }: PanelProps) {
       <div className="search-results" aria-live="polite">
         {results.map((track) => <div className="search-result" draggable key={track.id || track.uri} onDragStart={(event) => dragTrack(event, track)} onDragEnd={() => window.setTimeout(clearDraggedTrack, 0)}>
           {track.artwork_url ? <img src={track.artwork_url} alt="" /> : <div className="search-art-placeholder"><Search size={18} /></div>}
-          <div className="search-result-copy"><strong>{track.title}</strong><span>{track.artist || "Unknown artist"}{track.duration_seconds ? ` · ${duration(track.duration_seconds)}` : ""}</span></div>
+          <div className="search-result-copy"><div className="search-result-title"><strong>{track.title}</strong><TouchTrackHandle track={track} queueLength={state.queue.length} /></div><span>{track.artist || "Unknown artist"}{track.duration_seconds ? ` · ${duration(track.duration_seconds)}` : ""}</span></div>
           <div className="inline-actions">
             <button className="btn primary icon-action" title="Play now" onClick={() => void send("play", { query: track.uri, track })}><Play size={15} /><span>Now</span></button>
             <button className="btn icon-action" title="Add next" onClick={() => void send("play_next", { query: track.uri, track })}><ListPlus size={15} /><span>Next</span></button>

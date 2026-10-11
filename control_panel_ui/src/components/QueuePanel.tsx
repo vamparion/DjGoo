@@ -1,8 +1,8 @@
 import { ChevronDown, ChevronUp, GripVertical, ListEnd, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ControlState, Track } from "../types";
 import type { PanelProps } from "./types";
-import { clearDraggedTrack, draggedTrackFallback } from "../trackDrag";
+import { clearDraggedTrack, draggedTrackFallback, TOUCH_TRACK_DROP, type TouchTrackDropDetail } from "../trackDrag";
 
 type Props = PanelProps & { canManage: boolean; refresh: () => Promise<ControlState | null | undefined> };
 
@@ -43,10 +43,7 @@ export function QueuePanel({ state, send, canManage, refresh }: Props) {
     await send("mini_queue_reorder", { payload: { track_ids: ids } });
   }
 
-  async function insert(event: React.DragEvent, index: number) {
-    event.preventDefault();
-    setDropIndex(null);
-    const target = droppedTrack(event, state);
+  async function insertTrack(target: Track | null, index: number) {
     if (!target) return;
     clearDraggedTrack();
     if (dragId) {
@@ -71,6 +68,23 @@ export function QueuePanel({ state, send, canManage, refresh }: Props) {
     await refresh();
   }
 
+  async function insert(event: React.DragEvent, index: number) {
+    event.preventDefault();
+    setDropIndex(null);
+    await insertTrack(droppedTrack(event, state), index);
+  }
+
+  useEffect(() => {
+    const drop = (event: Event) => {
+      const detail = (event as CustomEvent<TouchTrackDropDetail>).detail;
+      if (!detail?.track) return;
+      setDropIndex(null);
+      void insertTrack(detail.track, detail.index);
+    };
+    window.addEventListener(TOUCH_TRACK_DROP, drop);
+    return () => window.removeEventListener(TOUCH_TRACK_DROP, drop);
+  }, [state, canManage, send, refresh, dragId]);
+
   return (
     <section className="panel queue-dock">
       <div className="panel-title-row">
@@ -78,7 +92,7 @@ export function QueuePanel({ state, send, canManage, refresh }: Props) {
       </div>
       <div className="queue-sidebar-list">
         {state.queue.map((track, index) => (
-          <div className={`queue-sidebar-row ${dropIndex === index ? "drop-before" : ""}`} draggable={canManage} key={track.id || `${track.uri || track.title}-${index}`}
+          <div className={`queue-sidebar-row ${dropIndex === index ? "drop-before" : ""}`} data-touch-queue-index={index} draggable={canManage} key={track.id || `${track.uri || track.title}-${index}`}
             onDragStart={(event) => { setDragId(track.id || ""); event.dataTransfer.effectAllowed = "move"; }}
             onDragEnd={() => { setDragId(""); setDropIndex(null); }}
             onDragEnter={() => setDropIndex(index)}
@@ -89,7 +103,7 @@ export function QueuePanel({ state, send, canManage, refresh }: Props) {
             {canManage && <div className="queue-touch-actions"><button className="icon-button" disabled={index === 0} title="Move earlier" aria-label={`Move ${track.title} earlier`} onClick={() => void move(track.id || "", -1)}><ChevronUp size={15} /></button><button className="icon-button" disabled={index === state.queue.length - 1} title="Move later" aria-label={`Move ${track.title} later`} onClick={() => void move(track.id || "", 1)}><ChevronDown size={15} /></button><button className="icon-button queue-remove" title={`Remove ${track.title}`} aria-label={`Remove ${track.title}`} onClick={() => void send("remove_queue", { payload: { track_id: track.id } })}><Trash2 size={14} /></button></div>}
           </div>
         ))}
-        <div className={`queue-end-drop ${dropIndex === state.queue.length ? "active" : ""}`}
+        <div className={`queue-end-drop ${dropIndex === state.queue.length ? "active" : ""}`} data-touch-queue-index="end"
           onDragEnter={() => setDropIndex(state.queue.length)}
           onDragOver={(event) => event.preventDefault()}
           onDrop={(event) => void insert(event, state.queue.length)}>
