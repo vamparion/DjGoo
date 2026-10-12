@@ -533,6 +533,50 @@ async def test_queue_insert_starts_exact_drop_when_player_is_idle(monkeypatch) -
 
 
 @pytest.mark.asyncio
+async def test_queue_insert_advances_only_when_existing_player_is_idle(monkeypatch) -> None:
+    from local_cogs.djgoowelcome import experience_audio_bridge as module
+
+    bridge = module.ExperienceDjGooAudioBridge.__new__(module.ExperienceDjGooAudioBridge)
+    bridge.bot = SimpleNamespace(get_cog=lambda _name: object())
+    bridge._context = lambda: SimpleNamespace(guild=SimpleNamespace(id=42), author=None)
+    bridge._queue_item_ids = {}
+    bridge._queue_undo = {}
+    bridge._pending_request_context = {}
+    bridge._request_metadata = lambda *_args, **_kwargs: {}
+    bridge._remember_queue = lambda *_args, **_kwargs: None
+    bridge._persist_player_state = lambda *_args, **_kwargs: None
+    bridge._record_queue_transaction = lambda *_args, **_kwargs: None
+    inserted = SimpleNamespace(title="Dropped song", uri="track:exact")
+
+    class IdlePlayer:
+        def __init__(self):
+            self.queue = []
+            self.current = None
+            self.skip_calls = 0
+
+        async def skip(self):
+            self.skip_calls += 1
+            self.current = self.queue.pop(0)
+
+    player = IdlePlayer()
+    monkeypatch.setattr(module.lavalink, "get_player", lambda _guild_id: player)
+
+    async def enqueue(_audio, _ctx, **_kwargs):
+        player.queue.append(inserted)
+        return "Queued"
+
+    bridge._handle_timed_request = enqueue
+    result = await bridge._handle_mini_intent(
+        {"intent": "mini_queue_insert", "source": "panel", "query": "track:exact", "payload": {"index": 0}}
+    )
+
+    assert result["status"] == "completed"
+    assert player.current is inserted
+    assert player.queue == []
+    assert player.skip_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_queue_remove_uses_row_id_when_tracks_compare_equal(monkeypatch) -> None:
     from local_cogs.djgoowelcome import experience_audio_bridge as module
 

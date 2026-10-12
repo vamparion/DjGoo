@@ -258,7 +258,7 @@ def test_live_and_playlist_surfaces_keep_controls_contextual() -> None:
     live = (root / "components" / "LivePanel.tsx").read_text(encoding="utf-8")
     playlists = (root / "components" / "PlaylistPanel.tsx").read_text(encoding="utf-8")
 
-    assert 'openFind={() => setActiveView("Find")}' in app
+    assert 'openFind={() => navigate("Find")}' in app
     assert "!hasTrack ?" in live and "radioActive &&" in live
     assert 'send("reset")' not in live
     assert "playlist-track-row" in playlists

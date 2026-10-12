@@ -109,7 +109,7 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bridge._player_position_seconds(type("Player", (), {"position": 125_900})(), {}), 125)
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
-    async def test_playlist_replaces_current_track_and_preserves_source_order(self):
+    async def test_playlist_preserves_current_and_existing_queue_then_appends_in_source_order(self):
         from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
 
         class Track:
@@ -120,8 +120,10 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self):
                 self.current = Track("existing")
                 self.queue = [Track("existing-queued")]
+                self.skip_calls = 0
 
             async def skip(self):
+                self.skip_calls += 1
                 self.current = self.queue.pop(0)
 
         player = Player()
@@ -150,10 +152,11 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertTrue(result)
-        self.assertEqual(player.current.uri, "track-one")
+        self.assertEqual(player.current.uri, "existing")
+        self.assertEqual(player.skip_calls, 0)
         self.assertEqual(
             [track.uri for track in player.queue],
-            ["track-two", "track-three"],
+            ["existing-queued", "track-one", "track-two", "track-three"],
         )
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")

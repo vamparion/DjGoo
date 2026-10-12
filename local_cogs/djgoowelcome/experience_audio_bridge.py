@@ -765,6 +765,15 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             player.queue.extend(queue)
             self._persist_player_state(guild_id, reason="mini_queue_insert")
             self._record_queue_transaction(guild_id, player, action="insert", reason="Dropped into queue")
+            if getattr(player, "current", None) is None and player.queue:
+                advance = player.skip()
+                if hasattr(advance, "__await__"):
+                    await advance
+                self._persist_player_state(guild_id, reason="mini_queue_insert_started_idle")
+                return {
+                    "status": "completed",
+                    "message": f"Started {getattr(added, 'title', 'the requested track')} because the player was idle.",
+                }
             return {
                 "status": "completed",
                 "message": f"Added {getattr(added, 'title', 'track')} at queue position {min(insertion_index, len(queue) - 1) + 1}.",
