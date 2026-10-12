@@ -889,6 +889,38 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bridge.sent, [])
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_visible_enqueue_notification_uses_resolved_metadata(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        class Channel:
+            id = 456
+
+        class Message:
+            guild = FakeGuild()
+            channel = Channel()
+            edit = AsyncMock()
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge._last_enqueued_metadata = {
+            FakeGuild.id: {
+                "title": "Russia Privjet",
+                "artist": "Basshunter",
+                "uri": "https://www.youtube.com/watch?v=JWZ5Yws2pPE",
+                "artwork_url": "https://img.test/russia.jpg",
+            }
+        }
+        bridge._current_track_for_controls = lambda _guild_id: None
+
+        await bridge.handle_red_track_enqueue_message(Message())
+
+        kwargs = Message.edit.await_args.kwargs
+        self.assertIsNone(kwargs["content"])
+        self.assertEqual(kwargs["embed"].title, "Track Enqueued")
+        self.assertEqual(kwargs["embed"].description, "**Basshunter - Russia Privjet**")
+        self.assertEqual(kwargs["embed"].url, "https://www.youtube.com/watch?v=JWZ5Yws2pPE")
+        self.assertEqual(kwargs["embed"].thumbnail.url, "https://img.test/russia.jpg")
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     async def test_playback_controls_send_visible_content_embed_and_buttons(self):
         from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
 

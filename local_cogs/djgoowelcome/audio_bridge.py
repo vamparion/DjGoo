@@ -246,6 +246,7 @@ class DjGooAudioBridge:
         self.nuclear = NuclearResolver()
         self._send_payload = send_payload
         self._recent_control_posts: Dict[int, tuple[str, float]] = {}
+        self._last_enqueued_metadata: Dict[int, Dict[str, str]] = {}
         self._ytmusic = None
         log_event("bridge.initialized", resume_playback=self._should_resume_playback())
 
@@ -1875,7 +1876,11 @@ class DjGooAudioBridge:
 
     async def handle_track_enqueue(self, guild, track) -> None:
         log.info("DjGoo saw track enqueue in guild %s: %s", guild.id, getattr(track, "title", track))
-        log_event("red_audio.track.enqueue", guild_id=guild.id, track=self._track_data(track))
+        data = self._track_data(track)
+        if not hasattr(self, "_last_enqueued_metadata"):
+            self._last_enqueued_metadata = {}
+        self._last_enqueued_metadata[guild.id] = data
+        log_event("red_audio.track.enqueue", guild_id=guild.id, track=data)
         self._persist_player_state(guild.id, reason="track_enqueue")
 
     async def handle_track_end(self, guild, track) -> None:
@@ -1921,6 +1926,35 @@ class DjGooAudioBridge:
                     message.guild.id,
                     top_up_station=station is not None,
                 )
+                return
+        data = getattr(self, "_last_enqueued_metadata", {}).get(message.guild.id)
+        if data:
+            title = str(data.get("title") or "Unknown title").strip()
+            artist = str(data.get("artist") or "").strip()
+            display = title
+            if artist and artist.lower() != "unknown artist" and artist.lower() not in title.lower():
+                display = f"{artist} - {title}"
+            uri = str(data.get("source_uri") or data.get("uri") or "").strip()
+            embed = discord.Embed(
+                title="Track Enqueued",
+                description=f"**{display}**",
+                color=discord.Color.blurple(),
+                url=uri if uri.startswith(("https://", "http://")) else None,
+            )
+            artwork = str(data.get("artwork_url") or "").strip()
+            if artwork.startswith(("https://", "http://")):
+                embed.set_thumbnail(url=artwork)
+            try:
+                await message.edit(content=None, embed=embed)
+                log_event(
+                    "red_audio.visible_enqueue.updated",
+                    guild_id=message.guild.id,
+                    channel_id=message.channel.id,
+                    track=data,
+                )
+                return
+            except (discord.Forbidden, discord.NotFound, discord.HTTPException) as exc:
+                log.warning("DjGoo could not update Red's enqueue notification: %s", exc)
         log_event(
             "red_audio.visible_enqueue.ignored",
             guild_id=message.guild.id,

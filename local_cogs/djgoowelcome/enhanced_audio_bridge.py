@@ -353,8 +353,9 @@ class EnhancedDjGooAudioBridge(DjGooAudioBridge):
         data = super()._track_data(track)
         info = getattr(track, "info", {}) or {}
         artist = getattr(track, "author", "") or info.get("author", "") or info.get("artist", "")
-        if artist:
-            data["artist"] = str(artist).strip()
+        cleaned_artist = str(artist).strip()
+        if cleaned_artist and cleaned_artist.lower() != "unknown artist":
+            data["artist"] = cleaned_artist
         return data
 
     async def _mark_station_skip(self, ctx) -> None:

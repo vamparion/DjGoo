@@ -3,6 +3,7 @@ import pytest
 from unittest.mock import patch
 
 from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+from local_cogs.djgoowelcome.enhanced_audio_bridge import EnhancedDjGooAudioBridge
 
 
 class Response(io.BytesIO):
@@ -230,6 +231,33 @@ def test_local_media_metadata_replaces_lavalink_unknown_labels(tmp_path) -> None
         "artwork_url": "https://img.test/sandstorm.jpg",
         "duration_seconds": "225",
     }
+
+
+def test_enhanced_bridge_preserves_resolved_artist_over_unknown_lavalink_label(tmp_path) -> None:
+    cache = tmp_path / "cache" / "localtracks"
+    cache.mkdir(parents=True)
+    (cache / "metadata.json").write_text(
+        '{"track.webm":{"title":"Russia Privjet","artist":"Basshunter","duration_seconds":269}}',
+        encoding="utf-8",
+    )
+    bridge = object.__new__(EnhancedDjGooAudioBridge)
+    bridge.project_root = tmp_path
+    track = type(
+        "Track",
+        (),
+        {
+            "title": "Unknown title",
+            "author": "Unknown artist",
+            "uri": str(cache / "track.webm"),
+            "info": {},
+            "length": 0,
+        },
+    )()
+
+    data = bridge._track_data(track)
+
+    assert data["title"] == "Russia Privjet"
+    assert data["artist"] == "Basshunter"
 
 
 @pytest.mark.asyncio
