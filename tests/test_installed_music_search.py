@@ -115,7 +115,7 @@ def test_direct_media_query_does_not_reuse_cache_for_another_source(tmp_path) ->
     assert resolved != "localtracks/track.webm"
 
 
-def test_direct_media_query_returns_cached_lavalink_stream_with_search_metadata(tmp_path) -> None:
+def test_direct_media_query_downloads_stable_local_media_even_when_extractor_has_stream_url(tmp_path) -> None:
     cache = tmp_path / "cache" / "localtracks"
     cache.mkdir(parents=True)
     (cache / "source-hints.json").write_text(
@@ -124,8 +124,8 @@ def test_direct_media_query_returns_cached_lavalink_stream_with_search_metadata(
     )
 
     class Extractor:
-        def __init__(self, _options):
-            pass
+        def __init__(self, options):
+            self.options = options
 
         def __enter__(self):
             return self
@@ -134,8 +134,11 @@ def test_direct_media_query_returns_cached_lavalink_stream_with_search_metadata(
             pass
 
         def extract_info(self, uri, download):
-            assert download is False
+            assert download is True
+            path = self.options["outtmpl"].replace("%(ext)s", "webm")
+            __import__("pathlib").Path(path).write_bytes(b"audio")
             return {
+                "ext": "webm",
                 "url": "https://media.test/audio?expire=4102444800",
                 "webpage_url": uri,
                 "title": "Extractor title",
@@ -143,15 +146,19 @@ def test_direct_media_query_returns_cached_lavalink_stream_with_search_metadata(
                 "duration": 180,
             }
 
+        def prepare_filename(self, _info):
+            return self.options["outtmpl"].replace("%(ext)s", "webm")
+
     with patch("yt_dlp.YoutubeDL", Extractor), patch.dict(
         "os.environ", {"DJGOO_DATA_ROOT": str(tmp_path)}, clear=False
     ):
         first = DjGooAudioBridge._direct_media_query("https://www.youtube.com/watch?v=track")
         second = DjGooAudioBridge._direct_media_query("https://www.youtube.com/watch?v=track")
 
-    assert first == second == "https://media.test/audio?expire=4102444800"
-    streams = __import__("json").loads((cache / "streams.json").read_text(encoding="utf-8"))
-    assert streams[first]["artist"] == "Correct Artist"
+    assert first == second
+    assert first.startswith("localtracks/")
+    metadata = __import__("json").loads((cache / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata[first.removeprefix("localtracks/")]["artist"] == "Extractor artist"
 
 
 def test_stream_metadata_uses_find_artist(tmp_path) -> None:

@@ -4,6 +4,8 @@ import functools
 import json
 from pathlib import Path
 
+import discord
+import lavalink
 from redbot.core import commands
 from redbot.core.bot import Red
 
@@ -275,6 +277,42 @@ def _install_native_play_routing(bot: Red, djgoo: DjGooWelcome) -> bool:
     return True
 
 
+def _install_audio_failure_guard(bot: Red) -> bool:
+    """Keep Red notification errors from pinning a failed track at 0:00."""
+
+    audio = bot.get_cog("Audio")
+    if audio is None or bool(getattr(audio, "_djgoo_failure_guard", False)):
+        return False
+    original = audio.lavalink_event_handler
+
+    async def guarded_lavalink_event_handler(player, event_type, extra) -> None:
+        try:
+            await original(player, event_type, extra)
+        except discord.HTTPException as exc:
+            if event_type not in {
+                lavalink.LavalinkEvents.TRACK_EXCEPTION,
+                lavalink.LavalinkEvents.TRACK_STUCK,
+            }:
+                raise
+            log_event(
+                "red_audio.failure_notification_suppressed",
+                guild_id=int(getattr(player, "guild_id", 0) or 0),
+                event_type=str(event_type),
+                error=type(exc).__name__,
+                detail=str(exc)[:500],
+            )
+            if player.node.ready:
+                await player.skip()
+
+    lavalink.unregister_event_listener(original)
+    lavalink.register_event_listener(guarded_lavalink_event_handler)
+    audio._djgoo_failure_guard = True
+    audio._djgoo_original_lavalink_event_handler = original
+    audio._djgoo_guarded_lavalink_event_handler = guarded_lavalink_event_handler
+    log_event("red_audio.failure_guard_installed")
+    return True
+
+
 install_route_safe_pairing_codes()
 _install_complete_gateway_settings()
 _install_gateway_firewall_repair()
@@ -306,6 +344,7 @@ async def _ensure_djgoo_slash_command(bot: Red) -> None:
 async def setup(bot: Red) -> None:
     djgoo = DjGooWelcome(bot)
     await bot.add_cog(djgoo)
+    _install_audio_failure_guard(bot)
     _install_native_play_routing(bot, djgoo)
     await bot.add_cog(DjGooGuide())
     await bot.add_cog(DjGooRelay(bot, djgoo, PROJECT_ROOT))

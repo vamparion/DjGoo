@@ -1046,21 +1046,6 @@ class DjGooAudioBridge:
                     log_event("media.cache.hit", uri=uri, filename=safe_name)
                     return f"localtracks/{safe_name}"
 
-            streams_path = cache / "streams.json"
-            try:
-                streams = json.loads(streams_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                streams = {}
-            if not isinstance(streams, dict):
-                streams = {}
-            now = time.time()
-            for stream_uri, details in streams.items():
-                if not isinstance(details, dict) or str(details.get("source_uri") or "") != uri:
-                    continue
-                if float(details.get("expires_at") or 0) > now + 300:
-                    log_event("media.stream_cache.hit", uri=uri)
-                    return str(stream_uri)
-
             import yt_dlp
 
             stem = hashlib.sha256(uri.encode("utf-8")).hexdigest()[:24]
@@ -1071,47 +1056,15 @@ class DjGooAudioBridge:
                 "format": "bestaudio",
                 "outtmpl": str(cache / f"{stem}.%(ext)s"),
                 "noplaylist": True,
-                "skip_download": True,
                 "socket_timeout": 8,
                 "retries": 1,
             }
-            with yt_dlp.YoutubeDL(options) as extractor:
-                info = extractor.extract_info(uri, download=False)
-                stream_uri = str(
-                    info.get("url")
-                    or ((info.get("requested_downloads") or [{}])[0].get("url"))
-                    or ""
-                ).strip()
-                if stream_uri.startswith(("https://", "http://")):
-                    try:
-                        hints = json.loads((cache / "source-hints.json").read_text(encoding="utf-8"))
-                    except (OSError, json.JSONDecodeError):
-                        hints = {}
-                    hint = hints.get(uri, {}) if isinstance(hints, dict) else {}
-                    expires_at = float((parse_qs(urlparse(stream_uri).query).get("expire") or [now + 1800])[0])
-                    streams[stream_uri] = {
-                        "title": str(hint.get("title") or info.get("title") or "").strip(),
-                        "artist": str(
-                            hint.get("artist")
-                            or info.get("artist")
-                            or info.get("uploader")
-                            or info.get("channel")
-                            or ""
-                        ).strip(),
-                        "artwork_url": str(hint.get("artwork_url") or info.get("thumbnail") or "").strip(),
-                        "duration_seconds": int(float(hint.get("duration_seconds") or info.get("duration") or 0)),
-                        "source_uri": str(info.get("webpage_url") or uri).strip(),
-                        "expires_at": expires_at,
-                    }
-                    temporary = streams_path.with_suffix(".json.tmp")
-                    temporary.write_text(json.dumps(streams, indent=2) + "\n", encoding="utf-8")
-                    os.replace(temporary, streams_path)
-                    log_event("media.stream.ready", uri=uri, expires_at=expires_at)
-                    return stream_uri
-                download_options = {**options, "skip_download": False}
-                with yt_dlp.YoutubeDL(download_options) as downloader:
-                    info = downloader.extract_info(uri, download=not bool(existing and existing.stat().st_size))
-                    filename = existing or Path(downloader.prepare_filename(info))
+            with yt_dlp.YoutubeDL(options) as downloader:
+                info = downloader.extract_info(
+                    uri,
+                    download=not bool(existing and existing.stat().st_size),
+                )
+                filename = existing or Path(downloader.prepare_filename(info))
             if filename.is_file():
                 metadata[filename.name] = {
                     "title": str(info.get("title") or "").strip(),
@@ -1281,6 +1234,8 @@ class DjGooAudioBridge:
         queries = [query for query in queries if str(query).strip()]
         if not queries:
             return False
+        if os.environ.get("DJGOO_NATIVE_HOST") == "1":
+            queries[0] = await asyncio.to_thread(self._direct_media_query, queries[0]) or queries[0]
         if not await self._play_query_when_ready(audio, ctx, queries[0]):
             return False
         guild = getattr(ctx, "guild", None)
@@ -1303,6 +1258,8 @@ class DjGooAudioBridge:
         if paused:
             await self._invoke_silently(audio.command_pause, ctx)
         for query in queries[1:]:
+            if os.environ.get("DJGOO_NATIVE_HOST") == "1":
+                query = await asyncio.to_thread(self._direct_media_query, query) or query
             await self._invoke_silently(audio.command_play, ctx, query=query)
         return True
 

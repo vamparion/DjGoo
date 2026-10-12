@@ -3,7 +3,7 @@ import tempfile
 import unittest
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -46,6 +46,40 @@ class FakeResumeGuild:
 
 
 class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_audio_failure_guard_advances_when_discord_rejects_error_embed(self):
+        import discord
+        import lavalink
+        from local_cogs.djgoowelcome import _install_audio_failure_guard
+
+        response = type("Response", (), {"status": 400, "reason": "Bad Request"})()
+        failure = discord.HTTPException(
+            response,
+            {"code": 50035, "message": "Invalid Form Body"},
+        )
+        original = AsyncMock(side_effect=failure)
+        audio = type("Audio", (), {"lavalink_event_handler": original})()
+        bot = type("Bot", (), {"get_cog": lambda _self, _name: audio})()
+        player = type(
+            "Player",
+            (),
+            {
+                "guild_id": 123,
+                "node": type("Node", (), {"ready": True})(),
+                "skip": AsyncMock(),
+            },
+        )()
+
+        with patch("local_cogs.djgoowelcome.lavalink.unregister_event_listener") as unregister, patch(
+            "local_cogs.djgoowelcome.lavalink.register_event_listener"
+        ) as register:
+            self.assertTrue(_install_audio_failure_guard(bot))
+            guarded = register.call_args.args[0]
+            await guarded(player, lavalink.LavalinkEvents.TRACK_EXCEPTION, {"message": "failure"})
+
+        unregister.assert_called_once_with(original)
+        player.skip.assert_awaited_once()
+
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
     async def test_checkpoint_persists_each_active_guild(self):
         from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
@@ -157,6 +191,39 @@ class RadioStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [track.uri for track in player.queue],
             ["existing-queued", "track-one", "track-two", "track-three"],
+        )
+
+    @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
+    async def test_installed_restore_converts_saved_urls_to_stable_local_media(self):
+        from local_cogs.djgoowelcome.audio_bridge import DjGooAudioBridge
+
+        bridge = DjGooAudioBridge.__new__(DjGooAudioBridge)
+        bridge._direct_media_query = lambda query: f"localtracks/{query.rsplit('=', 1)[-1]}.webm"
+        bridge._play_query_when_ready = AsyncMock(return_value=True)
+        bridge._invoke_silently = AsyncMock()
+        player = type("Player", (), {"current": object(), "queue": [], "volume": 90})()
+        audio = FakeAudio()
+        queries = [
+            "https://www.youtube.com/watch?v=current",
+            "https://www.youtube.com/watch?v=next",
+        ]
+
+        with patch.dict("os.environ", {"DJGOO_NATIVE_HOST": "1"}, clear=False), patch(
+            "local_cogs.djgoowelcome.audio_bridge.lavalink.get_player",
+            return_value=player,
+        ):
+            restored = await bridge._restore_playback_queries(audio, FakeContext(), queries)
+
+        self.assertTrue(restored)
+        bridge._play_query_when_ready.assert_awaited_once_with(
+            audio,
+            ANY,
+            "localtracks/current.webm",
+        )
+        bridge._invoke_silently.assert_awaited_once_with(
+            audio.command_play,
+            ANY,
+            query="localtracks/next.webm",
         )
 
     @unittest.skipUnless(importlib.util.find_spec("redbot"), "Redbot is only installed in the bot venv")
