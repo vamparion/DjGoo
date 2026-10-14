@@ -503,6 +503,44 @@ async def test_queue_insert_is_atomic_and_places_the_exact_new_track(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_queue_insert_append_uses_live_end_of_queue(monkeypatch) -> None:
+    from local_cogs.djgoowelcome import experience_audio_bridge as module
+
+    bridge = module.ExperienceDjGooAudioBridge.__new__(module.ExperienceDjGooAudioBridge)
+    bridge.bot = SimpleNamespace(get_cog=lambda _name: object())
+    bridge._context = lambda: SimpleNamespace(guild=SimpleNamespace(id=42), author=None)
+    bridge._queue_item_ids = {}
+    bridge._queue_undo = {}
+    bridge._pending_request_context = {}
+    bridge._request_metadata = lambda *_args, **_kwargs: {"requester_name": "Host"}
+    bridge._remember_queue = lambda *_args, **_kwargs: None
+    bridge._persist_player_state = lambda *_args, **_kwargs: None
+    bridge._record_queue_transaction = lambda *_args, **_kwargs: None
+    first = SimpleNamespace(title="First", uri="track:first")
+    concurrent = SimpleNamespace(title="Concurrent", uri="track:concurrent")
+    inserted = SimpleNamespace(title="Web request", uri="track:web")
+    player = SimpleNamespace(queue=[first], current=SimpleNamespace(title="Playing"))
+    monkeypatch.setattr(module.lavalink, "get_player", lambda _guild_id: player)
+
+    async def enqueue(_audio, _ctx, **_kwargs):
+        player.queue.extend([concurrent, inserted])
+        return "Queued"
+
+    bridge._handle_timed_request = enqueue
+    result = await bridge._handle_mini_intent(
+        {
+            "intent": "mini_queue_insert",
+            "source": "panel",
+            "query": "track:web",
+            "payload": {"index": 1, "append": True},
+        }
+    )
+
+    assert result["status"] == "completed"
+    assert [track.title for track in player.queue] == ["First", "Concurrent", "Web request"]
+
+
+@pytest.mark.asyncio
 async def test_queue_insert_starts_exact_drop_when_player_is_idle(monkeypatch) -> None:
     from local_cogs.djgoowelcome import experience_audio_bridge as module
 

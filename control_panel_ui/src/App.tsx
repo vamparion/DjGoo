@@ -184,7 +184,7 @@ export function App() {
 
   return (
     <div className={`app ${state.gaming.settings.ranked_mode ? "ranked-mode" : ""} ${isRemoteSession() ? "remote-mode" : ""} ${compact ? "compact-mode" : ""}`}>
-      <CommandBar send={send} />
+      <CommandBar send={send} queueLength={state.queue.length} />
       {error && <div className="banner error">{error}</div>}
       <main className="content">
         {!compact && <nav className="rail" aria-label="DjGoo tools">

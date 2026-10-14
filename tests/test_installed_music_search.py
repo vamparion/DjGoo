@@ -261,6 +261,35 @@ def test_enhanced_bridge_preserves_resolved_artist_over_unknown_lavalink_label(t
 
 
 @pytest.mark.asyncio
+async def test_installed_radio_requires_stable_local_media(monkeypatch) -> None:
+    monkeypatch.setenv("DJGOO_NATIVE_HOST", "1")
+    bridge = object.__new__(DjGooAudioBridge)
+    bridge._direct_media_query = lambda _uri: None
+
+    resolved = await bridge._installed_radio_query(
+        "https://www.youtube.com/watch?v=blocked",
+        search_hint="Artist Song",
+    )
+
+    assert resolved is None
+
+
+@pytest.mark.asyncio
+async def test_installed_radio_uses_resolved_local_media(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("DJGOO_NATIVE_HOST", "1")
+    bridge = object.__new__(DjGooAudioBridge)
+    local_track = tmp_path / "track.webm"
+    bridge._direct_media_query = lambda _uri: str(local_track)
+
+    resolved = await bridge._installed_radio_query(
+        "https://www.youtube.com/watch?v=ready",
+        search_hint="Artist Song",
+    )
+
+    assert resolved == str(local_track)
+
+
+@pytest.mark.asyncio
 async def test_installed_explicit_youtube_url_uses_local_media() -> None:
     bridge = object.__new__(DjGooAudioBridge)
 

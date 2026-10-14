@@ -567,6 +567,10 @@ class DjGooAudioBridge:
                 continue
             ctx = self._context_for(guild, author, channel)
             query = await self._radio_fallback_query(station["seed"])
+            query = await self._installed_radio_query(query, search_hint=station["seed"])
+            if not query:
+                log_event("radio.resume.skipped_guild", guild_id=guild.id, reason="stable_media_unavailable")
+                continue
             log_event("radio.resume.playing", guild_id=guild.id, station=station["name"], seed=station["seed"], query=query)
             await self._play_query_when_ready(audio, ctx, query)
 
@@ -1119,6 +1123,25 @@ class DjGooAudioBridge:
         )
         return resolved or fallback
 
+    async def _installed_radio_query(self, query: str, *, search_hint: str = "") -> Optional[str]:
+        """Keep the installed radio lane off expiring or blocked YouTube streams."""
+
+        cleaned = str(query or "").strip()
+        if not cleaned:
+            return None
+        if os.environ.get("DJGOO_NATIVE_HOST") != "1" or not self._is_youtube_url(cleaned):
+            return cleaned
+        local_query = await asyncio.to_thread(self._direct_media_query, cleaned)
+        if local_query:
+            log_event("radio.media.local_resolved", source_uri=cleaned, local_query=local_query)
+            return local_query
+        log_event(
+            "radio.media.unavailable",
+            source_uri=cleaned,
+            search_hint=str(search_hint or ""),
+        )
+        return None
+
     def _radio_seed_search_query(self, seed: str) -> str:
         normalized = re.sub(r"\s+", " ", seed.strip().lower())
         aliases = {
@@ -1182,11 +1205,11 @@ class DjGooAudioBridge:
                 },
             )
         log_event("radio.start.play_seed", guild_id=ctx.guild.id, seed=seed, play_query=play_query)
-        if os.environ.get("DJGOO_NATIVE_HOST") == "1":
-            play_query = (
-                await asyncio.to_thread(self._direct_media_query, play_query)
-                or play_query
-            )
+        play_query = await self._installed_radio_query(play_query, search_hint=station_seed)
+        if not play_query:
+            self.stations.clear_active(ctx.guild.id)
+            await self._notice("DjGoo could not prepare a stable copy of that station seed.")
+            return "Radio startup failed"
         if not await self._play_query_when_ready(audio, ctx, play_query):
             self.stations.clear_active(ctx.guild.id)
             await self._notice(
@@ -2149,6 +2172,18 @@ class DjGooAudioBridge:
             )
             return
         query = recommended["uri"]
+        query = await self._installed_radio_query(
+            query,
+            search_hint=f"{recommended.get('artist', '')} {recommended.get('title', '')}".strip(),
+        )
+        if not query:
+            log_event(
+                "radio.top_up.skipped",
+                guild_id=guild_id,
+                station=station["name"],
+                reason="stable_media_unavailable",
+            )
+            return
         log_event(
             "radio.top_up.play",
             guild_id=guild_id,
@@ -2157,7 +2192,12 @@ class DjGooAudioBridge:
             used_recommendation=bool(recommended),
             queue_length=len(player.queue),
         )
-        await self._invoke(audio.command_play, ctx, query=query)
+        try:
+            await self._enqueue_resolved_query(audio, ctx, query)
+        except PlayerNotFound:
+            log_event("radio.top_up.player_reconnect", guild_id=guild_id, station=station["name"])
+            await asyncio.sleep(0.5)
+            await self._play_query_when_ready(audio, ctx, query)
 
     async def _recommended_radio_track(self, station: Dict[str, Any]) -> Optional[Dict[str, str]]:
         last_track = station.get("last_track") if isinstance(station.get("last_track"), dict) else None

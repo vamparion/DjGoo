@@ -4,9 +4,10 @@ import { normalizeMediaInput } from "../mediaInput";
 
 type Props = {
   send: CommandSender;
+  queueLength: number;
 };
 
-export function CommandBar({ send }: Props) {
+export function CommandBar({ send, queueLength }: Props) {
   const [query, setQuery] = useState("");
   const [action, setAction] = useState("auto");
 
@@ -16,7 +17,7 @@ export function CommandBar({ send }: Props) {
     if (lower.startsWith("play ")) return { action: "play_next", query: text.slice(5).trim() };
     if (lower.startsWith("save ") || lower.startsWith("add ")) return { action: "save_current", playlist: text.replace(/^(save|add)\s+/i, "").trim() };
     if (["skip", "stop", "queue", "pause", "resume"].includes(lower)) return { action: lower, query: "" };
-    return { action: "play_next", query: text };
+    return { action: "queue_insert", query: text, append: true };
   }
 
   async function submit() {
@@ -24,7 +25,11 @@ export function CommandBar({ send }: Props) {
     if (!text) return;
     if (action === "auto") {
       const resolved = resolveAutoAction(text);
-      await send(resolved.action, { query: resolved.query, playlist: resolved.playlist });
+      await send(resolved.action, {
+        query: resolved.query,
+        playlist: resolved.playlist,
+        ...(resolved.append ? { payload: { append: true, index: queueLength } } : {}),
+      });
     } else if (action === "start_radio") {
       await send("start_radio", { query: text.replace(/^radio\s+/i, "") });
     } else if (action === "add_to_playlist") {

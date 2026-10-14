@@ -733,9 +733,9 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
             self._remember_source_hint(query, track_hint)
             try:
                 existing_player = lavalink.get_player(guild_id)
-                before_ids = {self._stable_track_id(track) for track in list(existing_player.queue)}
+                before_object_ids = {id(track) for track in list(existing_player.queue)}
             except (NodeNotFound, PlayerNotFound):
-                before_ids = set()
+                before_object_ids = set()
             self._pending_request_context[guild_id] = self._request_metadata(ctx, timing="next", item=item)
             self._pending_request_context[guild_id]["source"] = str(item.get("source") or "panel")
             try:
@@ -752,15 +752,17 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                 player = lavalink.get_player(guild_id)
             except (NodeNotFound, PlayerNotFound):
                 return result
-            added = next((track for track in list(player.queue) if self._stable_track_id(track) not in before_ids), None)
-            if added is None:
+            added_tracks = [track for track in list(player.queue) if id(track) not in before_object_ids]
+            if not added_tracks:
                 current = getattr(player, "current", None)
                 if current is not None and self._track_identity(current) == self._track_identity({"uri": query}):
                     return {"status": "completed", "message": "Started the requested song because the queue was idle."}
                 return result
             self._remember_queue(guild_id, player)
-            queue = [track for track in list(player.queue) if track is not added]
-            queue.insert(min(insertion_index, len(queue)), added)
+            added_object_ids = {id(track) for track in added_tracks}
+            queue = [track for track in list(player.queue) if id(track) not in added_object_ids]
+            target_index = len(queue) if payload.get("append") is True else min(insertion_index, len(queue))
+            queue[target_index:target_index] = added_tracks
             player.queue.clear()
             player.queue.extend(queue)
             self._persist_player_state(guild_id, reason="mini_queue_insert")
@@ -772,11 +774,14 @@ class ExperienceDjGooAudioBridge(ResilientGameFirstDjGooAudioBridge):
                 self._persist_player_state(guild_id, reason="mini_queue_insert_started_idle")
                 return {
                     "status": "completed",
-                    "message": f"Started {getattr(added, 'title', 'the requested track')} because the player was idle.",
+                    "message": f"Started {getattr(added_tracks[0], 'title', 'the requested track')} because the player was idle.",
                 }
+            added_label = getattr(added_tracks[0], "title", "track")
+            if len(added_tracks) > 1:
+                added_label = f"{len(added_tracks)} tracks"
             return {
                 "status": "completed",
-                "message": f"Added {getattr(added, 'title', 'track')} at queue position {min(insertion_index, len(queue) - 1) + 1}.",
+                "message": f"Added {added_label} at queue position {target_index + 1}.",
             }
 
         try:

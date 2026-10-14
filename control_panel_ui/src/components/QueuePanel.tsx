@@ -43,22 +43,28 @@ export function QueuePanel({ state, send, canManage, refresh }: Props) {
     await send("mini_queue_reorder", { payload: { track_ids: ids } });
   }
 
-  async function insertTrack(target: Track | null, index: number) {
-    if (!target) return;
-    clearDraggedTrack();
-    if (dragId) {
-      if (!canManage) return;
-      const before = state.queue[index]?.id || "";
-      if (before) {
-        await reorder(dragId, before);
-      } else {
-        const ids = state.queue.map((item) => item.id || "").filter((id) => id && id !== dragId);
-        ids.push(dragId);
-        setDragId("");
-        await send("mini_queue_reorder", { payload: { track_ids: ids } });
-      }
+  async function reorderToIndex(queueTrackId: string, index: number) {
+    if (!canManage) return;
+    if (!queueTrackId) return;
+    const before = state.queue[index]?.id || "";
+    if (before) {
+      await reorder(queueTrackId, before);
+    } else {
+      const ids = state.queue.map((item) => item.id || "").filter((id) => id && id !== queueTrackId);
+      ids.push(queueTrackId);
+      setDragId("");
+      await send("mini_queue_reorder", { payload: { track_ids: ids } });
+    }
+    await refresh();
+  }
+
+  async function insertTrack(target: Track | null, index: number, queueTrackId = dragId) {
+    if (queueTrackId) {
+      await reorderToIndex(queueTrackId, index);
       return;
     }
+    if (!target) return;
+    clearDraggedTrack();
     const source = target.source_uri || target.uri || "";
     if (!source.startsWith("http://") && !source.startsWith("https://")) return;
     await send("queue_insert", {
@@ -71,7 +77,8 @@ export function QueuePanel({ state, send, canManage, refresh }: Props) {
   async function insert(event: React.DragEvent, index: number) {
     event.preventDefault();
     setDropIndex(null);
-    await insertTrack(droppedTrack(event, state), index);
+    const queueTrackId = event.dataTransfer.getData("application/djgoo-queue-id");
+    await insertTrack(droppedTrack(event, state), index, queueTrackId);
   }
 
   useEffect(() => {
@@ -93,7 +100,13 @@ export function QueuePanel({ state, send, canManage, refresh }: Props) {
       <div className="queue-sidebar-list">
         {state.queue.map((track, index) => (
           <div className={`queue-sidebar-row ${dropIndex === index ? "drop-before" : ""}`} data-touch-queue-index={index} draggable={canManage} key={track.id || `${track.uri || track.title}-${index}`}
-            onDragStart={(event) => { setDragId(track.id || ""); event.dataTransfer.effectAllowed = "move"; }}
+            onDragStart={(event) => {
+              const trackId = track.id || "";
+              setDragId(trackId);
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData("application/djgoo-queue-id", trackId);
+              event.dataTransfer.setData("text/plain", trackId);
+            }}
             onDragEnd={() => { setDragId(""); setDropIndex(null); }}
             onDragEnter={() => setDropIndex(index)}
             onDragOver={(event) => event.preventDefault()}
