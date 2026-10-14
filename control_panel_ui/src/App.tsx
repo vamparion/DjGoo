@@ -1,22 +1,25 @@
 import { useEffect, useRef, useState } from "react";
+import { House, ListMusic, Menu, Search, X } from "lucide-react";
 import { createProfile, getState, isDirectTransportHealthy, isRemoteSession, reconnectRemote, resetDjGoo, savedProfile, sendCommand, stateRefreshIntervalMs, subscribeConnection, subscribeState } from "./api";
 import { CommandBar } from "./components/CommandBar";
 import { HealthPanel } from "./components/HealthPanel";
+import { HistoryPanel } from "./components/HistoryPanel";
 import { LivePanel } from "./components/LivePanel";
 import { LogsPanel } from "./components/LogsPanel";
 import { PersistentFooter } from "./components/PersistentFooter";
 import { PlaylistPanel } from "./components/PlaylistPanel";
 import { QueuePanel } from "./components/QueuePanel";
 import { SearchPanel } from "./components/SearchPanel";
-import { SmartActions } from "./components/SmartActions";
 import { StationPanel } from "./components/StationPanel";
 import { GuestPanel } from "./components/GuestPanel";
 import type { ControlState } from "./types";
 import type { DjGooProfile } from "./api";
 import { Onboarding } from "./components/Onboarding";
 import { GamingSettings } from "./components/GamingSettings";
+import { optimisticallyTogglePlayback, reconcilePlaybackState } from "./playbackClock";
+import { TOUCH_TRACK_MOVE, type TouchTrackMoveDetail } from "./trackDrag";
 
-const views = ["Live", "Find", "Radio", "Lists", "Players", "Settings", "Logs"] as const;
+const views = ["Live", "Find", "History", "Radio", "Lists", "Players", "Settings", "Logs"] as const;
 type View = (typeof views)[number];
 
 export function App() {
@@ -25,12 +28,21 @@ export function App() {
   const [error, setError] = useState("");
   const [status, setStatus] = useState("Ready");
   const [activeView, setActiveView] = useState<View>("Live");
+  const [mobileDock, setMobileDock] = useState<"playlists" | "queue" | null>(null);
+  const [mobileMenu, setMobileMenu] = useState(false);
   const [profile, setProfile] = useState<DjGooProfile | null>(() => savedProfile());
   const refreshStarted = useRef(0);
   const refreshApplied = useRef(0);
-  const role = state?.session?.role || profile?.role || "guest";
+  const role = isRemoteSession() ? (state?.session?.role || profile?.role || "guest") : "host";
   const canManage = role === "host" || role === "moderator";
   const visibleViews = views.filter((view) => canManage || !["Players", "Settings", "Logs"].includes(view));
+
+  function navigate(view: View) {
+    setActiveView(view);
+    setMobileDock(null);
+    setMobileMenu(false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
 
   async function refresh() {
     const requestNumber = ++refreshStarted.current;
@@ -38,7 +50,7 @@ export function App() {
       const next = await getState();
       if (requestNumber < refreshApplied.current) return next;
       refreshApplied.current = requestNumber;
-      setState(next);
+      setState(current => reconcilePlaybackState(current, next));
       if (next.session) setProfile({ id: next.session.discord_user_id || "remote", token: "", username: next.session.display_name, role: next.session.role });
       setError("");
     } catch (err) {
@@ -67,7 +79,7 @@ export function App() {
     };
     const unsubscribeState = subscribeState(next => {
       refreshApplied.current = ++refreshStarted.current;
-      setState(next);
+      setState(current => reconcilePlaybackState(current, next));
       if (next.session) setProfile({ id: next.session.discord_user_id || "remote", token: "", username: next.session.display_name, role: next.session.role });
       setError("");
     });
@@ -80,8 +92,25 @@ export function App() {
     return () => { stopped = true; window.clearTimeout(timer); unsubscribeState(); unsubscribeConnection(); document.removeEventListener("visibilitychange", visibilityChanged); };
   }, []);
 
+  useEffect(() => {
+    const move = (event: Event) => {
+      const { x, y } = (event as CustomEvent<TouchTrackMoveDetail>).detail || {};
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      const target = document.elementFromPoint(x, y);
+      if (target?.closest("[data-touch-queue-target]")) {
+        setMobileMenu(false);
+        setMobileDock("queue");
+      }
+    };
+    window.addEventListener(TOUCH_TRACK_MOVE, move);
+    return () => window.removeEventListener(TOUCH_TRACK_MOVE, move);
+  }, []);
+
   async function send(action: string, payload: Record<string, unknown> = {}) {
     setStatus(`Sending ${action}`);
+    if (action === "toggle_pause") {
+      setState(current => current ? optimisticallyTogglePlayback(current) : current);
+    }
     try {
       if (action === "reset") {
         await resetDjGoo();
@@ -89,7 +118,12 @@ export function App() {
         await sendCommand(action, payload);
       }
       setStatus(`Sent ${action}`);
-      await refresh();
+      if (action === "toggle_pause") {
+        window.setTimeout(() => void refresh(), 750);
+        window.setTimeout(() => void refresh(), 2500);
+      } else {
+        await refresh();
+      }
       if (!isDirectTransportHealthy() && ["play_next", "play_now", "play", "skip", "stop", "start_radio", "radio"].includes(action)) {
         window.setTimeout(() => void refresh(), 2000);
         window.setTimeout(() => void refresh(), 6000);
@@ -97,12 +131,14 @@ export function App() {
     } catch (err) {
       setError(String((err as Error).message || err));
       setStatus("Error");
+      if (action === "toggle_pause") void refresh();
     }
   }
 
   if (!state) {
     return (
       <main className="loading loading-state">
+        <img className="loading-mark" src="./icons/djgoo-192.png" alt="" />
         <strong>{error ? "DjGoo could not load" : "Loading DjGoo..."}</strong>
         {error && <><p>{error}</p><div className="inline-actions"><button className="btn primary" onClick={() => void refresh()}>Reconnect</button></div><p className="muted">Your paired device remains saved. Reconnecting does not require another Discord command.</p></>}
       </main>
@@ -113,16 +149,18 @@ export function App() {
     if (activeView === "Find") {
       return <SearchPanel state={state} send={send} />;
     }
+    if (activeView === "History") {
+      return <HistoryPanel state={state} send={send} canManage={canManage} refresh={refresh} />;
+    }
     if (activeView === "Radio") {
       return (
         <>
-          <StationPanel state={state} send={send} expanded />
-          <SmartActions state={state} send={send} mode="radio" />
+          <StationPanel state={state} send={send} expanded canManage={canManage} />
         </>
       );
     }
     if (activeView === "Lists") {
-      return <PlaylistPanel state={state} send={send} expanded />;
+      return <PlaylistPanel state={state} send={send} expanded canManage={canManage} refresh={refresh} />;
     }
     if (activeView === "Players") {
       return <GuestPanel state={state} send={send} profile={profile} refresh={refresh} />;
@@ -135,12 +173,7 @@ export function App() {
     }
     return (
       <>
-        <LivePanel state={state} send={send} />
-        <SmartActions state={state} send={send} />
-        <div className="split">
-          <QueuePanel state={state} send={send} />
-          <StationPanel state={state} send={send} />
-        </div>
+        <LivePanel state={state} send={send} openFind={() => navigate("Find")} />
       </>
     );
   }
@@ -151,7 +184,7 @@ export function App() {
 
   return (
     <div className={`app ${state.gaming.settings.ranked_mode ? "ranked-mode" : ""} ${isRemoteSession() ? "remote-mode" : ""} ${compact ? "compact-mode" : ""}`}>
-      <CommandBar send={send} />
+      <CommandBar send={send} queueLength={state.queue.length} />
       {error && <div className="banner error">{error}</div>}
       <main className="content">
         {!compact && <nav className="rail" aria-label="DjGoo tools">
@@ -159,7 +192,7 @@ export function App() {
             <button
               className={activeView === view ? "active" : ""}
               key={view}
-              onClick={() => setActiveView(view)}
+              onClick={() => navigate(view)}
               type="button"
             >
               {view}
@@ -167,14 +200,31 @@ export function App() {
           ))}
         </nav>}
         <section className="stack">
-          {compact ? <><LivePanel state={state} send={send} /><QueuePanel state={state} send={send} /></> : renderView()}
+          {compact ? <LivePanel state={state} send={send} openFind={() => navigate("Find")} /> : renderView()}
         </section>
-        {!compact && <aside className="side">
-          <HealthPanel state={state} send={send} />
-          <PlaylistPanel state={state} send={send} compact />
-          {canManage && <LogsPanel state={state} send={send} />}
+        {!compact && <aside className="side" data-open={mobileDock ? "true" : "false"}>
+          <button className="mobile-dock-close" title="Close" aria-label="Close music drawer" onClick={() => setMobileDock(null)}><X size={20} /></button>
+          <div className={mobileDock && mobileDock !== "playlists" ? "mobile-dock-hidden" : ""}><HealthPanel state={state} send={send} /><PlaylistPanel state={state} send={send} compact canManage={canManage} refresh={refresh} /></div>
+          <div className={mobileDock && mobileDock !== "queue" ? "mobile-dock-hidden" : ""}><QueuePanel state={state} send={send} canManage={canManage} refresh={refresh} /></div>
         </aside>}
       </main>
+      {!compact && mobileMenu && <>
+        <button className="mobile-menu-backdrop" aria-label="Close navigation" onClick={() => setMobileMenu(false)} />
+        <section className="mobile-more-menu" aria-label="More DjGoo pages">
+          <div className="mobile-more-heading"><strong>More</strong><button className="icon-button" aria-label="Close navigation" onClick={() => setMobileMenu(false)}><X size={19} /></button></div>
+          <div className="mobile-more-grid">
+            {visibleViews.filter(view => !["Live", "Find", "Lists"].includes(view)).map(view => <button className={activeView === view ? "active" : ""} key={view} onClick={() => navigate(view)}>{view}</button>)}
+            <button onClick={() => { setMobileMenu(false); setMobileDock("playlists"); }}>Playlists</button>
+          </div>
+        </section>
+      </>}
+      {!compact && <nav className="mobile-app-nav" aria-label="DjGoo mobile navigation">
+        <button className={activeView === "Live" && !mobileDock ? "active" : ""} onClick={() => navigate("Live")}><House size={19} /><span>Live</span></button>
+        <button className={activeView === "Find" && !mobileDock ? "active" : ""} onClick={() => navigate("Find")}><Search size={19} /><span>Find</span></button>
+        <button data-touch-queue-target className={mobileDock === "queue" ? "active" : ""} onClick={() => { setMobileMenu(false); setMobileDock(current => current === "queue" ? null : "queue"); }}><span className="queue-count">{state.queue.length}</span><span>Queue</span></button>
+        <button className={activeView === "Lists" && !mobileDock ? "active" : ""} onClick={() => navigate("Lists")}><ListMusic size={19} /><span>Lists</span></button>
+        <button className={mobileMenu || ["History", "Radio", "Players", "Settings", "Logs"].includes(activeView) ? "active" : ""} onClick={() => { setMobileDock(null); setMobileMenu(current => !current); }}><Menu size={19} /><span>More</span></button>
+      </nav>}
       <PersistentFooter state={state} send={send} status={status} />
     </div>
   );

@@ -6,15 +6,20 @@ import os
 import runpy
 import socket
 import sys
+import time
 import traceback
 from pathlib import Path
 from typing import Any, BinaryIO
 
+import psutil
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
+PROGRAM_ROOT = Path(os.environ.get("DJGOO_PROGRAM_ROOT") or Path(__file__).resolve().parents[1]).resolve()
+PROJECT_ROOT = Path(os.environ.get("DJGOO_DATA_ROOT") or PROGRAM_ROOT).resolve()
+if str(PROGRAM_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROGRAM_ROOT))
+
+from tools.app_layout import bundled_cogs_root
 from tools.portable_environment import bind_red_data_manager, red_config_dir
 from tools.portable_red_setup import ensure_instance, verify_red_instance_runtime
 from voice.health import write_heartbeat
@@ -90,6 +95,35 @@ class SingleInstance:
 
 def redbot_lock_path(project_root: Path = PROJECT_ROOT) -> Path:
     return project_root / "data" / "redbot-instance.lock"
+
+
+def redbot_owner_path(project_root: Path = PROJECT_ROOT) -> Path:
+    return project_root / "data" / "pids" / "redbot-owner.json"
+
+
+def write_redbot_owner(project_root: Path = PROJECT_ROOT) -> None:
+    path = redbot_owner_path(project_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": 1,
+        "pid": os.getpid(),
+        "create_time": psutil.Process(os.getpid()).create_time(),
+        "project_root": str(project_root.resolve()),
+        "written_at": time.time(),
+    }
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def clear_redbot_owner(project_root: Path = PROJECT_ROOT) -> None:
+    path = redbot_owner_path(project_root)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if isinstance(payload, dict) and int(payload.get("pid") or 0) == os.getpid():
+        path.unlink(missing_ok=True)
 
 
 def redbot_settings_path(project_root: Path = PROJECT_ROOT) -> Path:
@@ -181,7 +215,11 @@ def _ipv6_socketpair(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0):
 
 
 def bundled_java_executable(project_root: Path = PROJECT_ROOT) -> Path:
-    return (project_root.resolve() / "runtime" / "java" / "bin" / "java.exe").resolve()
+    configured = str(os.environ.get("DJGOO_JAVA") or "").strip()
+    if configured:
+        return Path(configured).resolve()
+    program_root = PROGRAM_ROOT if os.environ.get("DJGOO_NATIVE_HOST") == "1" else project_root
+    return (program_root / "runtime" / "java" / "bin" / "java.exe").resolve()
 
 
 def apply_bundled_java_environment(project_root: Path = PROJECT_ROOT) -> Path:
@@ -207,6 +245,11 @@ async def configure_external_lavalink(cog: Any) -> None:
     await cog.config.ws_port.set(LAVALINK_PORT)
     await cog.config.password.set(LAVALINK_PASSWORD)
     await cog.config.secured_ws.set(False)
+    if os.environ.get("DJGOO_NATIVE_HOST") == "1":
+        local_root = Path(os.environ["DJGOO_DATA_ROOT"]) / "cache"
+        (local_root / "localtracks").mkdir(parents=True, exist_ok=True)
+        await cog.config.localpath.set(str(local_root))
+        cog.local_folder_current_path = local_root
 
     # Keep Red's managed-node YAML aligned for diagnostics and future migrations.
     # The server bind address is a raw IPv6 literal; only the WebSocket client
@@ -293,7 +336,8 @@ def apply_runtime_patches(project_root: Path = PROJECT_ROOT) -> None:
 
 
 def redbot_argv(project_root: Path = PROJECT_ROOT) -> list[str]:
-    local_cogs = (project_root / "local_cogs").resolve()
+    program_root = PROGRAM_ROOT if os.environ.get("DJGOO_NATIVE_HOST") == "1" else project_root
+    local_cogs = bundled_cogs_root(program_root).resolve()
     return [
         "redbot",
         INSTANCE_NAME,
@@ -368,6 +412,7 @@ def run_redbot(project_root: Path = PROJECT_ROOT, *, allow_interactive_setup: bo
     if not instance.acquire():
         raise RedbotAlreadyRunning(duplicate_instance_message(project_root))
     try:
+        write_redbot_owner(project_root)
         ensure_instance(project_root)
         bind_red_data_manager(project_root)
         if not allow_interactive_setup and not music_core_is_configured(project_root):
@@ -376,6 +421,7 @@ def run_redbot(project_root: Path = PROJECT_ROOT, *, allow_interactive_setup: bo
         sys.argv = redbot_argv(project_root)
         runpy.run_module("redbot", run_name="__main__")
     finally:
+        clear_redbot_owner(project_root)
         instance.close()
 
 

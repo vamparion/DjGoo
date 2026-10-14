@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import socket
 import subprocess
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 import psutil
+
+from tools.app_layout import resolve_java
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -200,6 +203,24 @@ def _terminate_process_tree(process: Any) -> None:
             pass
 
 
+def _recorded_redbot_owner(project_root: Path) -> Any | None:
+    path = project_root.resolve() / "data" / "pids" / "redbot-owner.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        pid = int(payload.get("pid") or 0)
+        expected_create_time = float(payload.get("create_time") or 0)
+        expected_root = Path(str(payload.get("project_root") or "")).resolve()
+        process = psutil.Process(pid)
+        actual_create_time = float(process.create_time())
+    except (OSError, ValueError, TypeError, psutil.Error):
+        return None
+    if expected_root != project_root.resolve():
+        return None
+    if not expected_create_time or abs(actual_create_time - expected_create_time) > 1.0:
+        return None
+    return process
+
+
 def _adopt_lavalink_listener(core: Any, spec: Any) -> bool:
     matches = _matching_package_lavalink_processes(core.PROJECT_ROOT)
     exact_listeners = [
@@ -320,7 +341,19 @@ def _portable_redbot_ready(core: Any) -> bool:
         age = time.time() - float(heartbeat.get("timestamp") or 0)
     except (TypeError, ValueError):
         return False
-    if expected_pid <= 0 or heartbeat_pid != expected_pid:
+    owned = heartbeat_pid == expected_pid
+    if not owned:
+        owner = _recorded_redbot_owner(getattr(core, "PROJECT_ROOT", PROJECT_ROOT))
+        owned = heartbeat_pid == int(getattr(owner, "pid", 0) or 0)
+    if not owned and hasattr(core, "heartbeat_pid_owned_by"):
+        owned = bool(
+            core.heartbeat_pid_owned_by(
+                expected_pid,
+                heartbeat_pid,
+                command=record.get("command"),
+            )
+        )
+    if expected_pid <= 0 or not owned:
         return False
     if heartbeat.get("ready") is not True:
         return False
@@ -328,7 +361,7 @@ def _portable_redbot_ready(core: Any) -> bool:
         return False
     if not _portable_lavalink_ready(core):
         return False
-    if not _lavalink_client_ready(core, expected_pid):
+    if not _lavalink_client_ready(core, heartbeat_pid):
         return False
 
     max_age = 120.0 if heartbeat.get("event") == "redbot.ready" else 15.0
@@ -378,7 +411,6 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
     root = project_root.resolve()
     runtime_python = root / "runtime" / "python" / "python.exe"
     runtime_pythonw = root / "runtime" / "python" / "pythonw.exe"
-    runtime_java = root / "runtime" / "java" / "bin" / "java.exe"
 
     core.PROJECT_ROOT = root
     core.LOG_DIR = root / "logs"
@@ -389,8 +421,7 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
     core.LOCK_PATH = root / "data" / "djgoo-supervisor.lock"
     core.SUPERVISOR_PID_PATH = core.PID_DIR / "supervisor.json"
 
-    configured_java = Path(os.environ.get("DJGOO_JAVA", "java.exe"))
-    core.JAVA = runtime_java if runtime_java.exists() else configured_java
+    core.JAVA = resolve_java(root)
     core.BOT_PYTHON = runtime_python
     core.VOICE_PYTHON = runtime_python
     core.PYTHONW = runtime_pythonw if runtime_pythonw.exists() else runtime_python
@@ -411,11 +442,29 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
             return True
         if getattr(spec, "name", "") == "lavalink":
             return _adopt_lavalink_listener(core, spec)
+        if getattr(spec, "name", "") == "redbot":
+            owner = _recorded_redbot_owner(root)
+            if owner is not None:
+                core.write_component_record(spec, owner)
+                core.LOG.event(
+                    "component.adopted",
+                    component=spec.name,
+                    pid=int(owner.pid),
+                    reason="verified-redbot-owner",
+                )
+                return True
+            if time.monotonic() < float(
+                getattr(core, "_djgoo_redbot_handoff_deadline", 0.0)
+            ):
+                return True
         return False
 
     def portable_terminate_component(spec: Any, reason: str) -> None:
         if getattr(spec, "name", "") == "lavalink":
             leftovers = _matching_package_lavalink_processes(root)
+        elif getattr(spec, "name", "") == "redbot":
+            owner = _recorded_redbot_owner(root)
+            leftovers = [*_matching_processes(spec), *([owner] if owner else [])]
         else:
             leftovers = _matching_processes(spec)
         original_terminate_component(spec, reason)
@@ -436,6 +485,7 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
         core.health_path(spec.name).unlink(missing_ok=True)
         if getattr(spec, "name", "") == "redbot":
             core.health_path("lavalink-client").unlink(missing_ok=True)
+            (root / "data" / "pids" / "redbot-owner.json").unlink(missing_ok=True)
 
     def portable_component_environment(resume_playback: bool = False) -> dict[str, str]:
         env = original_component_environment(resume_playback=resume_playback)
@@ -454,7 +504,10 @@ def configure_core(core: Any, project_root: Path = PROJECT_ROOT) -> Any:
                 guarded = _guard_lavalink_start(core, spec)
                 if guarded is not None:
                     return guarded
-            return bool(original_start_component(spec, resume_playback=resume_playback))
+            started = bool(original_start_component(spec, resume_playback=resume_playback))
+            if started and getattr(spec, "name", "") == "redbot":
+                core._djgoo_redbot_handoff_deadline = time.monotonic() + 10.0
+            return started
         except OSError as exc:
             core.LOG.event(
                 "component.start_failed",

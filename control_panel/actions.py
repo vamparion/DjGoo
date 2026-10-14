@@ -9,12 +9,12 @@ from voice.command_queue import append_queue_item
 
 
 ACTION_TO_INTENT = {
-    "play": "play",
+    "play": "play_now",
     "play_next": "play",
     "start_radio": "start_radio",
     "stop_radio": "stop_radio",
     "skip": "skip",
-    "toggle_pause": "pause",
+    "toggle_pause": "toggle_pause",
     "pause": "pause",
     "resume": "resume",
     "stop": "stop",
@@ -33,6 +33,7 @@ ACTION_TO_INTENT = {
     "undo": "gaming_undo",
     "mute": "mini_mute",
     "remove_queue": "mini_queue_remove",
+    "queue_insert": "mini_queue_insert",
 }
 
 

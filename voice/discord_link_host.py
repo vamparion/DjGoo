@@ -71,6 +71,13 @@ class DiscordLinkHostProcessor:
                     str(payload.get("device_token") or "")
                 )
                 status = 200
+            elif action == "web/search":
+                result = await self.commands.search(
+                    str(payload.get("device_token") or ""),
+                    str(payload.get("query") or ""),
+                    limit=int(payload.get("limit") or 12),
+                )
+                status = 200
             elif action == "webrtc/signal":
                 result = await self.commands.webrtc_signal(payload)
                 status = 200

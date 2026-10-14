@@ -84,6 +84,7 @@ class GamingSessionStore:
         guild_id: int = 0,
         role: str = "member",
         device_id: str = "",
+        resume_existing: bool = False,
     ) -> dict[str, Any]:
         name = " ".join(str(username).split()).strip()
         if len(name) < 2 or len(name) > 32:
@@ -96,6 +97,11 @@ class GamingSessionStore:
             for profile in profiles.values():
                 if str(profile.get("username") or "").casefold() == name.casefold():
                     if device_id and str(profile.get("device_id") or "") == device_id:
+                        return dict(profile)
+                    if resume_existing:
+                        profile["device_id"] = str(device_id)[:100]
+                        profile["last_seen"] = time.time()
+                        self._write(data)
                         return dict(profile)
                     raise ValueError("That username is already in use")
             token = secrets.token_urlsafe(24)

@@ -31,6 +31,7 @@ class AuthorizationResult:
 AuthorizeCallback = Callable[[DeviceIdentity, str], Awaitable[AuthorizationResult]]
 StateCallback = Callable[[DeviceIdentity], Awaitable[dict[str, Any]]]
 SignalCallback = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+SearchCallback = Callable[[DeviceIdentity, str, int], Awaitable[list[dict[str, Any]]]]
 
 WEB_INTENT_CAPABILITY = {
     "play": "playback.request",
@@ -56,6 +57,7 @@ WEB_INTENT_CAPABILITY = {
     "mini_queue_remove": "playback.control",
     "mini_queue_remove_many": "playback.control",
     "mini_queue_reorder": "playback.control",
+    "mini_queue_insert": "playback.control",
     "mini_queue_shuffle": "playback.control",
     "mini_queue_shuffle_requests": "playback.control",
     "mini_queue_clear": "playback.control",
@@ -100,14 +102,33 @@ class AuthenticatedCommandProcessor:
         authorize: AuthorizeCallback,
         state_provider: StateCallback | None = None,
         signal_provider: SignalCallback | None = None,
+        search_provider: SearchCallback | None = None,
     ) -> None:
         self.pairing_store = pairing_store
         self.queue_path = queue_path
         self.authorize = authorize
         self.state_provider = state_provider
         self.signal_provider = signal_provider
+        self.search_provider = search_provider
         self._queue_lock = threading.Lock()
         self._limiter = DeviceRateLimiter()
+
+    async def search(self, token: str, query: str, *, limit: int = 12) -> dict[str, Any]:
+        identity = await asyncio.to_thread(self.pairing_store.authenticate, token)
+        if identity is None or identity.device_type != "web":
+            raise CommandRejected(401, "Web device authentication failed")
+        if "playback.request" not in identity.capabilities:
+            raise CommandRejected(403, "Music search is not enabled for this web device")
+        authorization = await self.authorize(identity, "state.read")
+        if not authorization.allowed:
+            raise CommandRejected(403, authorization.reason or "Music search is not authorized")
+        cleaned = str(query or "").strip()[:300]
+        if not cleaned:
+            raise CommandRejected(400, "A search query is required")
+        if self.search_provider is None:
+            raise CommandRejected(503, "Music search is not available")
+        results = await self.search_provider(identity, cleaned, max(1, min(20, int(limit))))
+        return {"query": cleaned, "results": results}
 
     async def redeem_pairing(self, code: str, device_name: str) -> dict[str, Any]:
         redeemed = await asyncio.to_thread(
@@ -169,7 +190,8 @@ class AuthenticatedCommandProcessor:
         if identity is None:
             raise CommandRejected(401, "Unknown or revoked device")
         if not self._limiter.allow(identity.device_id):
-            raise CommandRejected(429, "Voice command rate limit exceeded")
+            label = "Web control" if identity.device_type == "web" else "Voice command"
+            raise CommandRejected(429, f"{label} rate limit exceeded")
 
         command_id = str(payload.get("command_id") or "")
         try:
@@ -214,6 +236,7 @@ class AuthenticatedCommandProcessor:
         item = {
             "type": "command",
             "source": "web_remote" if identity.device_type == "web" else "voice_remote",
+            "control_surface": "web" if identity.device_type == "web" else "voice",
             "created_at": created_at,
             "command_id": command_id,
             "device_id": identity.device_id,

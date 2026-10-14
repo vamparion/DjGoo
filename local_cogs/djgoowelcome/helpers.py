@@ -115,11 +115,19 @@ def build_voice_command_payload(item: Dict[str, Any]) -> Dict[str, Any]:
         intent = str(item.get("intent", "unknown")).replace("_", " ").title()
         raw = str(item.get("raw", "")).strip()
         query = str(item.get("query", "")).strip()
+        track = item.get("track") if isinstance(item.get("track"), dict) else {}
         playlist = str(item.get("playlist", "")).strip()
         value = item.get("value")
         title = f"Voice Command: {intent}"
         description_parts = [f"Queued action: **{intent}**"]
-        if query:
+        track_title = str(track.get("title") or "").strip()
+        track_artist = str(track.get("artist") or "").strip()
+        if track_artist.casefold() == "unknown artist":
+            track_artist = ""
+        if track_title:
+            label = f"{track_artist} - {track_title}" if track_artist and track_artist.casefold() not in track_title.casefold() else track_title
+            description_parts.append(f"Song: **{label}**")
+        elif query:
             description_parts.append(f"Song/search: `{query}`")
         if playlist:
             description_parts.append(f"Playlist: `{playlist}`")

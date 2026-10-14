@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict
+from urllib.parse import urlparse
 
 import lavalink
 from lavalink import NodeNotFound, PlayerNotFound
@@ -66,6 +67,11 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
         if intent not in {"play", "play_now", "queue_request"}:
             return await super().handle(item)
 
+        query = str(item.get("query") or "").strip()
+        track_hint = item.get("track") if isinstance(item.get("track"), dict) else {}
+        if query and track_hint:
+            self._remember_source_hint(query, track_hint)
+
         audio = self.bot.get_cog("Audio")
         ctx = self._context()
         if audio is None or ctx is None:
@@ -102,7 +108,7 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
             return await self._handle_timed_request(
                 audio,
                 ctx,
-                query=str(item.get("query") or "").strip(),
+                query=query,
                 source=str(item.get("source") or ""),
                 timing=timing,
             )
@@ -143,6 +149,12 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
             )
             return "No clean request"
         resolved_query = resolved[0]
+        resolved_query = self._stable_query_for_timed_request(
+            ctx.guild.id,
+            original_query=query,
+            resolved_query=resolved_query,
+            timing=timing,
+        )
         explicit = bool(getattr(self, "_resolved_track_explicit", lambda _uri: False)(resolved_query))
         explicit_policy = self.gaming.settings(ctx.guild.id)["explicit_policy"]
         if explicit and explicit_policy == "reject":
@@ -221,6 +233,19 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
             ctx.guild.id,
             prior_track_ids=prior_track_ids,
         )
+        if requested_track is None and resolved_query != query and query.startswith(("https://", "http://")):
+            log_event(
+                "request.resolved_stream.retry_source",
+                guild_id=ctx.guild.id,
+                query=query,
+                resolved_query=resolved_query,
+            )
+            _retry_queue_ids, retry_track_ids = self._player_identity_snapshot(ctx.guild.id)
+            await self._invoke_silently(audio.command_play, ctx, query=query)
+            requested_track = await self._requested_track_after_enqueue(
+                ctx.guild.id,
+                prior_track_ids=retry_track_ids,
+            )
         if requested_track is None:
             await self._notice(
                 "The Music Core did not add that request, so the queue was unchanged."
@@ -266,7 +291,13 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
         self._apply_request_fairness(ctx.guild.id, force_front=timing == "now")
 
         data = self._track_data(requested_track)
-        display = data.get("title") or query
+        title = str(data.get("title") or query).strip()
+        artist = str(data.get("artist") or "").strip()
+        if artist.casefold() == "unknown artist":
+            artist = ""
+        display = title
+        if artist and artist.casefold() not in title.casefold():
+            display = f"{artist} - {title}"
         self._persist_player_state(
             ctx.guild.id,
             reason=f"request_{timing}_enqueued",
@@ -291,6 +322,29 @@ class RequestSemanticsDjGooAudioBridge(ExperienceDjGooAudioBridge):
             source=source,
         )
         return notice
+
+    def _stable_query_for_timed_request(
+        self,
+        guild_id: int,
+        *,
+        original_query: str,
+        resolved_query: str,
+        timing: str,
+    ) -> str:
+        """Do not park expiring signed media URLs in an existing queue."""
+
+        if timing == "now":
+            return resolved_query
+        parsed = urlparse(resolved_query)
+        if not (parsed.hostname or "").endswith(".googlevideo.com"):
+            return resolved_query
+        try:
+            player = lavalink.get_player(guild_id)
+        except (NodeNotFound, PlayerNotFound):
+            return resolved_query
+        if getattr(player, "current", None) is None:
+            return resolved_query
+        return original_query
 
     def _mini_player_has_track(self, guild_id: int, resolved_query: str) -> bool:
         """Keep UI retries from silently adding the same track more than once."""

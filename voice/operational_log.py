@@ -81,10 +81,14 @@ def _event_publishes_heartbeat(component: str, event: str) -> bool:
     return bool(component)
 
 
-def _update_ready_state(component: str, event: str) -> bool:
+def _update_ready_state(component: str, event: str, fields: dict[str, Any]) -> bool:
     if event in {"voice.listener.starting"}:
         _COMPONENT_READY[component] = False
-    elif event in {"voice.listener.ready", "redbot.ready", "redbot.heartbeat"}:
+    elif event == "redbot.heartbeat":
+        _COMPONENT_READY[component] = bool(
+            fields.get("discord_ready") and fields.get("audio_loaded")
+        )
+    elif event in {"voice.listener.ready", "redbot.ready"}:
         _COMPONENT_READY[component] = True
     elif event.endswith((".stopped", ".crashed")):
         _COMPONENT_READY[component] = False
@@ -95,7 +99,7 @@ def _event_heartbeat(event: str, fields: dict[str, Any]) -> None:
     component = _event_component(event)
     if not component or not _event_publishes_heartbeat(component, event):
         return
-    ready = _update_ready_state(component, event)
+    ready = _update_ready_state(component, event, fields)
     allowed_fields = {"guild_count", "audio_loaded", "discord_ready"}
     try:
         write_heartbeat(

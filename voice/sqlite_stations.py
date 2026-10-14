@@ -211,6 +211,27 @@ class SqliteDjGooStations:
         with self._transaction() as connection:
             connection.execute("DELETE FROM active_stations")
 
+    def delete(self, seed: str) -> Dict[str, Any]:
+        """Delete one station and detach it from every guild atomically."""
+        identifier = station_id(seed)
+        with self._transaction() as connection:
+            station = self._load_station(connection, identifier)
+            if station is None:
+                raise ValueError(f"Station not found: {seed}")
+            active_count = int(
+                connection.execute(
+                    "SELECT COUNT(*) AS count FROM active_stations WHERE station_id = ?",
+                    (identifier,),
+                ).fetchone()["count"]
+            )
+            connection.execute("DELETE FROM active_stations WHERE station_id = ?", (identifier,))
+            connection.execute("DELETE FROM stations WHERE id = ?", (identifier,))
+            return {
+                "id": identifier,
+                "name": str(station.get("name") or seed),
+                "cleared_active_guilds": active_count,
+            }
+
     def add_feedback(self, seed: str, feedback_type: str, track: Dict[str, Any]) -> Dict[str, Any]:
         if feedback_type not in FEEDBACK_BUCKETS:
             raise ValueError(f"Unknown feedback bucket: {feedback_type}")

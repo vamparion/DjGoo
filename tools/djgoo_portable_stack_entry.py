@@ -10,8 +10,16 @@ from tools.app_layout import active_app_root, package_root, runtime_python
 
 PROJECT_ROOT = package_root(Path(__file__).resolve().parents[1])
 APP_ROOT = active_app_root(PROJECT_ROOT)
-if str(APP_ROOT) not in sys.path:
-    sys.path.insert(0, str(APP_ROOT))
+
+
+def prioritize_app_root(app_root: Path, paths: list[str]) -> None:
+    value = str(app_root)
+    while value in paths:
+        paths.remove(value)
+    paths.insert(0, value)
+
+
+prioritize_app_root(APP_ROOT, sys.path)
 
 from tools.layered_stack import configure_core, load_core
 from tools.input_binding_adapter import install_input_binding

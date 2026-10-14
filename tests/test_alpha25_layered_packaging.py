@@ -5,10 +5,19 @@ import shutil
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from tools.app_layout import active_app_root, write_current
 from tools.build_app_layer import build as build_app_layer
+from tools.build_layered_update_root import build as build_layered_update_root
 from tools.build_update_bundle import build_update_bundle
-from tools.apply_update import apply_staged_update, extract_verified_bundle, validate_bundle
+from tools.apply_update import (
+    UpdateApplyError,
+    apply_staged_update,
+    extract_verified_bundle,
+    run_update,
+    validate_bundle,
+)
 from tools.build_voice_update_bundle import build_voice_update_bundle
 from tools.cleanup_legacy_layout import cleanup_legacy_layout
 
@@ -179,6 +188,8 @@ def test_thin_launcher_is_extraction_free() -> None:
     assert 'Path.Combine(root, "runtime", runtimeName' in source
     assert 'Directory.Exists(Path.Combine(root, ".git"))' in source
     assert 'Path.Combine(root, sourceRuntime, "Scripts", "pythonw.exe")' in source
+    assert 'start.EnvironmentVariables["DJGOO_SOURCE_CHECKOUT"] = "1"' in source
+    assert "start.WorkingDirectory = appRoot" in source
     assert 'Path.Combine(root, "runtime", "webrtc", "Lib", "site-packages")' in source
 
 
@@ -198,6 +209,38 @@ def test_legacy_flat_sources_are_removed_once_but_runtime_is_preserved(tmp_path:
     assert (root / "runtime" / "python" / "python.exe").is_file()
     assert (root / "data" / "user.json").is_file()
     assert cleanup_legacy_layout(root) == []
+
+
+def test_source_checkout_is_never_removed_by_layered_layout_cleanup(tmp_path: Path) -> None:
+    root = tmp_path / "source-checkout"
+    (root / ".git").mkdir(parents=True)
+    write_current(root, VERSION)
+    preserved: dict[Path, bytes] = {}
+    for directory in ("launcher", "voice", "local_cogs", "control_panel", "relay"):
+        path = root / directory / "tracked.py"
+        payload = f"tracked {directory}\n".encode()
+        _write(path, payload)
+        preserved[path] = payload
+
+    assert cleanup_legacy_layout(root) == []
+
+    for path, payload in preserved.items():
+        assert path.read_bytes() == payload
+    assert not (root / "data" / "layout-migration-alpha25.json").exists()
+
+
+def test_launcher_source_signal_blocks_cleanup_before_namespace_settles(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "source-checkout"
+    write_current(root, VERSION)
+    tracked = root / "launcher" / "tracked.py"
+    _write(tracked, b"tracked")
+    monkeypatch.setenv("DJGOO_SOURCE_CHECKOUT", "1")
+
+    assert cleanup_legacy_layout(root) == []
+    assert tracked.read_bytes() == b"tracked"
 
 
 def test_alpha25_update_adds_webrtc_layer_and_preserves_user_state(tmp_path: Path) -> None:
@@ -221,3 +264,17 @@ def test_alpha25_update_adds_webrtc_layer_and_preserves_user_state(tmp_path: Pat
     assert (installed / "runtime" / "webrtc" / "Lib" / "site-packages" / "aiortc" / "__init__.py").is_file()
     assert (installed / "config" / "secrets.json").read_text() == "paired-secret"
     assert (installed / "data" / "djgoo-pairing.db").read_bytes() == b"paired-database"
+
+
+def test_production_updater_never_modifies_source_checkout(tmp_path: Path) -> None:
+    installed = tmp_path / "developer-checkout"
+    (installed / ".git").mkdir(parents=True)
+    tracked = installed / "launcher" / "tracked.py"
+    _write(tracked, b"preserve me")
+    before = {path.relative_to(installed): path.read_bytes() for path in installed.rglob("*") if path.is_file()}
+
+    with pytest.raises(UpdateApplyError, match="Developer Mode"):
+        run_update(installed, tmp_path / "missing.zip", tmp_path / "missing.json", 0)
+
+    after = {path.relative_to(installed): path.read_bytes() for path in installed.rglob("*") if path.is_file()}
+    assert after == before

@@ -37,7 +37,7 @@ class VoiceListenerSettingsTests(unittest.TestCase):
         self.assertFalse(settings["emergency_voice_controls"])
 
     def test_default_hotwords_cover_fast_music_commands(self):
-        for word in ("DjGoo", "play", "skip", "pause", "resume", "radio", "Sandstorm"):
+        for word in ("DjGoo", "play", "skip", "pause", "resume", "radio", "playlist"):
             with self.subTest(word=word):
                 self.assertIn(word, DEFAULT_COMMAND_HOTWORDS)
 

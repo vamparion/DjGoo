@@ -166,6 +166,18 @@ class MiniPlayerHistory:
             entries.insert(0, item)
             self._write(entries[:HISTORY_LIMIT])
 
+    def remove(self, entry_id: str) -> bool:
+        identifier = str(entry_id or "").strip()
+        if not identifier:
+            return False
+        with self._lock:
+            entries = self._read()
+            retained = [item for item in entries if str(item.get("id") or "") != identifier]
+            if len(retained) == len(entries):
+                return False
+            self._write(retained)
+            return True
+
     def _read(self) -> list[dict[str, Any]]:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))

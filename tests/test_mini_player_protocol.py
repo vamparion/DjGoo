@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from pathlib import Path
@@ -59,6 +60,18 @@ def test_history_dedupes_repeated_track_start_events(tmp_path: Path) -> None:
     history.add(track, mode="RADIO", station="Sandstorm radio")
 
     assert len(history.entries()) == 1
+
+
+def test_history_entry_can_be_removed_by_id(tmp_path: Path) -> None:
+    history = MiniPlayerHistory(tmp_path / "history.json")
+    history.add(
+        {"id": "bad-track", "title": "Wrong song", "uri": "https://example.test/wrong"},
+        mode="PLAYBACK",
+    )
+
+    assert history.remove("bad-track") is True
+    assert history.entries() == []
+    assert history.remove("bad-track") is False
 
 
 def test_playlist_creation_and_rich_duplicate_prevention(tmp_path: Path) -> None:
@@ -223,6 +236,64 @@ async def test_restore_starts_current_before_appending_saved_queue() -> None:
 
 
 @pytest.mark.asyncio
+async def test_restore_seeks_current_track_before_restoring_queue(monkeypatch) -> None:
+    from local_cogs.djgoowelcome import audio_bridge as module
+
+    bridge = module.DjGooAudioBridge.__new__(module.DjGooAudioBridge)
+    calls: list[tuple[str, object]] = []
+    player = SimpleNamespace(seek=lambda position: calls.append(("seek", position)))
+    monkeypatch.setattr(module.lavalink, "get_player", lambda _guild_id: player)
+    bridge._play_query_when_ready = lambda *_args: _async_result(True)
+
+    async def invoke(_command, _ctx, **kwargs) -> None:
+        calls.append(("queue", kwargs.get("query")))
+
+    bridge._invoke_silently = invoke
+    audio = SimpleNamespace(command_play=object(), command_volume=object(), command_pause=object())
+    ctx = SimpleNamespace(guild=SimpleNamespace(id=42))
+
+    restored = await bridge._restore_playback_queries(
+        audio,
+        ctx,
+        ["current", "next"],
+        position_seconds=97,
+    )
+
+    assert restored is True
+    assert calls == [("seek", 97_000), ("queue", "next")]
+
+
+def test_timed_request_keeps_stable_youtube_url_when_player_is_active(monkeypatch) -> None:
+    from local_cogs.djgoowelcome import request_semantics_bridge as module
+
+    bridge = module.RequestSemanticsDjGooAudioBridge.__new__(module.RequestSemanticsDjGooAudioBridge)
+    monkeypatch.setattr(module.lavalink, "get_player", lambda _guild_id: SimpleNamespace(current=object()))
+
+    query = bridge._stable_query_for_timed_request(
+        42,
+        original_query="https://www.youtube.com/watch?v=track",
+        resolved_query="https://rr1---sn.example.googlevideo.com/videoplayback?expire=1",
+        timing="next",
+    )
+
+    assert query == "https://www.youtube.com/watch?v=track"
+
+
+def test_play_now_may_use_resolved_stream_immediately() -> None:
+    from local_cogs.djgoowelcome.request_semantics_bridge import RequestSemanticsDjGooAudioBridge
+
+    bridge = RequestSemanticsDjGooAudioBridge.__new__(RequestSemanticsDjGooAudioBridge)
+    stream = "https://rr1---sn.example.googlevideo.com/videoplayback?expire=1"
+
+    assert bridge._stable_query_for_timed_request(
+        42,
+        original_query="https://www.youtube.com/watch?v=track",
+        resolved_query=stream,
+        timing="now",
+    ) == stream
+
+
+@pytest.mark.asyncio
 async def test_playlist_enqueue_always_skips_duplicates(
     monkeypatch,
 ) -> None:
@@ -256,6 +327,7 @@ async def test_playlist_enqueue_always_skips_duplicates(
 
     bridge._invoke = invoke
     bridge._notice = notice
+    bridge._remember_source_hint = lambda *_args, **_kwargs: None
     audio = SimpleNamespace(command_play=object())
     ctx = SimpleNamespace(guild=SimpleNamespace(id=42))
 
@@ -268,6 +340,41 @@ async def test_playlist_enqueue_always_skips_duplicates(
     assert "Skipped 1" in first
     assert "already playing or queued" in second
     assert notices == [first, second]
+
+
+@pytest.mark.asyncio
+async def test_installed_playlist_resolves_each_youtube_track_before_enqueue(
+    monkeypatch,
+) -> None:
+    from local_cogs.djgoowelcome import audio_bridge as module
+
+    bridge = module.DjGooAudioBridge.__new__(module.DjGooAudioBridge)
+    source = "https://www.youtube.com/watch?v=BBBBBBBBBBB"
+    stream = "https://rr1---sn.example.googlevideo.com/videoplayback?expire=9999999999"
+    bridge.playlists = SimpleNamespace(
+        get_tracks=lambda _name: [{"title": "New Song", "artist": "Artist", "uri": source}]
+    )
+    bridge._direct_media_query = lambda query: stream if query == source else None
+    bridge._remember_source_hint = lambda *_args, **_kwargs: None
+    bridge._station_enqueue_depth = {}
+    player = SimpleNamespace(current=None, queue=[])
+    monkeypatch.setattr(module.lavalink, "get_player", lambda _guild_id: player)
+    monkeypatch.setenv("DJGOO_NATIVE_HOST", "1")
+    queued: list[str] = []
+
+    async def invoke(_command, _ctx, *, query: str) -> None:
+        queued.append(query)
+        player.queue.append(SimpleNamespace(title="Queued", uri=query, info={}))
+
+    bridge._invoke = invoke
+    bridge._notice = lambda _message: asyncio.sleep(0)
+    audio = SimpleNamespace(command_play=object())
+    ctx = SimpleNamespace(guild=SimpleNamespace(id=42))
+
+    await bridge._play_playlist(audio, ctx, "KnockOut", shuffle=False)
+
+    assert queued == [stream]
+    assert bridge._station_enqueue_depth == {}
 
 
 def test_mini_player_track_duplicate_checks_current_and_queue(monkeypatch) -> None:
@@ -359,6 +466,152 @@ async def test_queue_reorder_and_remove_use_stable_track_ids(monkeypatch) -> Non
         "status": "completed",
         "message": "Removed 1 queued track(s).",
     }
+
+
+@pytest.mark.asyncio
+async def test_queue_insert_is_atomic_and_places_the_exact_new_track(monkeypatch) -> None:
+    from local_cogs.djgoowelcome import experience_audio_bridge as module
+
+    bridge = module.ExperienceDjGooAudioBridge.__new__(module.ExperienceDjGooAudioBridge)
+    bridge.bot = SimpleNamespace(get_cog=lambda _name: object())
+    bridge._context = lambda: SimpleNamespace(guild=SimpleNamespace(id=42), author=None)
+    bridge._queue_item_ids = {}
+    bridge._queue_undo = {}
+    bridge._pending_request_context = {}
+    bridge._request_metadata = lambda *_args, **_kwargs: {"requester_name": "Host"}
+    bridge._remember_queue = lambda *_args, **_kwargs: None
+    bridge._persist_player_state = lambda *_args, **_kwargs: None
+    bridge._record_queue_transaction = lambda *_args, **_kwargs: None
+    first = SimpleNamespace(title="First", uri="track:first")
+    last = SimpleNamespace(title="Last", uri="track:last")
+    inserted = SimpleNamespace(title="Dragged song", uri="track:exact")
+    player = SimpleNamespace(queue=[first, last], current=SimpleNamespace(title="Playing"))
+    monkeypatch.setattr(module.lavalink, "get_player", lambda _guild_id: player)
+
+    async def enqueue(_audio, _ctx, *, query, source, timing):
+        assert (query, source, timing) == ("track:exact", "panel", "next")
+        player.queue.append(inserted)
+        return "Queued"
+
+    bridge._handle_timed_request = enqueue
+    result = await bridge._handle_mini_intent(
+        {"intent": "mini_queue_insert", "source": "panel", "query": "track:exact", "payload": {"index": 1}}
+    )
+
+    assert result["status"] == "completed"
+    assert [track.title for track in player.queue] == ["First", "Dragged song", "Last"]
+
+
+@pytest.mark.asyncio
+async def test_queue_insert_append_uses_live_end_of_queue(monkeypatch) -> None:
+    from local_cogs.djgoowelcome import experience_audio_bridge as module
+
+    bridge = module.ExperienceDjGooAudioBridge.__new__(module.ExperienceDjGooAudioBridge)
+    bridge.bot = SimpleNamespace(get_cog=lambda _name: object())
+    bridge._context = lambda: SimpleNamespace(guild=SimpleNamespace(id=42), author=None)
+    bridge._queue_item_ids = {}
+    bridge._queue_undo = {}
+    bridge._pending_request_context = {}
+    bridge._request_metadata = lambda *_args, **_kwargs: {"requester_name": "Host"}
+    bridge._remember_queue = lambda *_args, **_kwargs: None
+    bridge._persist_player_state = lambda *_args, **_kwargs: None
+    bridge._record_queue_transaction = lambda *_args, **_kwargs: None
+    first = SimpleNamespace(title="First", uri="track:first")
+    concurrent = SimpleNamespace(title="Concurrent", uri="track:concurrent")
+    inserted = SimpleNamespace(title="Web request", uri="track:web")
+    player = SimpleNamespace(queue=[first], current=SimpleNamespace(title="Playing"))
+    monkeypatch.setattr(module.lavalink, "get_player", lambda _guild_id: player)
+
+    async def enqueue(_audio, _ctx, **_kwargs):
+        player.queue.extend([concurrent, inserted])
+        return "Queued"
+
+    bridge._handle_timed_request = enqueue
+    result = await bridge._handle_mini_intent(
+        {
+            "intent": "mini_queue_insert",
+            "source": "panel",
+            "query": "track:web",
+            "payload": {"index": 1, "append": True},
+        }
+    )
+
+    assert result["status"] == "completed"
+    assert [track.title for track in player.queue] == ["First", "Concurrent", "Web request"]
+
+
+@pytest.mark.asyncio
+async def test_queue_insert_starts_exact_drop_when_player_is_idle(monkeypatch) -> None:
+    from local_cogs.djgoowelcome import experience_audio_bridge as module
+
+    bridge = module.ExperienceDjGooAudioBridge.__new__(module.ExperienceDjGooAudioBridge)
+    bridge.bot = SimpleNamespace(get_cog=lambda _name: object())
+    bridge._context = lambda: SimpleNamespace(guild=SimpleNamespace(id=42), author=None)
+    bridge._pending_request_context = {}
+    bridge._request_metadata = lambda *_args, **_kwargs: {}
+    bridge._track_identity = lambda value: str(value.get("uri") if isinstance(value, dict) else value.uri)
+    player = SimpleNamespace(queue=[], current=SimpleNamespace(title="Exact song", uri="track:exact"))
+    calls = 0
+
+    def get_player(_guild_id):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise module.PlayerNotFound()
+        return player
+
+    monkeypatch.setattr(module.lavalink, "get_player", get_player)
+    bridge._handle_timed_request = lambda *_args, **_kwargs: _async_result("Playing exact song")
+
+    result = await bridge._handle_mini_intent(
+        {"intent": "mini_queue_insert", "source": "panel", "query": "track:exact", "payload": {"index": 0}}
+    )
+
+    assert result == {"status": "completed", "message": "Started the requested song because the queue was idle."}
+
+
+@pytest.mark.asyncio
+async def test_queue_insert_advances_only_when_existing_player_is_idle(monkeypatch) -> None:
+    from local_cogs.djgoowelcome import experience_audio_bridge as module
+
+    bridge = module.ExperienceDjGooAudioBridge.__new__(module.ExperienceDjGooAudioBridge)
+    bridge.bot = SimpleNamespace(get_cog=lambda _name: object())
+    bridge._context = lambda: SimpleNamespace(guild=SimpleNamespace(id=42), author=None)
+    bridge._queue_item_ids = {}
+    bridge._queue_undo = {}
+    bridge._pending_request_context = {}
+    bridge._request_metadata = lambda *_args, **_kwargs: {}
+    bridge._remember_queue = lambda *_args, **_kwargs: None
+    bridge._persist_player_state = lambda *_args, **_kwargs: None
+    bridge._record_queue_transaction = lambda *_args, **_kwargs: None
+    inserted = SimpleNamespace(title="Dropped song", uri="track:exact")
+
+    class IdlePlayer:
+        def __init__(self):
+            self.queue = []
+            self.current = None
+            self.skip_calls = 0
+
+        async def skip(self):
+            self.skip_calls += 1
+            self.current = self.queue.pop(0)
+
+    player = IdlePlayer()
+    monkeypatch.setattr(module.lavalink, "get_player", lambda _guild_id: player)
+
+    async def enqueue(_audio, _ctx, **_kwargs):
+        player.queue.append(inserted)
+        return "Queued"
+
+    bridge._handle_timed_request = enqueue
+    result = await bridge._handle_mini_intent(
+        {"intent": "mini_queue_insert", "source": "panel", "query": "track:exact", "payload": {"index": 0}}
+    )
+
+    assert result["status"] == "completed"
+    assert player.current is inserted
+    assert player.queue == []
+    assert player.skip_calls == 1
 
 
 @pytest.mark.asyncio

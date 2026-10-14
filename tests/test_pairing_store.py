@@ -67,3 +67,14 @@ def test_user_deletion_removes_devices_and_pairing_codes(tmp_path: Path) -> None
     assert pairing.authenticate(token) is None
     assert pairing.list_devices(77, 88) == []
     assert not pairing.claim_command(str(uuid.uuid4()), identity.device_id)
+
+
+def test_host_can_update_every_active_device_role_for_a_user(tmp_path: Path) -> None:
+    pairing = store(tmp_path)
+    _, first_token = pairing.redeem_pairing_code(pairing.create_pairing_code(77, 88), "Browser")
+    _, second_token = pairing.redeem_pairing_code(pairing.create_pairing_code(77, 88), "Phone")
+
+    assert pairing.set_user_role(77, 88, "moderator") == 2
+
+    assert pairing.authenticate(first_token).role == "moderator"
+    assert pairing.authenticate(second_token).role == "moderator"

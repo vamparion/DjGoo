@@ -39,6 +39,7 @@ class DjGooDiscordLink(commands.Cog):
             djgoo_cog._remote_queue_path(),
             djgoo_cog._authorize_remote,
             djgoo_cog._remote_state,
+            search_provider=djgoo_cog._remote_search,
         )
         self.processor = DiscordLinkHostProcessor(
             self.identity,

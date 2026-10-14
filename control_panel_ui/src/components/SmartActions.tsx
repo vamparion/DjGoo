@@ -11,8 +11,7 @@ export function SmartActions({ state, send, mode = "live" }: Props) {
       {state.capabilities?.system_management !== false && <div className="smart">
         <strong>{radioMode ? "Shape this station" : "One-tap playlist add"}</strong>
         <p>{radioMode ? "Every rating stays local to this station." : "Current track goes to your most-used lists."}</p>
-        <button className="btn" onClick={() => void send("save_current", { playlist: "chill" })}>Chill</button>
-        <button className="btn" onClick={() => void send("save_current", { playlist: "80s" })}>80s</button>
+        <button className="btn" onClick={() => void send("save_current", { playlist: "favorites" })}>Favorites</button>
       </div>}
       <div className="smart">
         <strong>Fix bad radio</strong>
@@ -20,12 +19,12 @@ export function SmartActions({ state, send, mode = "live" }: Props) {
         <button className="btn danger" onClick={() => void send("ban")}>Ban + Replace</button>
       </div>
       <div className="smart">
-        <strong>{radioMode ? "Stop station cleanly" : "Quick radio starts"}</strong>
-        <p>{radioMode ? "Stop means stop; it should not auto-resume after a song request." : "Start common moods without typing."}</p>
+        <strong>{radioMode ? "Stop station cleanly" : "Start a station"}</strong>
+        <p>{radioMode ? "Stop means stop; it should not auto-resume after a song request." : "Choose any seed from Find to shape your own station."}</p>
         {radioMode ? (
           <button className="btn amber" onClick={() => void send("stop_radio")}>Stop Radio</button>
         ) : (
-          <button className="btn primary" onClick={() => void send("start_radio", { query: "80s" })}>80s Radio</button>
+          <button className="btn" onClick={() => void send("queue")}>View Queue</button>
         )}
       </div>
       <div className="smart">

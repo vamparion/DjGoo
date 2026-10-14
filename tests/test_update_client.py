@@ -3,9 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from tools.update_client import (
     BUNDLE_ASSET_NAME,
     MANIFEST_ASSET_NAME,
+    UpdateError,
+    check_for_update,
     parse_version,
     read_installed_version,
     select_update,
@@ -57,6 +61,23 @@ def test_select_update_requires_both_small_update_assets() -> None:
     assert offer is not None
     assert offer.tag == "v0.3.0-alpha.3"
     assert offer.bundle_asset.name == BUNDLE_ASSET_NAME
+
+
+def test_source_checkout_refuses_update_before_network_access(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / ".git").mkdir()
+    fetched = False
+
+    def unexpected_fetch(token=None):
+        nonlocal fetched
+        fetched = True
+        return []
+
+    monkeypatch.setattr("tools.update_client.fetch_releases", unexpected_fetch)
+
+    with pytest.raises(UpdateError, match="Developer Mode"):
+        check_for_update(tmp_path)
+
+    assert fetched is False
 
 
 def test_alpha25_install_is_offered_alpha26() -> None:

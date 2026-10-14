@@ -188,7 +188,7 @@ class VoiceCommandGateway:
         if identity is None:
             raise web.HTTPUnauthorized(text="Unknown or revoked device")
         if not self._limiter.allow(identity.device_id):
-            raise web.HTTPTooManyRequests(text="Voice command rate limit exceeded")
+            raise web.HTTPTooManyRequests(text="Remote control rate limit exceeded")
 
         payload = await self._json(request)
         command_id = str(payload.get("command_id") or "")
@@ -232,6 +232,7 @@ class VoiceCommandGateway:
         item = {
             "type": "command",
             "source": "voice_remote",
+            "control_surface": "voice",
             "created_at": created_at,
             "command_id": command_id,
             "device_id": identity.device_id,

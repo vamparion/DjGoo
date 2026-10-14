@@ -30,7 +30,7 @@ class GamingDjGooAudioBridge(ProfileDjGooAudioBridge):
 
     async def handle(self, item: Dict[str, Any]) -> Any:
         intent = str(item.get("intent") or "")
-        if intent in {"mini_queue_remove", "mini_queue_remove_many", "mini_queue_clear", "mini_queue_reorder"}:
+        if intent in {"mini_queue_remove", "mini_queue_remove_many", "mini_queue_clear", "mini_queue_reorder", "mini_queue_insert"}:
             ctx = self._context()
             if ctx is not None and not self.gaming.can_direct_control(self._actor_role(item, ctx)):
                 return {

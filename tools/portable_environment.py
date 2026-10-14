@@ -43,13 +43,15 @@ def portable_environment(
     """Build a relocatable environment for layered or legacy DjGoo packages."""
 
     root = project_root.resolve()
+    program_root = Path(os.environ.get("DJGOO_PROGRAM_ROOT") or root).resolve()
     local_appdata = portable_local_appdata(root)
     config_dir = red_config_dir(root)
     local_appdata.mkdir(parents=True, exist_ok=True)
     config_dir.mkdir(parents=True, exist_ok=True)
 
     clean = clean_subprocess_environment(base)
-    env = layered_environment(root, clean)
+    env = layered_environment(program_root, clean)
+    env["DJGOO_DATA_ROOT"] = str(root)
     env["LOCALAPPDATA"] = str(local_appdata)
     env["REDBOT_CONFIG_DIR"] = str(config_dir)
     return env
@@ -84,4 +86,5 @@ def bind_red_data_manager(project_root: Path, data_manager: Any | None = None) -
 def application_source_root(project_root: Path) -> Path:
     """Return the immutable active application layer for a package."""
 
-    return active_app_root(project_root.resolve())
+    program_root = Path(os.environ.get("DJGOO_PROGRAM_ROOT") or project_root).resolve()
+    return active_app_root(program_root)

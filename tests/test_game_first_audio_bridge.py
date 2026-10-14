@@ -80,3 +80,139 @@ def test_remembered_request_is_consumed_once() -> None:
 
 def test_remote_bridge_keeps_game_first_behavior() -> None:
     assert issubclass(RemoteAwareDjGooAudioBridge, GameFirstDjGooAudioBridge)
+
+
+def test_panel_control_targets_the_connected_player() -> None:
+    voice_channel = SimpleNamespace(id=56)
+    owner = SimpleNamespace(id=99)
+    guild = SimpleNamespace(
+        id=42,
+        owner=owner,
+        me=None,
+        voice_client=SimpleNamespace(channel=voice_channel),
+    )
+    bridge = object.__new__(RemoteAwareDjGooAudioBridge)
+    bridge.bot = SimpleNamespace(guilds=[guild])
+    bridge._best_text_channel = lambda selected: SimpleNamespace(id=77)
+    bridge._context_for = lambda selected, author, channel: SimpleNamespace(
+        guild=selected,
+        author=author,
+        channel=channel,
+    )
+
+    token = __import__("local_cogs.djgoowelcome.remote_aware_bridge", fromlist=["_CURRENT_COMMAND"])._CURRENT_COMMAND.set(
+        {"source": "panel", "intent": "toggle_pause"}
+    )
+    try:
+        context = bridge._context()
+    finally:
+        __import__("local_cogs.djgoowelcome.remote_aware_bridge", fromlist=["_CURRENT_COMMAND"])._CURRENT_COMMAND.reset(token)
+
+    assert context.guild is guild
+    assert context.author.id == owner.id
+    assert context.author.voice.channel is voice_channel
+
+
+@pytest.mark.asyncio
+async def test_internal_play_invocation_bypasses_public_play_router() -> None:
+    calls = []
+
+    async def routed(_audio, _ctx, **_kwargs):
+        calls.append("routed")
+
+    async def original(_audio, _ctx, **kwargs):
+        calls.append(("original", kwargs["query"]))
+
+    command = SimpleNamespace(
+        qualified_name="play",
+        callback=routed,
+        _djgoo_original_callback=original,
+    )
+    bridge = object.__new__(RemoteAwareDjGooAudioBridge)
+    bridge.bot = SimpleNamespace(get_cog=lambda name: object() if name == "Audio" else None)
+    ctx = SimpleNamespace(guild=SimpleNamespace(id=42), channel=SimpleNamespace(id=77))
+
+    await bridge._invoke(command, ctx, query="https://example.test/track")
+
+    assert calls == [("original", "https://example.test/track")]
+
+
+@pytest.mark.asyncio
+async def test_normal_query_uses_public_red_play_command(monkeypatch) -> None:
+    monkeypatch.setenv("DJGOO_NATIVE_HOST", "1")
+    bridge = object.__new__(RemoteAwareDjGooAudioBridge)
+    bridge._invoke_silently = AsyncMock()
+    command = object()
+    audio = SimpleNamespace(command_play=command)
+    ctx = SimpleNamespace(guild=SimpleNamespace(id=42))
+
+    await bridge._enqueue_resolved_query(audio, ctx, "https://www.youtube.com/watch?v=track")
+
+    bridge._invoke_silently.assert_awaited_once_with(
+        command,
+        ctx,
+        query="https://www.youtube.com/watch?v=track",
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolved_googlevideo_stream_uses_trusted_enqueue(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("DJGOO_NATIVE_HOST", "1")
+    bridge = object.__new__(RemoteAwareDjGooAudioBridge)
+    bridge._invoke_silently = AsyncMock()
+    enqueue = AsyncMock()
+    player = SimpleNamespace(store=lambda *_args: None)
+    monkeypatch.setattr(
+        "local_cogs.djgoowelcome.audio_bridge.lavalink.get_player",
+        lambda _guild_id: player,
+    )
+    audio = SimpleNamespace(
+        command_play=object(),
+        _enqueue_tracks=enqueue,
+        local_folder_current_path=tmp_path,
+        _eq_check=AsyncMock(),
+        set_player_settings=AsyncMock(),
+    )
+    ctx = SimpleNamespace(guild=SimpleNamespace(id=42), channel=SimpleNamespace(id=77))
+    stream = "https://rr1---sn-test.googlevideo.com/videoplayback?id=one"
+
+    await bridge._enqueue_resolved_query(audio, ctx, stream)
+
+    enqueue.assert_awaited_once()
+    assert str(enqueue.await_args.args[1]) == stream
+    bridge._invoke_silently.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_radio_top_up_reconnects_destroyed_player_with_stable_media(monkeypatch) -> None:
+    from local_cogs.djgoowelcome import game_first_audio_bridge as module
+
+    bridge = object.__new__(GameFirstDjGooAudioBridge)
+    bridge._station_top_up_locks = {}
+    station = {"id": "radio-1", "name": "Rock radio", "seed": "rock", "liked": [], "more_like": []}
+    bridge.stations = SimpleNamespace(get_active=lambda _guild_id: station)
+    audio = object()
+    guild = SimpleNamespace(id=42)
+    bridge.bot = SimpleNamespace(
+        get_cog=lambda name: audio if name == "Audio" else None,
+        get_guild=lambda _guild_id: guild,
+    )
+    bridge._active_voice_member_for_guild = lambda _guild: object()
+    bridge._best_text_channel = lambda _guild: object()
+    ctx = SimpleNamespace(guild=guild)
+    bridge._context_for = lambda *_args: ctx
+    bridge._recommended_radio_track = AsyncMock(
+        return_value={"uri": "https://www.youtube.com/watch?v=one", "title": "Song", "artist": "Artist"}
+    )
+    bridge._installed_radio_query = AsyncMock(return_value="C:/DjGoo/cache/song.webm")
+    bridge._enqueue_resolved_query = AsyncMock(side_effect=module.PlayerNotFound())
+    bridge._play_query_when_ready = AsyncMock(return_value=True)
+    player = SimpleNamespace(queue=[])
+    monkeypatch.setattr(module.lavalink, "get_player", lambda _guild_id: player)
+    monkeypatch.setattr(module.asyncio, "sleep", AsyncMock())
+
+    await bridge._top_up_station_queue(42)
+
+    bridge._installed_radio_query.assert_awaited_once()
+    bridge._enqueue_resolved_query.assert_awaited_once_with(audio, ctx, "C:/DjGoo/cache/song.webm")
+    bridge._play_query_when_ready.assert_awaited_once_with(audio, ctx, "C:/DjGoo/cache/song.webm")

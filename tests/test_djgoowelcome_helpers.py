@@ -143,6 +143,22 @@ class DjGooWelcomeHelperTests(unittest.TestCase):
         self.assertNotIn("listening", description.lower())
         self.assertNotIn("wiring is next", description.lower())
 
+    def test_build_voice_command_payload_prefers_resolved_track_metadata(self):
+        helpers = load_helpers()
+
+        payload = helpers.build_voice_command_payload(
+            {
+                "type": "command",
+                "intent": "play",
+                "query": "https://www.youtube.com/watch?v=FTQbiNvZqaY",
+                "track": {"title": "Africa", "artist": "Toto"},
+            }
+        )
+
+        description = payload["embeds"][0]["description"]
+        self.assertIn("Song: **Toto - Africa**", description)
+        self.assertNotIn("youtube.com", description)
+
     def test_parse_djgoo_chat_command_translates_wake_phrase_to_red_command(self):
         helpers = load_helpers()
 

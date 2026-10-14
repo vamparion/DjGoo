@@ -14,11 +14,22 @@ class ControlPanelActionTests(unittest.TestCase):
         self.assertEqual(item["query"], "Sandstorm")
         self.assertEqual(item["source"], "panel")
 
+    def test_resolve_panel_action_keeps_play_now_distinct(self):
+        item = resolve_panel_action({"action": "play", "query": "Sandstorm"})
+
+        self.assertEqual(item["intent"], "play_now")
+
     def test_resolve_panel_action_maps_radio(self):
         item = resolve_panel_action({"action": "start_radio", "query": "80s"})
 
         self.assertEqual(item["intent"], "start_radio")
         self.assertEqual(item["query"], "80s")
+
+    def test_resolve_panel_action_preserves_pause_toggle(self):
+        item = resolve_panel_action({"action": "toggle_pause"})
+
+        self.assertEqual(item["intent"], "toggle_pause")
+        self.assertEqual(item["raw"], "panel:toggle_pause")
 
     def test_resolve_panel_action_rejects_unknown_action(self):
         with self.assertRaises(ValueError):
